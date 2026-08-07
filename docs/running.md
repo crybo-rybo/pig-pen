@@ -23,6 +23,14 @@ automatically until the episode ends.
 ./build/dev/pig-pen-headless --turns 4 --seed 42
 ```
 
+Choose any Ollama model by passing its exact installed identifier. Pig Pen does
+not discover, normalize, or alias model names; the value is forwarded directly
+to the configured server:
+
+```sh
+./build/dev/pig-pen-headless --model llama3.1:8b-instruct-q4_K_M
+```
+
 It prints the session settings and log path up front, streams the assistant
 text as it arrives, prints one line per tool call with the before → after
 position, and ends with a summary:
@@ -48,7 +56,7 @@ notices go to stderr.
 | flag | default | meaning |
 |---|---|---|
 | `--base-url URL` | `http://127.0.0.1:11434/v1` | model endpoint |
-| `--model NAME` | `qwen3:8b` | model name |
+| `--model NAME` | `qwen3:8b` | exact model identifier forwarded to the server |
 | `--seed INTEGER` | `0` | world seed; fixes item placement |
 | `--turns INTEGER` | `20` | turn budget, 1–10000 |
 | `--max-tool-rounds INTEGER` | `8` | tool rounds allowed inside one turn, 1–64 |

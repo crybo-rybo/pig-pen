@@ -57,6 +57,7 @@ TEST_CASE("session atomically owns a seeded world registered harness and "
           "truthful log") {
   const auto directory = session_test_directory();
   pigpen::agent::Config config;
+  config.model = "registry.example/pig-model:Q4_K_M";
   config.seed = 2026;
   config.temperature = 0.2;
   std::filesystem::path log_path;
@@ -82,6 +83,7 @@ TEST_CASE("session atomically owns a seeded world registered harness and "
   const auto header = nlohmann::json::parse(header_line);
   const auto footer = nlohmann::json::parse(footer_line);
   CHECK(header.at("prompt_variant") == "test-preset");
+  CHECK(header.at("model") == config.model);
   CHECK(header.at("seed") == 2026);
   CHECK(header.at("temperature") == 0.2);
   CHECK(footer.at("type") == "footer");

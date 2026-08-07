@@ -36,6 +36,7 @@ def main() -> int:
     listener.listen(1)
     listener.settimeout(10)
     port = listener.getsockname()[1]
+    expected_model = "registry.example/pig-model:Q4_K_M"
 
     with tempfile.TemporaryDirectory(prefix="pigpen-signal-test-") as directory:
         command = [
@@ -43,7 +44,7 @@ def main() -> int:
             "--base-url",
             f"http://127.0.0.1:{port}/v1",
             "--model",
-            "scripted-never-responds",
+            expected_model,
             "--turns",
             "1",
             "--timeout-seconds",
@@ -68,9 +69,31 @@ def main() -> int:
                 process,
             )
 
-        # The accepted socket intentionally never sends an HTTP response. This
-        # leaves a real scry turn in flight without relying on a model server.
+        # Read far enough to prove that --model reached the server byte-for-byte,
+        # then intentionally never send an HTTP response. This leaves a real
+        # scry turn in flight without relying on a model server.
         with connection:
+            connection.settimeout(10)
+            request = b""
+            expected_json_string = json.dumps(expected_model).encode()
+            try:
+                while expected_json_string not in request:
+                    chunk = connection.recv(4096)
+                    if not chunk:
+                        break
+                    request += chunk
+            except (TimeoutError, socket.timeout) as error:
+                fail(
+                    f"timed out reading model request: {error}; "
+                    f"request={request!r}",
+                    process,
+                )
+            if expected_json_string not in request:
+                fail(
+                    f"exact model identifier missing from request: {request!r}",
+                    process,
+                )
+
             process.send_signal(signal_number)
             try:
                 stdout, stderr = process.communicate(timeout=20)
@@ -89,6 +112,8 @@ def main() -> int:
         records = [json.loads(line) for line in logs[0].read_text().splitlines()]
         if len(records) < 2 or records[-1].get("type") != "footer":
             fail(f"log has no terminal footer: {records}")
+        if records[0].get("model") != expected_model:
+            fail(f"log changed the model identifier: {records[0]}")
         footer = records[-1]
         if footer.get("complete") is not True:
             fail(f"signal footer is not complete: {footer}")
@@ -96,6 +121,8 @@ def main() -> int:
             fail(f"unexpected signal finish reason: {footer}")
         if "received signal" not in stderr:
             fail(f"signal diagnostic missing from stderr: {stderr}")
+        if f'model="{expected_model}"' not in stdout:
+            fail(f"startup summary changed the model identifier: {stdout}")
 
     listener.close()
     return 0
