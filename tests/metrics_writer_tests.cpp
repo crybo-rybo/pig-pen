@@ -35,6 +35,7 @@ TEST_CASE("metrics log contains a reconcilable header tool turn and footer") {
   pigpen::agent::Config config;
   config.seed = 42;
   config.turn_budget = 2;
+  config.temperature = 0.5;
   auto created =
       pigpen::agent::MetricsWriter::create(directory, config, "default");
   REQUIRE(created.has_value());
@@ -56,6 +57,7 @@ TEST_CASE("metrics log contains a reconcilable header tool turn and footer") {
                   .turn = 1,
                   .status = pigpen::agent::TurnStatus::completed,
                   .assistant_text = "ate a berry",
+                  .tool_calls = 1,
                   .latency = std::chrono::milliseconds{12},
               })
               .has_value());
@@ -73,8 +75,11 @@ TEST_CASE("metrics log contains a reconcilable header tool turn and footer") {
   REQUIRE(records.size() == 4);
   REQUIRE(records.front().at("type") == "header");
   REQUIRE(records.front().at("seed") == 42);
+  REQUIRE(records.front().at("temperature") == 0.5);
   REQUIRE(records[1].at("type") == "tool");
   REQUIRE(records[2].at("type") == "turn");
+  REQUIRE(records[2].at("tool_calls") == 1);
+  REQUIRE(records[2].at("zero_tool_turn") == false);
   REQUIRE(records.back().at("type") == "footer");
   REQUIRE(records.back().at("complete") == true);
   REQUIRE(records.back().at("final_score") == 1);

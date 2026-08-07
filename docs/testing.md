@@ -12,7 +12,7 @@ cmake --build --preset dev
 ctest --preset dev
 ```
 
-44 tests, a few seconds end to end. **No model server and no network access are
+49 tests, a few seconds end to end. **No model server and no network access are
 required** — the transport is faked everywhere, so the suite is safe to run in
 CI or offline.
 
@@ -20,7 +20,7 @@ CI or offline.
 
 `ctest` picks up two kinds of test.
 
-**Catch2 cases (40)** from `pigpen_tests`, registered individually via
+**Catch2 cases (44)** from `pigpen_tests`, registered individually via
 `catch_discover_tests`, covering:
 
 | file | covers |
@@ -33,14 +33,17 @@ CI or offline.
 | `tests/session_tests.cpp` | config rejection and that a session owns a seeded world plus a registered tool harness atomically |
 | `tests/world_animation_tests.cpp` | the event feed becoming an ordered visual timeline, with caller-supplied time |
 
-**CLI tests (4)** registered directly in `CMakeLists.txt`:
+**CLI tests (5)** registered directly in `CMakeLists.txt`:
 
 - `pigpen_headless_help` — `--help` exits 0
 - `pigpen_headless_rejects_invalid_bounds` — `--max-tool-rounds 65` must fail
+- `pigpen_headless_rejects_invalid_temperature` — non-finite sampling values
+  must fail
 - `pigpen_headless_graceful_sigint` / `_sigterm` — `tests/headless_signal_test.py`
   starts a stub socket server on a loopback port, points the CLI at it, sends
-  the signal, and asserts the exit status is `128 + signal` *and* that the JSONL
-  file still ends with a finalized footer
+  an exact tagged model identifier, verifies that identifier in the HTTP
+  request and JSONL header, then asserts the exit status is `128 + signal`
+  *and* that the JSONL file still ends with a finalized footer
 
 The two signal tests need a Python 3 interpreter and only register on UNIX. If
 CMake does not find one they are silently skipped; the rest of the suite is

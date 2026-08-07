@@ -28,14 +28,27 @@ enum class FinishReason : std::uint8_t {
 };
 
 enum class TranscriptRole : std::uint8_t {
-  user,
+  automatic,
+  guidance,
   assistant,
   error,
 };
 
+enum class GuidanceStatus : std::uint8_t {
+  pending,
+  sent,
+};
+
 struct TranscriptEntry {
   std::uint32_t turn{};
-  TranscriptRole role{TranscriptRole::user};
+  TranscriptRole role{TranscriptRole::automatic};
+  std::string text{};
+};
+
+struct GuidanceEntry {
+  std::uint64_t id{};
+  std::uint32_t turn{};
+  GuidanceStatus status{GuidanceStatus::pending};
   std::string text{};
 };
 
@@ -47,6 +60,7 @@ struct TurnRecord {
   std::string error{};
   std::uint64_t input_tokens{};
   std::uint64_t output_tokens{};
+  std::size_t tool_calls{};
   std::chrono::milliseconds latency{};
 };
 
@@ -76,7 +90,8 @@ class EpisodeRunner final {
 public:
   EpisodeRunner(ITurnTransport &transport, std::uint32_t turn_budget,
                 std::function<bool()> objective_complete,
-                EpisodeObservers observers = {});
+                EpisodeObservers observers = {},
+                std::function<std::size_t()> tool_call_count = {});
   ~EpisodeRunner();
 
   EpisodeRunner(const EpisodeRunner &) = delete;
@@ -89,20 +104,25 @@ public:
   [[nodiscard]] bool stop();
   [[nodiscard]] bool fail(std::string error);
   void tick();
-  void queue_user_input(std::string message);
+  [[nodiscard]] std::uint64_t queue_user_input(std::string message);
+  [[nodiscard]] bool remove_pending_user_input(std::uint64_t id);
+  void clear_pending_user_inputs();
 
   [[nodiscard]] EpisodeSnapshot snapshot() const;
   [[nodiscard]] const std::vector<TranscriptEntry> &transcript() const noexcept;
+  [[nodiscard]] const std::vector<GuidanceEntry> &guidance() const noexcept;
 
 private:
   struct SharedState;
 
   void start_turn();
   void process_pending_outcome();
+  void update_pending_guidance_turns();
   void finish(FinishReason reason, std::string error = {});
 
   ITurnTransport &transport_;
   std::function<bool()> objective_complete_;
+  std::function<std::size_t()> tool_call_count_;
   EpisodeObservers observers_;
   std::shared_ptr<SharedState> state_;
 };

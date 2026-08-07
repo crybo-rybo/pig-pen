@@ -6,6 +6,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <string>
 
 namespace {
@@ -39,6 +40,16 @@ TEST_CASE("session rejects unsafe or incomplete runtime configuration") {
   CHECK_FALSE(pigpen::agent::Session::create(config, directory));
   config.max_tool_rounds = 65;
   CHECK_FALSE(pigpen::agent::Session::create(config, directory));
+
+  config.max_tool_rounds = 8;
+  config.temperature = -0.1;
+  CHECK_FALSE(pigpen::agent::Session::create(config, directory));
+  config.temperature = 2.1;
+  CHECK_FALSE(pigpen::agent::Session::create(config, directory));
+  config.temperature = std::numeric_limits<double>::infinity();
+  CHECK_FALSE(pigpen::agent::Session::create(config, directory));
+  config.temperature = std::numeric_limits<double>::quiet_NaN();
+  CHECK_FALSE(pigpen::agent::Session::create(config, directory));
   CHECK_FALSE(std::filesystem::exists(directory));
 }
 
@@ -46,7 +57,9 @@ TEST_CASE("session atomically owns a seeded world registered harness and "
           "truthful log") {
   const auto directory = session_test_directory();
   pigpen::agent::Config config;
+  config.model = "registry.example/pig-model:Q4_K_M";
   config.seed = 2026;
+  config.temperature = 0.2;
   std::filesystem::path log_path;
   {
     auto created =
@@ -70,7 +83,9 @@ TEST_CASE("session atomically owns a seeded world registered harness and "
   const auto header = nlohmann::json::parse(header_line);
   const auto footer = nlohmann::json::parse(footer_line);
   CHECK(header.at("prompt_variant") == "test-preset");
+  CHECK(header.at("model") == config.model);
   CHECK(header.at("seed") == 2026);
+  CHECK(header.at("temperature") == 0.2);
   CHECK(footer.at("type") == "footer");
   CHECK(footer.at("finish_reason") == "abandoned");
   CHECK(footer.at("complete") == false);

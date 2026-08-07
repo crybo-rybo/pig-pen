@@ -21,6 +21,7 @@ TEST_CASE("Agent configuration defaults target the bounded local Qwen run") {
   CHECK(config.seed == 0);
   CHECK(config.turn_budget == 20);
   CHECK(config.max_tool_rounds == 8);
+  CHECK(config.temperature == 0.0);
   CHECK(config.known_item_values);
   CHECK(config.reward_feedback);
   CHECK_FALSE(config.opaque_look);
@@ -62,7 +63,9 @@ TEST_CASE("Known-values prompt states the complete reward table") {
   CHECK(contains(prompt, "apple = +3"));
   CHECK(contains(prompt, "truffle = +10"));
   CHECK(contains(prompt, "toadstool = -5"));
-  CHECK(contains(prompt, "Avoid negative-value food"));
+  CHECK(contains(prompt, "Avoid eating negative-value food"));
+  CHECK(contains(prompt, "Walking across a toadstool cell is safe"));
+  CHECK(contains(prompt, "avoid eating the toadstool, not traversing"));
 }
 
 TEST_CASE("Hidden-values prompt does not leak the reward table") {
@@ -103,10 +106,16 @@ TEST_CASE("Turn prompts sustain exploration and carry optional human input") {
   CHECK(contains(automatic, "move never eats an item"));
   CHECK(contains(automatic, "call eat explicitly"));
   CHECK(contains(automatic, "Turn 7 of 20."));
+  CHECK(contains(automatic, "Automatic turn instructions:"));
 
   const auto guided =
       pigpen::agent::build_turn_prompt(8, 20, "Please inspect the north wall.");
   CHECK(contains(guided, "Turn 8 of 20."));
-  CHECK(contains(guided, "Human input: Please inspect the north wall."));
+  CHECK(contains(guided, "Human guidance:\nPlease inspect the north wall."));
   CHECK(contains(guided, "one to four world-tool calls"));
+
+  const auto corrective = pigpen::agent::build_turn_prompt(9, 20, {}, true);
+  CHECK(contains(corrective, "previous turn executed zero world tools"));
+  CHECK(contains(corrective, "Model narration is not an action"));
+  CHECK(contains(corrective, "Begin this turn with a valid"));
 }

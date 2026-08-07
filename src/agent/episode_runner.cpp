@@ -20,16 +20,21 @@ struct EpisodeRunner::SharedState {
   std::uint64_t generation{};
   std::optional<TurnOutcome> pending_outcome{};
   std::string active_user_message{};
-  std::string queued_user_input{};
   std::size_t active_assistant_entry{};
+  std::size_t tool_calls_at_turn_start{};
+  bool recover_zero_tool_turn{};
+  std::uint64_t next_guidance_id{1};
+  std::vector<GuidanceEntry> guidance{};
   std::vector<TranscriptEntry> transcript{};
 };
 
 EpisodeRunner::EpisodeRunner(ITurnTransport &transport,
                              const std::uint32_t turn_budget,
                              std::function<bool()> objective_complete,
-                             EpisodeObservers observers)
+                             EpisodeObservers observers,
+                             std::function<std::size_t()> tool_call_count)
     : transport_(transport), objective_complete_(std::move(objective_complete)),
+      tool_call_count_(std::move(tool_call_count)),
       observers_(std::move(observers)),
       state_(std::make_shared<SharedState>()) {
   state_->turn_budget = std::max<std::uint32_t>(turn_budget, 1U);
@@ -111,8 +116,35 @@ void EpisodeRunner::tick() {
   start_turn();
 }
 
-void EpisodeRunner::queue_user_input(std::string message) {
-  state_->queued_user_input = std::move(message);
+std::uint64_t EpisodeRunner::queue_user_input(std::string message) {
+  const auto id = state_->next_guidance_id++;
+  state_->guidance.push_back({
+      .id = id,
+      .text = std::move(message),
+  });
+  update_pending_guidance_turns();
+  return id;
+}
+
+bool EpisodeRunner::remove_pending_user_input(const std::uint64_t id) {
+  const auto entry = std::find_if(
+      state_->guidance.begin(), state_->guidance.end(),
+      [id](const GuidanceEntry &guidance) {
+        return guidance.id == id && guidance.status == GuidanceStatus::pending;
+      });
+  if (entry == state_->guidance.end()) {
+    return false;
+  }
+  state_->guidance.erase(entry);
+  update_pending_guidance_turns();
+  return true;
+}
+
+void EpisodeRunner::clear_pending_user_inputs() {
+  std::erase_if(state_->guidance, [](const GuidanceEntry &guidance) {
+    return guidance.status == GuidanceStatus::pending;
+  });
+  update_pending_guidance_turns();
 }
 
 EpisodeSnapshot EpisodeRunner::snapshot() const {
@@ -132,18 +164,44 @@ const std::vector<TranscriptEntry> &EpisodeRunner::transcript() const noexcept {
   return state_->transcript;
 }
 
+const std::vector<GuidanceEntry> &EpisodeRunner::guidance() const noexcept {
+  return state_->guidance;
+}
+
 void EpisodeRunner::start_turn() {
   const auto turn = state_->turns_used + 1U;
-  auto message =
-      build_turn_prompt(turn, state_->turn_budget, state_->queued_user_input);
-  state_->queued_user_input.clear();
+  const auto pending_guidance =
+      std::find_if(state_->guidance.begin(), state_->guidance.end(),
+                   [](const GuidanceEntry &guidance) {
+                     return guidance.status == GuidanceStatus::pending;
+                   });
+  const auto guidance_index =
+      pending_guidance == state_->guidance.end()
+          ? std::optional<std::size_t>{}
+          : std::optional<std::size_t>{static_cast<std::size_t>(
+                std::distance(state_->guidance.begin(), pending_guidance))};
+  const auto human_input =
+      guidance_index ? std::string_view{state_->guidance[*guidance_index].text}
+                     : std::string_view{};
+  auto message = build_turn_prompt(turn, state_->turn_budget, human_input,
+                                   state_->recover_zero_tool_turn);
+  const auto automatic_message = build_turn_prompt(
+      turn, state_->turn_budget, {}, state_->recover_zero_tool_turn);
 
   state_->active_user_message = message;
+  const auto transcript_start = state_->transcript.size();
   state_->transcript.push_back({
       .turn = turn,
-      .role = TranscriptRole::user,
-      .text = message,
+      .role = TranscriptRole::automatic,
+      .text = automatic_message,
   });
+  if (guidance_index) {
+    state_->transcript.push_back({
+        .turn = turn,
+        .role = TranscriptRole::guidance,
+        .text = std::string{human_input},
+    });
+  }
   state_->transcript.push_back({
       .turn = turn,
       .role = TranscriptRole::assistant,
@@ -152,6 +210,7 @@ void EpisodeRunner::start_turn() {
   state_->active_assistant_entry = state_->transcript.size() - 1U;
   state_->turn_started = std::chrono::steady_clock::now();
   state_->turn_in_flight = true;
+  state_->tool_calls_at_turn_start = tool_call_count_ ? tool_call_count_() : 0U;
   const auto generation = ++state_->generation;
   const std::weak_ptr<SharedState> weak_state{state_};
 
@@ -182,13 +241,22 @@ void EpisodeRunner::start_turn() {
   if (!sent) {
     state_->turn_in_flight = false;
     state_->error = std::move(sent.error());
+    state_->transcript.resize(transcript_start);
     state_->transcript.push_back({
         .turn = turn,
         .role = TranscriptRole::error,
         .text = state_->error,
     });
     finish(FinishReason::error, state_->error);
+    return;
   }
+
+  if (guidance_index) {
+    auto &guidance = state_->guidance[*guidance_index];
+    guidance.status = GuidanceStatus::sent;
+    guidance.turn = turn;
+  }
+  update_pending_guidance_turns();
 }
 
 void EpisodeRunner::process_pending_outcome() {
@@ -202,6 +270,15 @@ void EpisodeRunner::process_pending_outcome() {
   state_->last_turn_latency =
       std::chrono::duration_cast<std::chrono::milliseconds>(
           std::chrono::steady_clock::now() - state_->turn_started);
+  std::size_t tool_calls{};
+  if (tool_call_count_) {
+    const auto current_count = tool_call_count_();
+    if (current_count >= state_->tool_calls_at_turn_start) {
+      tool_calls = current_count - state_->tool_calls_at_turn_start;
+    }
+  }
+  state_->recover_zero_tool_turn = outcome.status == TurnStatus::completed &&
+                                   tool_call_count_ && tool_calls == 0U;
 
   auto &assistant = state_->transcript[state_->active_assistant_entry].text;
   if (assistant.empty()) {
@@ -215,6 +292,7 @@ void EpisodeRunner::process_pending_outcome() {
       .error = outcome.error,
       .input_tokens = outcome.input_tokens,
       .output_tokens = outcome.output_tokens,
+      .tool_calls = tool_calls,
       .latency = state_->last_turn_latency,
   };
   if (observers_.on_turn_finished) {
@@ -248,6 +326,16 @@ void EpisodeRunner::process_pending_outcome() {
   }
   if (state_->turns_used >= state_->turn_budget) {
     finish(FinishReason::turn_budget);
+  }
+  update_pending_guidance_turns();
+}
+
+void EpisodeRunner::update_pending_guidance_turns() {
+  auto turn = state_->turns_used + (state_->turn_in_flight ? 2U : 1U);
+  for (auto &guidance : state_->guidance) {
+    if (guidance.status == GuidanceStatus::pending) {
+      guidance.turn = turn++;
+    }
   }
 }
 

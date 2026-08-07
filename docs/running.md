@@ -23,12 +23,20 @@ automatically until the episode ends.
 ./build/dev/pig-pen-headless --turns 4 --seed 42
 ```
 
+Choose any Ollama model by passing its exact installed identifier. Pig Pen does
+not discover, normalize, or alias model names; the value is forwarded directly
+to the configured server:
+
+```sh
+./build/dev/pig-pen-headless --model llama3.1:8b-instruct-q4_K_M
+```
+
 It prints the session settings and log path up front, streams the assistant
 text as it arrives, prints one line per tool call with the before → after
 position, and ends with a summary:
 
 ```
-session model="qwen3:8b" base_url="http://127.0.0.1:11434/v1" seed=42 turns=4 max_tool_rounds=8
+session model="qwen3:8b" base_url="http://127.0.0.1:11434/v1" seed=42 turns=4 max_tool_rounds=8 temperature=0
 log_path="logs/20260807-101500-123-qwen3_8b-42.jsonl"
 tool[turn=1,tick=1] look args={"direction":"north"} result={"cells":[...],"direction":"north","wall_at_distance":5} position=(5,5)->(5,5)
 assistant[turn=1]: I
@@ -48,10 +56,11 @@ notices go to stderr.
 | flag | default | meaning |
 |---|---|---|
 | `--base-url URL` | `http://127.0.0.1:11434/v1` | model endpoint |
-| `--model NAME` | `qwen3:8b` | model name |
+| `--model NAME` | `qwen3:8b` | exact model identifier forwarded to the server |
 | `--seed INTEGER` | `0` | world seed; fixes item placement |
 | `--turns INTEGER` | `20` | turn budget, 1–10000 |
 | `--max-tool-rounds INTEGER` | `8` | tool rounds allowed inside one turn, 1–64 |
+| `--temperature NUMBER` | `0.0` | model sampling temperature, 0.0–2.0; independent of the world seed |
 | `--timeout-seconds INTEGER` | `300` | wall-clock deadline for the whole episode, 1–86400 |
 | `--log-dir PATH` | `logs` | where the JSONL file is written |
 | `--prompt-variant NAME` | `default` | free-form label stored in the log header |
@@ -102,8 +111,9 @@ outline. Items are drawn as coloured glyphs, the blob is the teal dot, and
 reads as a sequence rather than a teleport. Hover a cell for its coordinates,
 item, and observed state.
 
-**Transcript** — streamed model text with inline tool results, auto-scrolling
-by default.
+**Transcript** — automatic instructions, human guidance, verified world-event
+actions, and model narration are labelled separately. It auto-scrolls by
+default, and a narration-only turn is called out as having no verified action.
 
 **Event Log** — every tool call as a table row (tick, turn, tool, arguments,
 result), with a text filter.
@@ -114,10 +124,15 @@ result), with a text filter.
   Opaque look, Blind learning) plus the three individual checkboxes; toggling a
   checkbox switches the dropdown to `Custom`. The preset name is stored as the
   log's `prompt_variant`.
-- Seed (with **Reroll + Reset**), turn budget, tool rounds per turn, and
-  animation speed.
+- Seed (with **Reroll + Reset**), turn budget, tool rounds per turn,
+  temperature, and animation speed. Temperature and other session settings
+  take effect only on reset.
 - *Episode*: **Play / Pause / Stop / Reset**, the current state, the log path,
   and any error.
+
+**Guidance** — messages are queued FIFO, one per model turn. Each row shows
+`Pending for turn N` or `Sent on turn N`; pending rows can be removed
+individually or cleared together, including while the episode is paused.
 
 Connection and scenario edits do not touch a running episode — the panel shows
 "Pending settings apply on Reset" until you press **Reset**, which rebuilds the

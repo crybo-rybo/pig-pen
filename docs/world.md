@@ -118,5 +118,7 @@ The world, the score, and the log always record the truth.
 
 The system prompt is assembled in `src/agent/prompt.cpp` and describes the
 coordinate system, the three tools, the flags in force, and the turn and
-tool-round budgets. Each turn is then advanced by a short generated nudge, with
-any queued human guidance appended to it.
+tool-round budgets. Each turn is then advanced by a short generated nudge.
+Human guidance is queued FIFO and delivered in its own labelled section, one
+message per turn. If a completed turn produces no verified `WorldEvent`, the
+next automatic nudge explicitly requires a tool call before more narration.

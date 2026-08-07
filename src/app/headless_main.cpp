@@ -3,6 +3,7 @@
 
 #include <charconv>
 #include <chrono>
+#include <cmath>
 #include <csignal>
 #include <cstdint>
 #include <expected>
@@ -71,12 +72,16 @@ void print_usage(std::ostream &output, const std::string_view program) {
       << "Options:\n"
       << "  --base-url URL            Model endpoint (default: "
          "http://127.0.0.1:11434/v1)\n"
-      << "  --model NAME              Model name (default: qwen3:8b)\n"
+      << "  --model NAME              Exact model identifier sent to the "
+         "server\n"
+      << "                            (default: qwen3:8b)\n"
       << "  --seed INTEGER            Deterministic world seed (default: 0)\n"
       << "  --turns INTEGER           Episode turn budget, 1..10000 (default: "
          "20)\n"
       << "  --max-tool-rounds INTEGER Tool rounds per turn, 1..64 (default: "
          "8)\n"
+      << "  --temperature NUMBER     Sampling temperature, 0.0..2.0 (default: "
+         "0.0)\n"
       << "  --log-dir PATH            JSONL output directory (default: logs)\n"
       << "  --timeout-seconds INTEGER Overall episode timeout, 1..86400 "
          "(default: 300)\n"
@@ -97,6 +102,21 @@ void print_usage(std::ostream &output, const std::string_view program) {
          "SIGINT,\n"
       << "            143 SIGTERM. Signals request graceful cancellation and "
          "log finalization.\n";
+}
+
+[[nodiscard]] std::expected<double, std::string>
+parse_temperature(const std::string_view value) {
+  double parsed{};
+  const auto [end, error] =
+      std::from_chars(value.data(), value.data() + value.size(), parsed,
+                      std::chars_format::general);
+  if (value.empty() || error != std::errc{} ||
+      end != value.data() + value.size() || !std::isfinite(parsed) ||
+      parsed < 0.0 || parsed > 2.0) {
+    return std::unexpected(
+        "--temperature must be a finite number in the range 0.0..2.0");
+  }
+  return parsed;
 }
 
 template <typename Integer>
@@ -245,6 +265,16 @@ parse_unsigned(const std::string_view value, const std::string_view option,
                    : std::move(number.error()));
       }
       options.config.max_tool_rounds = *number;
+    } else if (name == "--temperature") {
+      auto parsed = value();
+      if (!parsed) {
+        return std::unexpected(std::move(parsed.error()));
+      }
+      auto temperature = parse_temperature(*parsed);
+      if (!temperature) {
+        return std::unexpected(std::move(temperature.error()));
+      }
+      options.config.temperature = *temperature;
     } else if (name == "--timeout-seconds") {
       auto parsed = value();
       if (!parsed) {
@@ -280,8 +310,10 @@ parse_unsigned(const std::string_view value, const std::string_view option,
 [[nodiscard]] std::string_view
 transcript_role_name(const pigpen::agent::TranscriptRole role) noexcept {
   switch (role) {
-  case pigpen::agent::TranscriptRole::user:
-    return "user";
+  case pigpen::agent::TranscriptRole::automatic:
+    return "automatic";
+  case pigpen::agent::TranscriptRole::guidance:
+    return "guidance";
   case pigpen::agent::TranscriptRole::assistant:
     return "assistant";
   case pigpen::agent::TranscriptRole::error:
@@ -352,13 +384,14 @@ void print_updates(const pigpen::agent::Session &session,
             << " base_url=" << std::quoted(options.config.base_url)
             << " seed=" << options.config.seed
             << " turns=" << options.config.turn_budget
-            << " max_tool_rounds=" << options.config.max_tool_rounds << '\n'
+            << " max_tool_rounds=" << options.config.max_tool_rounds
+            << " temperature=" << options.config.temperature << '\n'
             << "log_path=" << std::quoted(session->metrics_path().string())
             << '\n';
   std::cout.flush();
 
   if (options.user_input) {
-    session->queue_user_input(*options.user_input);
+    static_cast<void>(session->queue_user_input(*options.user_input));
   }
   if (!session->play()) {
     std::cerr << "startup error: episode could not enter playing state\n";

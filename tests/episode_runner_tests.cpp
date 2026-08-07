@@ -197,12 +197,129 @@ TEST_CASE("immediate transport admission failure terminates the episode") {
 TEST_CASE("queued human input is appended to the next automatic nudge") {
   FakeTransport transport;
   pigpen::agent::EpisodeRunner runner{transport, 1, [] { return false; }};
-  runner.queue_user_input("look west first");
+  static_cast<void>(runner.queue_user_input("look west first"));
 
   REQUIRE(runner.play());
   runner.tick();
 
   REQUIRE(transport.messages.size() == 1);
-  REQUIRE(transport.messages[0].find("Human input: look west first") !=
+  REQUIRE(transport.messages[0].find("Human guidance:\nlook west first") !=
           std::string::npos);
+}
+
+TEST_CASE("guidance is delivered FIFO with pending and sent turn state") {
+  FakeTransport transport;
+  pigpen::agent::EpisodeRunner runner{transport, 2, [] { return false; }};
+  const auto first = runner.queue_user_input("look west first");
+  const auto second = runner.queue_user_input("then inspect north");
+
+  REQUIRE(runner.guidance().size() == 2);
+  CHECK(runner.guidance()[0].id == first);
+  CHECK(runner.guidance()[0].turn == 1);
+  CHECK(runner.guidance()[0].status == pigpen::agent::GuidanceStatus::pending);
+  CHECK(runner.guidance()[1].id == second);
+  CHECK(runner.guidance()[1].turn == 2);
+
+  REQUIRE(runner.play());
+  runner.tick();
+  REQUIRE(transport.messages.size() == 1);
+  CHECK(transport.messages[0].find("look west first") != std::string::npos);
+  CHECK(transport.messages[0].find("then inspect north") == std::string::npos);
+  CHECK(runner.guidance()[0].status == pigpen::agent::GuidanceStatus::sent);
+  CHECK(runner.guidance()[0].turn == 1);
+  CHECK(runner.guidance()[1].status == pigpen::agent::GuidanceStatus::pending);
+  CHECK(runner.guidance()[1].turn == 2);
+  REQUIRE(runner.transcript().size() == 3);
+  CHECK(runner.transcript()[0].role ==
+        pigpen::agent::TranscriptRole::automatic);
+  CHECK(runner.transcript()[1].role == pigpen::agent::TranscriptRole::guidance);
+  CHECK(runner.transcript()[1].text == "look west first");
+
+  transport.complete();
+  runner.tick();
+  REQUIRE(transport.messages.size() == 2);
+  CHECK(transport.messages[1].find("then inspect north") != std::string::npos);
+  CHECK(runner.guidance()[1].status == pigpen::agent::GuidanceStatus::sent);
+  CHECK(runner.guidance()[1].turn == 2);
+}
+
+TEST_CASE("guidance queued while paused waits for the resumed next turn") {
+  FakeTransport transport;
+  pigpen::agent::EpisodeRunner runner{transport, 3, [] { return false; }};
+
+  REQUIRE(runner.play());
+  runner.tick();
+  REQUIRE(runner.pause());
+  static_cast<void>(runner.queue_user_input("resume by looking east"));
+  REQUIRE(runner.guidance().size() == 1);
+  CHECK(runner.guidance()[0].turn == 2);
+
+  transport.complete();
+  runner.tick();
+  CHECK(transport.messages.size() == 1);
+  CHECK(runner.guidance()[0].status == pigpen::agent::GuidanceStatus::pending);
+  CHECK(runner.guidance()[0].turn == 2);
+
+  REQUIRE(runner.play());
+  runner.tick();
+  REQUIRE(transport.messages.size() == 2);
+  CHECK(transport.messages[1].find("resume by looking east") !=
+        std::string::npos);
+  CHECK(runner.guidance()[0].status == pigpen::agent::GuidanceStatus::sent);
+  CHECK(runner.guidance()[0].turn == 2);
+}
+
+TEST_CASE("pending guidance can be removed or cleared") {
+  FakeTransport transport;
+  pigpen::agent::EpisodeRunner runner{transport, 3, [] { return false; }};
+  const auto first = runner.queue_user_input("first");
+  const auto second = runner.queue_user_input("second");
+  const auto third = runner.queue_user_input("third");
+
+  REQUIRE(runner.remove_pending_user_input(second));
+  REQUIRE(runner.guidance().size() == 2);
+  CHECK(runner.guidance()[0].id == first);
+  CHECK(runner.guidance()[0].turn == 1);
+  CHECK(runner.guidance()[1].id == third);
+  CHECK(runner.guidance()[1].turn == 2);
+
+  REQUIRE(runner.play());
+  runner.tick();
+  CHECK_FALSE(runner.remove_pending_user_input(first));
+  runner.clear_pending_user_inputs();
+  REQUIRE(runner.guidance().size() == 1);
+  CHECK(runner.guidance()[0].id == first);
+  CHECK(runner.guidance()[0].status == pigpen::agent::GuidanceStatus::sent);
+}
+
+TEST_CASE("a zero-tool turn adds a corrective automatic next-turn nudge") {
+  FakeTransport transport;
+  std::size_t tool_calls{};
+  std::vector<pigpen::agent::TurnRecord> turns;
+  pigpen::agent::EpisodeRunner runner{
+      transport,
+      3,
+      [] { return false; },
+      {.on_turn_finished =
+           [&turns](const auto &turn) { turns.push_back(turn); }},
+      [&tool_calls] { return tool_calls; }};
+
+  REQUIRE(runner.play());
+  runner.tick();
+  transport.complete({.text = "I moved east."});
+  runner.tick();
+  REQUIRE(transport.messages.size() == 2);
+  CHECK(transport.messages[1].find("previous turn executed zero world tools") !=
+        std::string::npos);
+  REQUIRE(turns.size() == 1);
+  CHECK(turns[0].tool_calls == 0);
+
+  ++tool_calls;
+  transport.complete({.text = "Used look."});
+  runner.tick();
+  REQUIRE(transport.messages.size() == 3);
+  CHECK(transport.messages[2].find("previous turn executed zero world tools") ==
+        std::string::npos);
+  REQUIRE(turns.size() == 2);
+  CHECK(turns[1].tool_calls == 1);
 }

@@ -6,6 +6,7 @@
 #include "world/world.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <expected>
 #include <filesystem>
 #include <memory>
@@ -35,7 +36,9 @@ public:
   [[nodiscard]] bool play();
   [[nodiscard]] bool pause();
   [[nodiscard]] bool stop();
-  void queue_user_input(std::string message);
+  [[nodiscard]] std::uint64_t queue_user_input(std::string message);
+  [[nodiscard]] bool remove_pending_user_input(std::uint64_t id);
+  void clear_pending_user_inputs();
 
   [[nodiscard]] const Config &config() const noexcept;
   [[nodiscard]] const world::World &world() const noexcept;

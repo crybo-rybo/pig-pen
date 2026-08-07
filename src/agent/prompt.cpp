@@ -10,7 +10,9 @@ namespace {
 void append_experiment_instructions(std::string &prompt, const Config &config) {
   if (config.known_item_values) {
     prompt += "Item values are known: berry = +1, apple = +3, truffle = +10, "
-              "and toadstool = -5. Avoid negative-value food.\n";
+              "and toadstool = -5. Avoid eating negative-value food. Walking "
+              "across a toadstool cell is safe because movement does not eat "
+              "it; avoid eating the toadstool, not traversing its cell.\n";
   } else {
     prompt +=
         "Item values are hidden. Different foods can have different values; "
@@ -87,16 +89,24 @@ std::string build_system_prompt(const Config &config) {
 
 std::string build_turn_prompt(const std::size_t turn,
                               const std::size_t turn_budget,
-                              const std::string_view human_input) {
+                              const std::string_view human_input,
+                              const bool recover_zero_tool_turn) {
   std::string prompt =
+      "Automatic turn instructions:\n"
       "Continue exploring autonomously. Use one to four world-tool calls now, "
       "then finish this turn with a brief action summary and no further tool "
       "call. Remember: move never eats an item; call eat explicitly to "
       "consume an item_here. "
       "Turn " +
       std::to_string(turn) + " of " + std::to_string(turn_budget) + ".";
+  if (recover_zero_tool_turn) {
+    prompt +=
+        "\nCorrection: the previous turn executed zero world tools. Model "
+        "narration is not an action. Begin this turn with a valid look, move, "
+        "or eat tool call before summarizing.";
+  }
   if (!human_input.empty()) {
-    prompt += " Human input: ";
+    prompt += "\n\nHuman guidance:\n";
     prompt.append(human_input);
   }
   return prompt;
