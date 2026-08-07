@@ -159,10 +159,12 @@ void draw_item(ImDrawList &draw_list, const world::ItemType item,
 
 [[nodiscard]] const char *role_name(const agent::TranscriptRole role) noexcept {
   switch (role) {
-  case agent::TranscriptRole::user:
-    return "User nudge";
+  case agent::TranscriptRole::automatic:
+    return "Automatic instructions";
+  case agent::TranscriptRole::guidance:
+    return "Human guidance";
   case agent::TranscriptRole::assistant:
-    return "Model";
+    return "Model narration";
   case agent::TranscriptRole::error:
     return "Error";
   }
@@ -171,14 +173,35 @@ void draw_item(ImDrawList &draw_list, const world::ItemType item,
 
 [[nodiscard]] ImVec4 role_color(const agent::TranscriptRole role) noexcept {
   switch (role) {
-  case agent::TranscriptRole::user:
+  case agent::TranscriptRole::automatic:
     return {0.48F, 0.72F, 1.0F, 1.0F};
+  case agent::TranscriptRole::guidance:
+    return {0.78F, 0.64F, 1.0F, 1.0F};
   case agent::TranscriptRole::assistant:
     return {0.52F, 0.92F, 0.72F, 1.0F};
   case agent::TranscriptRole::error:
     return {1.0F, 0.4F, 0.4F, 1.0F};
   }
   return {1.0F, 1.0F, 1.0F, 1.0F};
+}
+
+[[nodiscard]] std::string
+verified_action_label(const agent::WorldEvent &event) {
+  auto label = event.tool;
+  if (event.arguments.contains("direction") &&
+      event.arguments.at("direction").is_string()) {
+    label += " " + event.arguments.at("direction").get<std::string>();
+  }
+  if (event.result.contains("ok") && event.result.at("ok").is_boolean() &&
+      !event.result.at("ok").get<bool>()) {
+    label += " (failed";
+    if (event.result.contains("reason") &&
+        event.result.at("reason").is_string()) {
+      label += ": " + event.result.at("reason").get<std::string>();
+    }
+    label += ")";
+  }
+  return label;
 }
 
 [[nodiscard]] std::string preset_variant(const int preset) {
@@ -197,6 +220,7 @@ AppUi::AppUi() {
   seed_ = defaults.seed;
   turn_budget_ = static_cast<int>(defaults.turn_budget);
   max_tool_rounds_ = static_cast<int>(defaults.max_tool_rounds);
+  temperature_ = defaults.temperature;
   known_item_values_ = defaults.known_item_values;
   reward_feedback_ = defaults.reward_feedback;
   opaque_look_ = defaults.opaque_look;
@@ -249,6 +273,7 @@ agent::Config AppUi::config_from_controls() const {
           static_cast<std::size_t>(std::clamp(turn_budget_, 1, 10'000)),
       .max_tool_rounds =
           static_cast<std::uint32_t>(std::clamp(max_tool_rounds_, 1, 64)),
+      .temperature = std::clamp(temperature_, 0.0, 2.0),
       .known_item_values = known_item_values_,
       .reward_feedback = reward_feedback_,
       .opaque_look = opaque_look_,
@@ -259,6 +284,7 @@ bool AppUi::recreate_session(const bool auto_play) {
   const auto selected_config = config_from_controls();
   turn_budget_ = static_cast<int>(selected_config.turn_budget);
   max_tool_rounds_ = static_cast<int>(selected_config.max_tool_rounds);
+  temperature_ = selected_config.temperature;
   auto created =
       agent::Session::create(selected_config, "logs", preset_variant(preset_));
   if (!created) {
@@ -274,7 +300,6 @@ bool AppUi::recreate_session(const bool auto_play) {
   pump_stats_ = {};
   transcript_fingerprint_ = 0U;
   visible_error_.clear();
-  last_guidance_.clear();
   status_message_ = "Created session for " + session_->config().model +
                     " (seed " + std::to_string(session_->config().seed) + ").";
   if (auto_play) {
@@ -310,10 +335,9 @@ void AppUi::queue_guidance() {
     visible_error_ = "This episode is finished; Reset before queuing guidance.";
     return;
   }
-  session_->queue_user_input(message);
-  last_guidance_ = message;
+  static_cast<void>(session_->queue_user_input(message));
   guidance_.fill('\0');
-  status_message_ = "Guidance queued for the next model turn.";
+  status_message_ = "Guidance added to the FIFO queue.";
   visible_error_.clear();
 }
 
@@ -371,7 +395,7 @@ void AppUi::draw_world_panel() {
   const auto &simulation = session_->world();
   const auto available = ImGui::GetContentRegionAvail();
   const auto grid_size =
-      std::max(120.0F, std::min(available.x - 8.0F, available.y - 62.0F));
+      std::max(120.0F, std::min(available.x - 8.0F, available.y - 104.0F));
   const auto cell_size = grid_size / static_cast<float>(world::World::width);
   const auto cursor = ImGui::GetCursorScreenPos();
   const ImVec2 grid_min{
@@ -468,6 +492,18 @@ void AppUi::draw_world_panel() {
                              std::max(1.0F, blob_radius * 0.10F),
                              IM_COL32(18, 48, 49, 255), 10);
 
+  if (const auto item = simulation.item_at(simulation.position())) {
+    const auto actual_center =
+        cell_center(static_cast<float>(simulation.position().x),
+                    static_cast<float>(simulation.position().y));
+    draw_list->AddCircle(actual_center, blob_radius + 4.0F, item_color(*item),
+                         32, 3.0F);
+    draw_item(*draw_list, *item,
+              {actual_center.x + blob_radius * 1.15F,
+               actual_center.y - blob_radius * 1.15F},
+              cell_size * 0.62F);
+  }
+
   if (ImGui::IsItemHovered()) {
     const auto mouse = ImGui::GetMousePos();
     const auto grid_x = static_cast<int>((mouse.x - grid_min.x) / cell_size);
@@ -494,6 +530,20 @@ void AppUi::draw_world_panel() {
   ImGui::Text("Score %d  |  Blob (%d,%d)  |  Visual queue %zu",
               simulation.score(), simulation.position().x,
               simulation.position().y, animation_.queued_action_count());
+  if (session_->events().empty()) {
+    ImGui::TextDisabled("Last executed: none");
+  } else {
+    const auto last_action = verified_action_label(session_->events().back());
+    ImGui::TextColored({0.95F, 0.78F, 0.32F, 1.0F}, "Last executed: %s",
+                       last_action.c_str());
+  }
+  if (const auto item = simulation.item_at(simulation.position())) {
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(item_color(*item)),
+                       "Standing on: %s (%+d)", world::item_name(*item).data(),
+                       world::item_reward(*item));
+  } else {
+    ImGui::TextDisabled("Standing on: empty cell");
+  }
   ImGui::End();
 }
 
@@ -504,7 +554,7 @@ void AppUi::draw_transcript_panel() {
   }
   ImGui::Checkbox("Auto-scroll", &transcript_auto_scroll_);
   ImGui::SameLine();
-  ImGui::TextDisabled("Visible model output only");
+  ImGui::TextDisabled("Verified actions are sourced from world events");
   ImGui::Separator();
 
   if (!session_) {
@@ -515,6 +565,7 @@ void AppUi::draw_transcript_panel() {
 
   const auto &transcript = session_->runner().transcript();
   const auto &events = session_->events();
+  const auto snapshot = session_->runner().snapshot();
   auto fingerprint = transcript.size() * 131U + events.size();
   if (!transcript.empty()) {
     fingerprint += transcript.back().text.size();
@@ -529,28 +580,45 @@ void AppUi::draw_transcript_panel() {
   for (std::size_t index = 0; index < transcript.size(); ++index) {
     const auto &entry = transcript[index];
     ImGui::PushID(static_cast<int>(index));
-    ImGui::TextColored(role_color(entry.role), "Turn %u · %s", entry.turn,
-                       role_name(entry.role));
-    ImGui::PushTextWrapPos(0.0F);
-    if (entry.text.empty() && entry.role == agent::TranscriptRole::assistant) {
-      ImGui::TextDisabled("Waiting for model output...");
-    } else {
-      ImGui::TextUnformatted(entry.text.c_str());
-    }
-    ImGui::PopTextWrapPos();
-
     if (entry.role == agent::TranscriptRole::assistant) {
+      ImGui::TextColored({0.95F, 0.78F, 0.32F, 1.0F},
+                         "Turn %u · Verified actions", entry.turn);
+      auto verified_actions = 0U;
       for (const auto &event : events) {
         if (event.turn != entry.turn) {
           continue;
         }
+        ++verified_actions;
         const auto arguments = compact(event.arguments, 72U);
         const auto result = compact(event.result, 110U);
-        ImGui::TextColored({0.85F, 0.72F, 0.35F, 1.0F}, "  tool %s",
+        ImGui::TextColored({0.95F, 0.78F, 0.32F, 1.0F}, "  %s",
                            event.tool.c_str());
         ImGui::SameLine();
         ImGui::TextDisabled("%s -> %s", arguments.c_str(), result.c_str());
       }
+      if (verified_actions == 0U) {
+        const auto active_turn = snapshot.turns_used + 1U;
+        if (snapshot.turn_in_flight && entry.turn == active_turn) {
+          ImGui::TextDisabled("  No verified actions yet");
+        } else {
+          ImGui::TextColored({1.0F, 0.52F, 0.32F, 1.0F},
+                             "  No verified actions executed");
+        }
+      }
+      ImGui::TextColored(role_color(entry.role), "Model narration");
+      ImGui::PushTextWrapPos(0.0F);
+      if (entry.text.empty()) {
+        ImGui::TextDisabled("Waiting for model output...");
+      } else {
+        ImGui::TextUnformatted(entry.text.c_str());
+      }
+      ImGui::PopTextWrapPos();
+    } else {
+      ImGui::TextColored(role_color(entry.role), "Turn %u · %s", entry.turn,
+                         role_name(entry.role));
+      ImGui::PushTextWrapPos(0.0F);
+      ImGui::TextUnformatted(entry.text.c_str());
+      ImGui::PopTextWrapPos();
     }
     ImGui::Separator();
     ImGui::PopID();
@@ -666,6 +734,11 @@ void AppUi::draw_controls_panel() {
   }
   ImGui::InputInt("Turn budget", &turn_budget_);
   ImGui::InputInt("Tool rounds / turn", &max_tool_rounds_);
+  ImGui::InputDouble("Temperature", &temperature_, 0.1, 0.5, "%.2f");
+  temperature_ = std::clamp(temperature_, 0.0, 2.0);
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Sampling control from 0.0 to 2.0; applies on Reset.");
+  }
   ImGui::SliderFloat("Animation speed", &animation_speed_, 0.25F, 4.0F,
                      "%.2fx");
   animation_.set_speed(animation_speed_);
@@ -763,14 +836,21 @@ void AppUi::draw_stats_panel() {
 
   std::size_t moves{};
   std::size_t looks{};
-  std::size_t eats{};
+  std::size_t eat_attempts{};
+  std::size_t successful_eats{};
+  std::size_t failed_eats{};
   for (const auto &event : session_->events()) {
     if (event.tool == "move") {
       ++moves;
     } else if (event.tool == "look") {
       ++looks;
     } else if (event.tool == "eat") {
-      ++eats;
+      ++eat_attempts;
+      if (event.result.value("ok", false)) {
+        ++successful_eats;
+      } else {
+        ++failed_eats;
+      }
     }
   }
 
@@ -790,7 +870,7 @@ void AppUi::draw_stats_panel() {
     const std::array<std::pair<const char *, std::size_t>, 4> tools{
         std::pair{"move", moves},
         std::pair{"look", looks},
-        std::pair{"eat", eats},
+        std::pair{"eat attempts", eat_attempts},
         std::pair{"all calls", session_->tool_call_count()},
     };
     for (std::size_t index = 0; index < item_types.size(); ++index) {
@@ -809,6 +889,13 @@ void AppUi::draw_stats_panel() {
     ImGui::EndTable();
   }
 
+  ImGui::Text("Eat attempts %zu", eat_attempts);
+  ImGui::SameLine();
+  ImGui::TextColored({0.46F, 0.92F, 0.62F, 1.0F}, "| successful %zu",
+                     successful_eats);
+  ImGui::SameLine();
+  ImGui::TextColored({1.0F, 0.52F, 0.32F, 1.0F}, "| failed %zu", failed_eats);
+
   ImGui::TextDisabled(
       "Callbacks %zu | transport queued %zu | visuals queued %zu",
       pump_stats_.callbacks_delivered, pump_stats_.events_remaining,
@@ -821,8 +908,8 @@ void AppUi::draw_guidance_panel() {
     ImGui::End();
     return;
   }
-  ImGui::TextDisabled("Optional: the system starts and continues exploration "
-                      "automatically. Guidance joins the next turn.");
+  ImGui::TextDisabled("Optional guidance is delivered one message per turn in "
+                      "FIFO order.");
   const auto button_width = 78.0F;
   ImGui::SetNextItemWidth(std::max(120.0F, ImGui::GetContentRegionAvail().x -
                                                button_width - 10.0F));
@@ -834,9 +921,40 @@ void AppUi::draw_guidance_panel() {
   if (submitted || clicked) {
     queue_guidance();
   }
-  if (!last_guidance_.empty()) {
-    ImGui::TextColored({0.48F, 0.88F, 0.68F, 1.0F}, "Queued: %s",
-                       last_guidance_.c_str());
+  if (session_) {
+    auto has_pending = false;
+    for (const auto &entry : session_->runner().guidance()) {
+      has_pending =
+          has_pending || entry.status == agent::GuidanceStatus::pending;
+    }
+    if (has_pending) {
+      if (ImGui::Button("Clear pending")) {
+        session_->clear_pending_user_inputs();
+        status_message_ = "Cleared pending guidance.";
+      }
+      ImGui::Separator();
+    }
+
+    std::optional<std::uint64_t> remove_id;
+    for (const auto &entry : session_->runner().guidance()) {
+      ImGui::PushID(static_cast<int>(entry.id));
+      if (entry.status == agent::GuidanceStatus::pending) {
+        ImGui::TextColored({1.0F, 0.78F, 0.28F, 1.0F},
+                           "Pending for turn %u: %s", entry.turn,
+                           entry.text.c_str());
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Remove")) {
+          remove_id = entry.id;
+        }
+      } else {
+        ImGui::TextColored({0.48F, 0.88F, 0.68F, 1.0F}, "Sent on turn %u: %s",
+                           entry.turn, entry.text.c_str());
+      }
+      ImGui::PopID();
+    }
+    if (remove_id && session_->remove_pending_user_input(*remove_id)) {
+      status_message_ = "Removed pending guidance.";
+    }
   }
   ImGui::End();
 }

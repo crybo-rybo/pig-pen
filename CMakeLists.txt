@@ -305,6 +305,14 @@ if(PIGPEN_BUILD_TESTS)
       pigpen_headless_rejects_invalid_bounds
       PROPERTIES WILL_FAIL TRUE
     )
+    add_test(
+      NAME pigpen_headless_rejects_invalid_temperature
+      COMMAND pig-pen-headless --temperature nan
+    )
+    set_tests_properties(
+      pigpen_headless_rejects_invalid_temperature
+      PROPERTIES WILL_FAIL TRUE
+    )
 
     if(UNIX)
       find_package(Python3 COMPONENTS Interpreter QUIET)

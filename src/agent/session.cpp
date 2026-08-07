@@ -6,6 +6,7 @@
 #include "agent/tool_executor.hpp"
 
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <memory>
 #include <nlohmann/json.hpp>
@@ -38,7 +39,7 @@ tool_definition(std::string name, std::string description,
       .api_key = environment("PIGPEN_API_KEY"),
       .model = config.model,
       .dialect = scry::ProviderDialect::openai_compatible,
-      .sampling = {.temperature = 0.0,
+      .sampling = {.temperature = config.temperature,
                    .top_p = std::nullopt,
                    .max_tokens = 1024},
       // qwen3:8b spends the entire bounded response on hidden reasoning when
@@ -66,26 +67,28 @@ public:
         conversation(std::move(initial_conversation)),
         tools(*world, events, this->config),
         transport(this->harness, this->conversation),
-        runner(transport, static_cast<std::uint32_t>(this->config.turn_budget),
-               [this] { return world->all_positive_items_eaten(); },
-               {
-                   .on_turn_finished =
-                       [this](const TurnRecord &record) {
-                         if (auto status = this->metrics->record_turn(record);
-                             !status) {
-                           metrics_error = std::move(status.error());
-                           static_cast<void>(runner.fail(metrics_error));
-                         }
-                       },
-                   .on_episode_finished =
-                       [this](const EpisodeResult &result) {
-                         if (auto status =
-                                 this->metrics->finish(result, world->score());
-                             !status) {
-                           metrics_error = std::move(status.error());
-                         }
-                       },
-               }) {}
+        runner(
+            transport, static_cast<std::uint32_t>(this->config.turn_budget),
+            [this] { return world->all_positive_items_eaten(); },
+            {
+                .on_turn_finished =
+                    [this](const TurnRecord &record) {
+                      if (auto status = this->metrics->record_turn(record);
+                          !status) {
+                        metrics_error = std::move(status.error());
+                        static_cast<void>(runner.fail(metrics_error));
+                      }
+                    },
+                .on_episode_finished =
+                    [this](const EpisodeResult &result) {
+                      if (auto status =
+                              this->metrics->finish(result, world->score());
+                          !status) {
+                        metrics_error = std::move(status.error());
+                      }
+                    },
+            },
+            [this] { return events.size(); }) {}
 
   Config config;
   std::shared_ptr<world::World> world;
@@ -119,6 +122,10 @@ Session::create(Config config, std::filesystem::path log_directory,
   }
   if (config.max_tool_rounds > 64) {
     return std::unexpected("maximum tool rounds must not exceed 64");
+  }
+  if (!std::isfinite(config.temperature) || config.temperature < 0.0 ||
+      config.temperature > 2.0) {
+    return std::unexpected("temperature must be finite and in the range 0..2");
   }
 
   auto harness = create_harness(config);
@@ -237,8 +244,16 @@ bool Session::play() { return impl_->runner.play(); }
 bool Session::pause() { return impl_->runner.pause(); }
 bool Session::stop() { return impl_->runner.stop(); }
 
-void Session::queue_user_input(std::string message) {
-  impl_->runner.queue_user_input(std::move(message));
+std::uint64_t Session::queue_user_input(std::string message) {
+  return impl_->runner.queue_user_input(std::move(message));
+}
+
+bool Session::remove_pending_user_input(const std::uint64_t id) {
+  return impl_->runner.remove_pending_user_input(id);
+}
+
+void Session::clear_pending_user_inputs() {
+  impl_->runner.clear_pending_user_inputs();
 }
 
 const Config &Session::config() const noexcept { return impl_->config; }

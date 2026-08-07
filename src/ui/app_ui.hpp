@@ -45,6 +45,7 @@ private:
   std::uint64_t seed_{};
   int turn_budget_{20};
   int max_tool_rounds_{8};
+  double temperature_{};
   int preset_{0};
   bool known_item_values_{true};
   bool reward_feedback_{true};
@@ -55,7 +56,6 @@ private:
   std::mt19937_64 reroll_rng_{};
   std::string status_message_{};
   std::string visible_error_{};
-  std::string last_guidance_{};
   std::size_t transcript_fingerprint_{};
   bool default_layout_built_{false};
 };

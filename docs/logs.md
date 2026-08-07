@@ -22,7 +22,7 @@ Written when the session is created, before the model is contacted.
 
 ```json
 {"type":"header","model":"qwen3:0.6b","base_url":"http://127.0.0.1:11434/v1",
- "seed":42,"started_at":"2026-08-07T06:45:12-0400","prompt_variant":"default",
+ "temperature":0.2,"seed":42,"started_at":"2026-08-07T06:45:12-0400","prompt_variant":"default",
  "scenario":{"grid":{"width":10,"height":10},"spawn":{"x":5,"y":5},
    "items":{"berry":6,"apple":3,"truffle":1,"toadstool":3},
    "turn_budget":2,"max_tool_rounds":8,
@@ -30,7 +30,9 @@ Written when the session is created, before the model is contacted.
 ```
 
 `prompt_variant` is whatever you passed to `--prompt-variant`, or the GUI
-preset name. Everything needed to reproduce the run is in this line.
+preset name. `temperature` records model sampling separately from the
+deterministic world `seed`. Everything needed to describe the run is in this
+line, although model sampling is not guaranteed to be reproducible.
 
 ## `tool`
 
@@ -56,13 +58,16 @@ One line per conversation turn, flushed as it completes.
 
 ```json
 {"type":"turn","turn":1,"status":"completed",
- "user_message":"Continue exploring autonomously. ... Turn 1 of 2.",
+ "user_message":"Automatic turn instructions:\nContinue exploring autonomously. ... Turn 1 of 2.",
  "assistant_text":"I have explored the pen and found valuable items. ...",
- "error":"","input_tokens":1699,"output_tokens":198,"latency_ms":2499}
+ "error":"","input_tokens":1699,"output_tokens":198,"tool_calls":2,
+ "zero_tool_turn":false,"latency_ms":2499}
 ```
 
-`status` is `completed`, `cancelled`, or `error`. Token counts come from the
-provider; `latency_ms` is measured locally around the turn.
+`status` is `completed`, `cancelled`, or `error`. `tool_calls` is counted from
+verified world events for this turn and `zero_tool_turn` makes narration-only
+turns easy to query. Token counts come from the provider; `latency_ms` is
+measured locally around the turn.
 
 ## `footer`
 
