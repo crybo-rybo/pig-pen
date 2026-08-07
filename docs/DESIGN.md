@@ -6,8 +6,9 @@ perceives and acts on the world exclusively through tools registered with
 [scry](https://github.com/crybo-rybo/scry); the GUI shows the human what the
 model sees, decides, and does — in real time.
 
-Status: pre-implementation design. This document is the source of truth for the
-first milestones; update it as decisions change.
+Status: implemented baseline. This document remains the source of truth; the
+test-driven delivery sequence and resolved implementation choices are recorded
+in [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
 
 ---
 
@@ -131,7 +132,8 @@ while (!glfwWindowShouldClose(window)) {
 Counts per episode (default scenario): 6 berries, 3 apples, 1 truffle,
 3 toadstools. Placement is drawn from a **seeded PRNG** (`std::mt19937_64`);
 the same seed always produces the same world. The seed is visible and settable
-in the GUI and recorded in every metrics log.
+in the GUI and recorded in every metrics log. The v1 blob spawn is `(5,5)`;
+item placement excludes that initial cell.
 
 ### Determinism
 
@@ -405,6 +407,7 @@ and a short written comparison.*
 - Episode replay from JSONL logs in the GUI (scrubber over a finished run).
   Cheap to add later because logs already carry every event; keep the
   `WorldEvent` type serializable.
-- Reasoning display: scry can disable reasoning on servers supporting
-  `reasoning_effort: "none"`. Leave `ReasoningMode` at default in v1; revisit
-  if turn latency hurts the demo.
+- Reasoning display: resolved for the local baseline. Live `qwen3:8b` probes
+  exhausted bounded replies on hidden reasoning before completing turns, so v1
+  requests `ReasoningMode::disabled` and displays streamed visible output.
+  This keeps the run finite and the transcript action-focused.

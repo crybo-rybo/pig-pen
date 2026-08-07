@@ -1,0 +1,6 @@
+/build/
+/logs/
+/compile_commands.json
+/imgui.ini
+.cache/
+*.user
