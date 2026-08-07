@@ -289,7 +289,9 @@ if(PIGPEN_BUILD_TESTS)
     add_executable(pigpen_tests ${PIGPEN_TEST_SOURCES})
     target_sources(
       pigpen_tests
-      PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/ui/world_animation.cpp"
+      PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/ui/gui_options.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/ui/world_animation.cpp"
     )
     target_link_libraries(
       pigpen_tests
@@ -314,6 +316,14 @@ if(PIGPEN_BUILD_TESTS)
 
   if(TARGET pig-pen-headless)
     add_test(NAME pigpen_headless_help COMMAND pig-pen-headless --help)
+    add_test(
+      NAME pigpen_headless_requires_model
+      COMMAND pig-pen-headless
+    )
+    set_tests_properties(
+      pigpen_headless_requires_model
+      PROPERTIES WILL_FAIL TRUE
+    )
     add_test(
       NAME pigpen_headless_rejects_invalid_bounds
       COMMAND pig-pen-headless --max-tool-rounds 65

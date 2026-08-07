@@ -1,4 +1,5 @@
 #include "ui/app_ui.hpp"
+#include "ui/gui_options.hpp"
 
 #include <GLFW/glfw3.h>
 #include <imgui.h>
@@ -6,6 +7,9 @@
 #include <imgui_impl_opengl3.h>
 
 #include <cstdio>
+#include <iostream>
+#include <string_view>
+#include <vector>
 
 namespace {
 
@@ -14,9 +18,39 @@ void glfw_error_callback(const int error, const char *description) {
                description == nullptr ? "unknown error" : description);
 }
 
+void print_usage(std::ostream &output, const std::string_view program) {
+  output << "Usage: " << program << " [--model NAME] [options]\n\n"
+         << "Open the pig-pen GUI, optionally creating and starting a session "
+            "immediately.\n\n"
+         << "Options:\n"
+         << "  --model NAME    Populate the model field and auto-start\n"
+         << "  --base-url URL  Populate the model endpoint field\n"
+         << "                  (default: http://127.0.0.1:11434/v1)\n"
+         << "  --help          Show this help and exit\n\n"
+         << "Values may also use --option=value. Without --model, the GUI "
+            "waits for\n"
+         << "a model identifier to be entered in Controls.\n";
+}
+
 } // namespace
 
-int main() {
+int main(const int argc, char **argv) {
+  std::vector<std::string_view> arguments;
+  arguments.reserve(argc > 1 ? static_cast<std::size_t>(argc - 1) : 0U);
+  for (int index = 1; index < argc; ++index) {
+    arguments.emplace_back(argv[index]);
+  }
+  auto options = pigpen::ui::parse_gui_options(arguments);
+  if (!options) {
+    std::cerr << "option error: " << options.error() << "\n\n";
+    print_usage(std::cerr, argc > 0 ? argv[0] : "pig-pen");
+    return 2;
+  }
+  if (options->help) {
+    print_usage(std::cout, argc > 0 ? argv[0] : "pig-pen");
+    return 0;
+  }
+
   glfwSetErrorCallback(glfw_error_callback);
   if (glfwInit() == GLFW_FALSE) {
     std::fprintf(stderr, "Could not initialize GLFW\n");
@@ -70,7 +104,7 @@ int main() {
   }
 
   {
-    pigpen::ui::AppUi application;
+    pigpen::ui::AppUi application{options->config};
     while (glfwWindowShouldClose(window) == GLFW_FALSE) {
       glfwPollEvents();
       application.pump(glfwGetTime());

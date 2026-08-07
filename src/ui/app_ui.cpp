@@ -213,17 +213,16 @@ verified_action_label(const agent::WorldEvent &event) {
 
 } // namespace
 
-AppUi::AppUi() {
-  const agent::Config defaults{};
-  set_text(base_url_, defaults.base_url);
-  set_text(model_, defaults.model);
-  seed_ = defaults.seed;
-  turn_budget_ = static_cast<int>(defaults.turn_budget);
-  max_tool_rounds_ = static_cast<int>(defaults.max_tool_rounds);
-  temperature_ = defaults.temperature;
-  known_item_values_ = defaults.known_item_values;
-  reward_feedback_ = defaults.reward_feedback;
-  opaque_look_ = defaults.opaque_look;
+AppUi::AppUi(const agent::Config &initial_config) {
+  set_text(base_url_, initial_config.base_url);
+  set_text(model_, initial_config.model);
+  seed_ = initial_config.seed;
+  turn_budget_ = static_cast<int>(initial_config.turn_budget);
+  max_tool_rounds_ = static_cast<int>(initial_config.max_tool_rounds);
+  temperature_ = initial_config.temperature;
+  known_item_values_ = initial_config.known_item_values;
+  reward_feedback_ = initial_config.reward_feedback;
+  opaque_look_ = initial_config.opaque_look;
 
   std::random_device entropy;
   const auto clock_value =
@@ -232,7 +231,12 @@ AppUi::AppUi() {
   const auto entropy_seed = static_cast<std::uint64_t>(entropy());
   reroll_rng_.seed(clock_seed ^ (entropy_seed << 32U) ^ entropy_seed);
 
-  static_cast<void>(recreate_session(true));
+  if (initial_config.model.empty()) {
+    status_message_ =
+        "Enter a model identifier in Controls, then press Play or Reset.";
+  } else {
+    static_cast<void>(recreate_session(true));
+  }
 }
 
 void AppUi::pump(const double now_seconds) {
@@ -707,7 +711,7 @@ void AppUi::draw_controls_panel() {
 
   ImGui::SeparatorText("Connection");
   ImGui::InputText("Base URL", base_url_.data(), base_url_.size());
-  ImGui::InputText("Model", model_.data(), model_.size());
+  ImGui::InputText("Model (required)", model_.data(), model_.size());
 
   ImGui::SeparatorText("Scenario");
   auto selected_preset = preset_;

@@ -49,13 +49,13 @@ the preset name; anything after it is forwarded to the binary.
 just build                     # configure + build the dev preset
 just build release
 just test                      # build, then ctest --preset dev
-just run                       # build and launch the GUI
-just run-headless dev --turns 4 --seed 42
+just run dev --model YOUR_MODEL  # build, launch, and auto-start the GUI
+just run-headless dev --model YOUR_MODEL --turns 4 --seed 42
 ```
 
 Note the explicit `dev` in the last line — `run` and `run-headless` take the
-preset first, so `just run-headless --turns 4` would be read as a preset named
-`--turns`.
+preset first, so `just run-headless --model YOUR_MODEL` would be read as a
+preset named `--model`.
 
 ## CMake options
 

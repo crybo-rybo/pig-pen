@@ -12,7 +12,7 @@ cmake --build --preset dev
 ctest --preset dev
 ```
 
-49 tests, a few seconds end to end. **No model server and no network access are
+51 tests, a few seconds end to end. **No model server and no network access are
 required** — the transport is faked everywhere, so the suite is safe to run in
 CI or offline.
 
@@ -20,7 +20,7 @@ CI or offline.
 
 `ctest` picks up two kinds of test.
 
-**Catch2 cases (44)** from `pigpen_tests`, registered individually via
+**Catch2 cases (45)** from `pigpen_tests`, registered individually via
 `catch_discover_tests`, covering:
 
 | file | covers |
@@ -32,10 +32,12 @@ CI or offline.
 | `tests/metrics_writer_tests.cpp` | header/tool/turn/footer reconciliation, the incomplete footer on destruction, and footer finality |
 | `tests/session_tests.cpp` | config rejection and that a session owns a seeded world plus a registered tool harness atomically |
 | `tests/world_animation_tests.cpp` | the event feed becoming an ordered visual timeline, with caller-supplied time |
+| `tests/gui_options_tests.cpp` | GUI startup parsing for model and endpoint arguments, including both value syntaxes and invalid input |
 
-**CLI tests (5)** registered directly in `CMakeLists.txt`:
+**CLI tests (6)** registered directly in `CMakeLists.txt`:
 
 - `pigpen_headless_help` — `--help` exits 0
+- `pigpen_headless_requires_model` — omitting `--model` must fail
 - `pigpen_headless_rejects_invalid_bounds` — `--max-tool-rounds 65` must fail
 - `pigpen_headless_rejects_invalid_temperature` — non-finite sampling values
   must fail
@@ -65,7 +67,7 @@ The suite deliberately never contacts one. To exercise the full path by hand,
 run a short episode and check the exit code:
 
 ```sh
-./build/dev/pig-pen-headless --model qwen3:0.6b --turns 2 --seed 42 --timeout-seconds 120
+./build/dev/pig-pen-headless --model YOUR_MODEL --turns 2 --seed 42 --timeout-seconds 120
 echo $?
 ```
 

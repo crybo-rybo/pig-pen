@@ -6,7 +6,7 @@ Every session — CLI or GUI — writes one JSONL file:
 logs/<timestamp>-<model>-<seed>.jsonl
 ```
 
-for example `logs/20260807-064512-538-qwen3_0.6b-42.jsonl`. The timestamp is
+for example `logs/20260807-064512-538-acme_pig-model_Q4_K_M-42.jsonl`. The timestamp is
 local time down to the millisecond, and characters that are awkward in
 filenames are replaced with `_`. If the name somehow collides, a `-1`, `-2`, …
 suffix is appended; an existing log is never overwritten. Use `--log-dir` to
@@ -21,7 +21,7 @@ keys are emitted in sorted order.
 Written when the session is created, before the model is contacted.
 
 ```json
-{"type":"header","model":"qwen3:0.6b","base_url":"http://127.0.0.1:11434/v1",
+{"type":"header","model":"acme/pig-model:Q4_K_M","base_url":"http://127.0.0.1:11434/v1",
  "temperature":0.2,"seed":42,"started_at":"2026-08-07T06:45:12-0400","prompt_variant":"default",
  "scenario":{"grid":{"width":10,"height":10},"spawn":{"x":5,"y":5},
    "items":{"berry":6,"apple":3,"truffle":1,"toadstool":3},

@@ -30,7 +30,7 @@ TEST_CASE("session rejects unsafe or incomplete runtime configuration") {
 
   config.model.clear();
   CHECK_FALSE(pigpen::agent::Session::create(config, directory));
-  config.model = "qwen3:8b";
+  config.model = "registry.example/pig-model:Q4_K_M";
 
   config.turn_budget = 0;
   CHECK_FALSE(pigpen::agent::Session::create(config, directory));
