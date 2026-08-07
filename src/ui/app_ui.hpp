@@ -45,6 +45,7 @@ private:
   std::uint64_t seed_{};
   int turn_budget_{20};
   int max_tool_rounds_{8};
+  std::uint32_t max_output_tokens_{2'048};
   double temperature_{};
   int preset_{0};
   bool known_item_values_{true};

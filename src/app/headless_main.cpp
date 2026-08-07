@@ -387,6 +387,7 @@ void print_updates(const pigpen::agent::Session &session,
             << " seed=" << options.config.seed
             << " turns=" << options.config.turn_budget
             << " max_tool_rounds=" << options.config.max_tool_rounds
+            << " max_output_tokens=" << options.config.max_output_tokens
             << " temperature=" << options.config.temperature << '\n'
             << "log_path=" << std::quoted(session->metrics_path().string())
             << '\n';
