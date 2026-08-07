@@ -9,6 +9,16 @@ project(
 
 include(FetchContent)
 
+# Pin the language level for every target in the build graph, dependencies
+# included. Fetched projects that only request a floor (Catch2 asks for
+# cxx_std_14) otherwise compile at the compiler default, which is gnu++17 for
+# GCC but gnu++14 for AppleClang. That split silently drops the C++17 halves of
+# their ABI -- Catch2's StringMaker<std::string_view> among them -- and the link
+# fails on macOS only.
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
 option(PIGPEN_BUILD_GUI "Build the Dear ImGui application" ON)
 option(PIGPEN_BUILD_TESTS "Build pig-pen's test suite" ON)
 option(PIGPEN_WARNINGS_AS_ERRORS "Treat warnings in pig-pen code as errors" ON)
@@ -218,6 +228,13 @@ if(PIGPEN_BUILD_GUI)
       "${imgui_SOURCE_DIR}/backends"
   )
   target_link_libraries(pigpen_imgui PUBLIC glfw OpenGL::GL)
+  # macOS deprecated the whole OpenGL framework in 10.14, so every GL entry
+  # point carries a deprecation attribute. The API still works (Apple ships an
+  # OpenGL 4.1 core profile); only the warning is new, and -Werror turns it
+  # fatal. PUBLIC so the GUI target's own GL calls are covered too.
+  if(APPLE)
+    target_compile_definitions(pigpen_imgui PUBLIC GL_SILENCE_DEPRECATION)
+  endif()
 
   set(PIGPEN_GUI_MAIN "${CMAKE_CURRENT_SOURCE_DIR}/src/app/main.cpp")
   file(
