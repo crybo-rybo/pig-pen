@@ -13,11 +13,11 @@ namespace {
 
 } // namespace
 
-TEST_CASE("Agent configuration defaults target the bounded local Qwen run") {
+TEST_CASE("Agent configuration requires callers to select a model") {
   const pigpen::agent::Config config;
 
   CHECK(config.base_url == "http://127.0.0.1:11434/v1");
-  CHECK(config.model == "qwen3:8b");
+  CHECK(config.model.empty());
   CHECK(config.seed == 0);
   CHECK(config.turn_budget == 20);
   CHECK(config.max_tool_rounds == 8);

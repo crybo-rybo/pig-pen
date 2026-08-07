@@ -66,15 +66,14 @@ struct OutputCursor {
 
 void print_usage(std::ostream &output, const std::string_view program) {
   output
-      << "Usage: " << program << " [options]\n\n"
+      << "Usage: " << program << " --model NAME [options]\n\n"
       << "Run a bounded pig-pen episode against an OpenAI-compatible model "
          "server.\n\n"
       << "Options:\n"
       << "  --base-url URL            Model endpoint (default: "
          "http://127.0.0.1:11434/v1)\n"
       << "  --model NAME              Exact model identifier sent to the "
-         "server\n"
-      << "                            (default: qwen3:8b)\n"
+         "server (required)\n"
       << "  --seed INTEGER            Deterministic world seed (default: 0)\n"
       << "  --turns INTEGER           Episode turn budget, 1..10000 (default: "
          "20)\n"
@@ -292,11 +291,14 @@ parse_unsigned(const std::string_view value, const std::string_view option,
     }
   }
 
+  if (options.help) {
+    return options;
+  }
   if (options.config.base_url.empty()) {
     return std::unexpected("--base-url cannot be empty");
   }
   if (options.config.model.empty()) {
-    return std::unexpected("--model cannot be empty");
+    return std::unexpected("--model is required");
   }
   if (options.log_directory.empty()) {
     return std::unexpected("--log-dir cannot be empty");

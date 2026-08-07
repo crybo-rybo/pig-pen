@@ -42,9 +42,8 @@ tool_definition(std::string name, std::string description,
       .sampling = {.temperature = config.temperature,
                    .top_p = std::nullopt,
                    .max_tokens = 1024},
-      // qwen3:8b spends the entire bounded response on hidden reasoning when
-      // provider defaults are used. Scry's explicit control keeps local runs
-      // finite and leaves the visible transcript focused on actions.
+      // Explicitly disabling hidden reasoning keeps bounded local runs finite
+      // and leaves the visible transcript focused on actions across providers.
       .reasoning_mode = scry::ReasoningMode::disabled,
       .retry = {},
       .timeouts = {},

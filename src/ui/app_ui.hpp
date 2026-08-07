@@ -15,7 +15,7 @@ namespace pigpen::ui {
 
 class AppUi final {
 public:
-  AppUi();
+  explicit AppUi(const agent::Config &initial_config = {});
 
   void pump(double now_seconds);
   void draw(double now_seconds);

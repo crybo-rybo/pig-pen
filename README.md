@@ -31,22 +31,24 @@ You need CMake 3.25+, Ninja, a C++23 compiler, libcurl, OpenGL 3, and the
 platform development libraries GLFW needs. Every C++ dependency is pinned and
 fetched by CMake.
 
-Serve a model first — the default endpoint is Ollama on `127.0.0.1:11434`:
+Serve a model first. The default endpoint is Ollama on `127.0.0.1:11434`, but
+Pig Pen does not choose a model for you:
 
 ```sh
-ollama pull qwen3:8b
+ollama pull YOUR_MODEL
 ```
 
-Then build and run the app:
+Then build and open the app with the exact model identifier. The GUI populates
+its model field and starts the episode automatically:
 
 ```sh
-just run
+just run dev --model YOUR_MODEL
 ```
 
 Or run one short episode in the terminal:
 
 ```sh
-just run-headless dev --turns 4 --seed 42
+just run-headless dev --model YOUR_MODEL --turns 4 --seed 42
 ```
 
 Without `just`, the same thing in three commands:
@@ -54,11 +56,12 @@ Without `just`, the same thing in three commands:
 ```sh
 cmake --preset dev
 cmake --build --preset dev
-./build/dev/pig-pen          # or ./build/dev/pig-pen-headless --turns 4 --seed 42
+./build/dev/pig-pen --model YOUR_MODEL
+./build/dev/pig-pen-headless --model YOUR_MODEL --turns 4 --seed 42
 ```
 
-The GUI starts an episode automatically; press **Pause** or **Stop** in the
-Controls panel to take over. Every episode appends a
+Launching the GUI without `--model` waits for a manual model selection instead.
+Every episode appends a
 `logs/<timestamp>-<model>-<seed>.jsonl` file you can inspect afterwards.
 
 ## Docs

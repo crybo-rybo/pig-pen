@@ -1,12 +1,12 @@
 # Running
 
-Both front ends talk to an OpenAI-compatible chat endpoint. The default is
-Ollama on `http://127.0.0.1:11434/v1` with model `qwen3:8b`, so the usual first
-step is:
+Both front ends talk to an OpenAI-compatible chat endpoint. The default
+endpoint is Ollama on `http://127.0.0.1:11434/v1`, but there is no default
+model. Ensure you pull the desired model before running.
 
 ```sh
 ollama serve          # if it is not already running
-ollama pull qwen3:8b
+ollama pull YOUR_MODEL
 ```
 
 Any other OpenAI-compatible server works too — point `--base-url` (CLI) or the
@@ -20,12 +20,11 @@ automatically until the episode ends.
 ## Headless CLI
 
 ```sh
-./build/dev/pig-pen-headless --turns 4 --seed 42
+./build/dev/pig-pen-headless --model YOUR_MODEL --turns 4 --seed 42
 ```
 
-Choose any Ollama model by passing its exact installed identifier. Pig Pen does
-not discover, normalize, or alias model names; the value is forwarded directly
-to the configured server:
+`--model` is required. Pig Pen does not discover, normalize, alias, or default
+model names; the value is forwarded directly to the configured server:
 
 ```sh
 ./build/dev/pig-pen-headless --model llama3.1:8b-instruct-q4_K_M
@@ -36,14 +35,14 @@ text as it arrives, prints one line per tool call with the before → after
 position, and ends with a summary:
 
 ```
-session model="qwen3:8b" base_url="http://127.0.0.1:11434/v1" seed=42 turns=4 max_tool_rounds=8 temperature=0
-log_path="logs/20260807-101500-123-qwen3_8b-42.jsonl"
+session model="llama3.1:8b-instruct-q4_K_M" base_url="http://127.0.0.1:11434/v1" seed=42 turns=4 max_tool_rounds=8 temperature=0
+log_path="logs/20260807-101500-123-llama3.1_8b-instruct-q4_K_M-42.jsonl"
 tool[turn=1,tick=1] look args={"direction":"north"} result={"cells":[...],"direction":"north","wall_at_distance":5} position=(5,5)->(5,5)
 assistant[turn=1]: I
 assistant[turn=1]:  scanned
 assistant[turn=1]:  north
 summary finish_reason=turn_budget turns_used=4 turn_budget=4 score=1 tool_calls=7
-log_path="logs/20260807-101500-123-qwen3_8b-42.jsonl"
+log_path="logs/20260807-101500-123-llama3.1_8b-instruct-q4_K_M-42.jsonl"
 ```
 
 Assistant text is emitted one line per streamed chunk, so it is chatty by
@@ -56,7 +55,7 @@ notices go to stderr.
 | flag | default | meaning |
 |---|---|---|
 | `--base-url URL` | `http://127.0.0.1:11434/v1` | model endpoint |
-| `--model NAME` | `qwen3:8b` | exact model identifier forwarded to the server |
+| `--model NAME` | *(required)* | exact model identifier forwarded to the server |
 | `--seed INTEGER` | `0` | world seed; fixes item placement |
 | `--turns INTEGER` | `20` | turn budget, 1–10000 |
 | `--max-tool-rounds INTEGER` | `8` | tool rounds allowed inside one turn, 1–64 |
@@ -98,11 +97,15 @@ timeout, metrics failure — gives cancellation 15 seconds before giving up.
 ## GUI
 
 ```sh
-./build/dev/pig-pen
+./build/dev/pig-pen --model YOUR_MODEL
 ```
 
-The window opens with a default episode already playing. Panels are dockable;
-the layout is remembered in `imgui.ini` next to the working directory.
+`--model NAME` populates **Model (required)** under **Controls** and starts the
+episode automatically. `--base-url URL` similarly overrides the initial
+endpoint. Both accept `--option=value` syntax. If `--model` is omitted, the
+window opens without an episode and waits for manual model selection. Panels
+are dockable; the layout is remembered in `imgui.ini` next to the working
+directory.
 
 **World** — the whole 10×10 pen, drawn with `(0,0)` at the south-west corner.
 Cells the model has never observed are tinted dark; observed cells get a teal
