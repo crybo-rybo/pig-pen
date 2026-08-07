@@ -6,5 +6,5 @@ through tools (`move`, `look`, `eat`) registered with
 [scry](https://github.com/crybo-rybo/scry); the GUI shows what the model
 observed, decided, and did — live — and logs episodes.
 
-See [DESIGN.md](DESIGN.md) for the full specification, architecture, and
+See [DESIGN.md](docs/DESIGN.md) for the full specification, architecture, and
 milestones.
