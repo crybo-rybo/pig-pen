@@ -2,7 +2,7 @@
 
 Both front ends talk to an OpenAI-compatible chat endpoint. The default
 endpoint is Ollama on `http://127.0.0.1:11434/v1`, but there is no default
-model. Serve a model and use its exact identifier:
+model. Ensure you pull the desired model before running.
 
 ```sh
 ollama serve          # if it is not already running
