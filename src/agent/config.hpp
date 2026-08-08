@@ -6,7 +6,7 @@
 
 namespace pigpen::agent {
 
-/// Hard application-side limit on world actions requested during one turn.
+/// Hard application-side limit on world actions authorized during one turn.
 inline constexpr std::size_t max_world_tool_calls_per_turn{4};
 
 /// Runtime and experiment settings shared by the headless and GUI front ends.

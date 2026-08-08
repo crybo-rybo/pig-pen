@@ -47,9 +47,24 @@ TEST_CASE("metrics log contains a reconcilable header tool turn and footer") {
       .turn = 1,
       .tool = "eat",
       .arguments = nlohmann::json::object(),
-      .result = {{"ok", true}, {"ate", "berry"}, {"reward", 1}, {"score", 1}},
+      .result =
+          {
+              {"error", nullptr},
+              {"result",
+               {{"ate", "berry"},
+                {"ok", true},
+                {"reason", nullptr},
+                {"reward", 1},
+                {"score", 1}}},
+              {"turn_tool_budget",
+               {{"used", 1},
+                {"remaining", 3},
+                {"instruction", "3 world-tool calls remain in this turn."}}},
+          },
       .before = {.x = 4, .y = 4},
       .after = {.x = 4, .y = 4},
+      .action_executed = true,
+      .eaten = pigpen::world::ItemType::berry,
   };
   REQUIRE(writer->record_tool(event, 1).has_value());
   REQUIRE(writer
@@ -76,11 +91,12 @@ TEST_CASE("metrics log contains a reconcilable header tool turn and footer") {
   REQUIRE(records.front().at("type") == "header");
   REQUIRE(records.front().at("seed") == 42);
   REQUIRE(records.front().at("temperature") == 0.5);
-  REQUIRE(records.front().at("max_output_tokens") == 2'048);
-  REQUIRE(records.front()
-              .at("scenario")
-              .at("max_world_tool_calls_per_turn") == 4);
+  REQUIRE(records.front().at("max_output_tokens") == config.max_output_tokens);
+  REQUIRE(records.front().at("scenario").at("max_world_tool_calls_per_turn") ==
+          4);
   REQUIRE(records[1].at("type") == "tool");
+  REQUIRE(records[1].at("action_executed") == true);
+  REQUIRE(records[1].at("result") == event.result);
   REQUIRE(records[2].at("type") == "turn");
   REQUIRE(records[2].at("tool_calls") == 1);
   REQUIRE(records[2].at("zero_tool_turn") == false);

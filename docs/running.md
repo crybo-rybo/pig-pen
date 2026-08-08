@@ -31,13 +31,13 @@ model names; the value is forwarded directly to the configured server:
 ```
 
 It prints the session settings and log path up front, streams the assistant
-text as it arrives, prints one line per tool call with the before → after
-position, and ends with a summary:
+text as it arrives, prints one line per decoded world-tool call with the before
+→ after position, and ends with a summary:
 
 ```
-session model="llama3.1:8b-instruct-q4_K_M" base_url="http://127.0.0.1:11434/v1" seed=42 turns=4 max_tool_rounds=8 max_world_tool_calls_per_turn=4 max_output_tokens=2048 temperature=0
+session model="llama3.1:8b-instruct-q4_K_M" base_url="http://127.0.0.1:11434/v1" seed=42 turns=4 max_tool_rounds=8 max_world_tool_calls_per_turn=4 max_output_tokens=8096 temperature=0
 log_path="logs/20260807-101500-123-llama3.1_8b-instruct-q4_K_M-42.jsonl"
-tool[turn=1,tick=1] look args={"direction":"north"} result={"cells":[...],"direction":"north","wall_at_distance":5} position=(5,5)->(5,5)
+tool[turn=1,tick=1] look args={"direction":"north"} result={"error":null,"result":{"cells":[...],"direction":"north","wall_at_distance":5},"turn_tool_budget":{...}} position=(5,5)->(5,5)
 assistant[turn=1]: I
 assistant[turn=1]:  scanned
 assistant[turn=1]:  north
@@ -50,10 +50,11 @@ design — pipe it to a file, or read the JSONL log instead, if you want the
 turn's text in one piece. Tool lines go to stdout; errors, timeouts, and signal
 notices go to stderr.
 
-Each request allows at most 2048 output tokens. The prompt asks the model to
-prioritize calling the registered world tools over extended thinking or
-describing intended actions. Tool results report a four-call per-turn budget;
-additional requests are logged but cannot change the world.
+Pig Pen asks the provider to limit each response to 8096 output tokens. The
+prompt asks the model to prioritize calling the registered world tools over
+extended thinking or describing intended actions. Successfully decoded tool
+results report a four-action per-turn budget; calls beyond it are logged but
+cannot change the world.
 
 ### Options
 
@@ -86,18 +87,19 @@ alters.
 
 | code | meaning |
 |---|---|
-| `0` | episode finished and the model called at least one tool |
+| `0` | episode finished with at least one successfully decoded world-tool invocation |
 | `1` | runtime error, or the episode ended in `error` / `cancelled` / `stopped` |
 | `2` | invalid command line |
 | `3` | `--timeout-seconds` elapsed |
 | `4` | the metrics log could not be written |
-| `5` | the episode completed without a single model tool call |
+| `5` | the episode completed without a successfully decoded world-tool invocation |
 | `130` / `143` | `SIGINT` / `SIGTERM` |
 
 `SIGINT` and `SIGTERM` request cooperative cancellation. The CLI keeps pumping
 until the in-flight turn's cancellation callback arrives so the JSONL footer is
-still written, then exits with the conventional status. Everything else —
-timeout, metrics failure — gives cancellation 15 seconds before giving up.
+still written, then exits with the conventional status. A timeout gives
+cancellation 15 seconds before giving up. A metrics-write failure ends the
+episode immediately with finish reason `error` and exit 4.
 
 ## GUI
 
@@ -119,12 +121,13 @@ outline. Items are drawn as coloured glyphs, the blob is the teal dot, and
 reads as a sequence rather than a teleport. Hover a cell for its coordinates,
 item, and observed state.
 
-**Transcript** — automatic instructions, human guidance, verified world-event
-actions, and model narration are labelled separately. It auto-scrolls by
-default, and a narration-only turn is called out as having no verified action.
+**Transcript** — automatic instructions, human guidance, decoded world-tool
+calls, and model narration are labelled separately. It auto-scrolls by default,
+and a turn with no decoded invocation—including an invalid-call-only turn—is
+called out explicitly.
 
-**Event Log** — every tool call as a table row (tick, turn, tool, arguments,
-result), with a text filter.
+**Event Log** — every successfully decoded world-tool invocation as a table row
+(tick, turn, tool, arguments, result), with a text filter.
 
 **Controls** —
 - *Connection*: base URL and model name.
@@ -151,10 +154,6 @@ applies immediately.
 reason, items eaten by type, per-tool call counts, and transport/animation
 queue depths.
 
-**Guidance** — optional free text. Press Enter or **Queue** and it is appended
-to the next automatic turn nudge; only the most recently queued message is
-carried, and it is consumed by the turn that picks it up.
-
 ## Ending an episode
 
 An episode finishes for one of five reasons, recorded as `finish_reason` in the
@@ -164,9 +163,9 @@ log footer:
 |---|---|
 | `turn_budget` | the turn budget was used up |
 | `objective_complete` | every positive-value item has been eaten (toadstools may remain) |
-| `stopped` | **Stop**, or a CLI signal/timeout/metrics failure |
+| `stopped` | **Stop**, or a CLI signal/timeout |
 | `cancelled` | the in-flight model turn was cancelled |
-| `error` | the transport or the model turn failed terminally; there is no retry |
+| `error` | the transport, model turn, or metrics writer failed terminally; there is no retry |
 
 Closing the window or resetting mid-episode still writes a footer — marked
 `"complete": false` with reason `abandoned` — rather than leaving a truncated

@@ -21,7 +21,7 @@
     {
       "name": "dev",
       "displayName": "Development",
-      "description": "Debug build with tests, GUI, and warnings as errors",
+      "description": "GCC 16 C++26 reflection build with tests, GUI, and warnings as errors",
       "inherits": "base",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug"
@@ -30,7 +30,7 @@
     {
       "name": "release",
       "displayName": "Release",
-      "description": "Optimized build with tests, GUI, and warnings as errors",
+      "description": "Optimized GCC 16 C++26 reflection build with tests, GUI, and warnings as errors",
       "inherits": "base",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release"
