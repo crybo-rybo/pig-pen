@@ -143,6 +143,15 @@ const nlohmann::json &ToolExecutor::eat_schema() {
 JsonResult ToolExecutor::execute(const std::size_t turn,
                                  const std::string_view tool,
                                  const nlohmann::json &arguments) {
+  if (!reserve_tool_call(turn)) {
+    return reject_exhausted_budget(turn, tool, arguments);
+  }
+  return execute_reserved(turn, tool, arguments);
+}
+
+JsonResult ToolExecutor::execute_reserved(const std::size_t turn,
+                                          const std::string_view tool,
+                                          const nlohmann::json &arguments) {
   if (tool == "move" || tool == "look") {
     return execute_directional(turn, tool, arguments);
   }
@@ -154,13 +163,21 @@ JsonResult ToolExecutor::execute(const std::size_t turn,
       .message = "unknown tool: " + std::string{tool},
   };
   const auto position = world_.position();
-  append_event(turn, tool, arguments, error_result(error), position, position);
+  static_cast<void>(append_event(turn, tool, arguments, error_result(error),
+                                 position, position));
   return std::unexpected(error);
 }
 
 JsonResult ToolExecutor::execute_serialized(const std::size_t turn,
                                             const std::string_view tool,
                                             const std::string_view arguments) {
+  if (!reserve_tool_call(turn)) {
+    auto parsed = nlohmann::json::parse(arguments, nullptr, false);
+    if (parsed.is_discarded()) {
+      parsed = {{"_raw", std::string{arguments}}};
+    }
+    return reject_exhausted_budget(turn, tool, parsed);
+  }
   const auto parsed = nlohmann::json::parse(arguments, nullptr, false);
   if (parsed.is_discarded()) {
     const ToolError error{
@@ -168,11 +185,12 @@ JsonResult ToolExecutor::execute_serialized(const std::size_t turn,
         .message = std::string{tool} + " arguments are not valid JSON",
     };
     const auto position = world_.position();
-    append_event(turn, tool, {{"_raw", std::string{arguments}}},
-                 error_result(error), position, position);
+    static_cast<void>(append_event(
+        turn, tool, {{"_raw", std::string{arguments}}}, error_result(error),
+        position, position));
     return std::unexpected(error);
   }
-  return execute(turn, tool, parsed);
+  return execute_reserved(turn, tool, parsed);
 }
 
 JsonResult ToolExecutor::execute_directional(const std::size_t turn,
@@ -181,8 +199,9 @@ JsonResult ToolExecutor::execute_directional(const std::size_t turn,
   const auto direction = validate_direction_arguments(arguments, tool);
   if (!direction) {
     const auto position = world_.position();
-    append_event(turn, tool, arguments, error_result(direction.error()),
-                 position, position);
+    static_cast<void>(append_event(turn, tool, arguments,
+                                   error_result(direction.error()), position,
+                                   position));
     return std::unexpected(direction.error());
   }
 
@@ -221,9 +240,8 @@ JsonResult ToolExecutor::execute_directional(const std::size_t turn,
     };
   }
 
-  append_event(turn, tool, arguments, result, before, world_.position(),
-               *direction);
-  return result;
+  return append_event(turn, tool, arguments, std::move(result), before,
+                      world_.position(), *direction);
 }
 
 JsonResult ToolExecutor::execute_eat(const std::size_t turn,
@@ -232,8 +250,8 @@ JsonResult ToolExecutor::execute_eat(const std::size_t turn,
     const auto error =
         invalid_arguments("eat arguments must be an empty object");
     const auto position = world_.position();
-    append_event(turn, "eat", arguments, error_result(error), position,
-                 position);
+    static_cast<void>(append_event(turn, "eat", arguments, error_result(error),
+                                   position, position));
     return std::unexpected(error);
   }
 
@@ -253,15 +271,55 @@ JsonResult ToolExecutor::execute_eat(const std::size_t turn,
     }
   }
 
-  append_event(turn, "eat", arguments, result, before, world_.position());
-  return result;
+  return append_event(turn, "eat", arguments, std::move(result), before,
+                      world_.position());
 }
 
-void ToolExecutor::append_event(
+bool ToolExecutor::reserve_tool_call(const std::size_t turn) {
+  if (!active_budget_turn_ || *active_budget_turn_ != turn) {
+    active_budget_turn_ = turn;
+    tool_calls_used_this_turn_ = 0;
+  }
+  if (tool_calls_used_this_turn_ >= max_world_tool_calls_per_turn) {
+    return false;
+  }
+  ++tool_calls_used_this_turn_;
+  return true;
+}
+
+nlohmann::json ToolExecutor::reject_exhausted_budget(
     const std::size_t turn, const std::string_view tool,
-    const nlohmann::json &arguments, const nlohmann::json &result,
+    const nlohmann::json &arguments) {
+  const auto position = world_.position();
+  return append_event(
+      turn, tool, arguments,
+      {
+          {"ok", false},
+          {"error_code", "tool_budget_exhausted"},
+          {"error", "No action was executed because this turn's world-tool "
+                    "call budget is exhausted."},
+      },
+      position, position);
+}
+
+nlohmann::json ToolExecutor::append_event(
+    const std::size_t turn, const std::string_view tool,
+    const nlohmann::json &arguments, nlohmann::json result,
     const world::Position before, const world::Position after,
     const std::optional<world::Direction> direction) {
+  const auto remaining =
+      max_world_tool_calls_per_turn - tool_calls_used_this_turn_;
+  result["turn_tool_budget"] = {
+      {"used", tool_calls_used_this_turn_},
+      {"remaining", remaining},
+      {"instruction",
+       remaining == 0
+           ? "Tool budget exhausted for this turn. Return your final summary "
+             "now without calling another tool."
+           : std::to_string(remaining) +
+                 (remaining == 1 ? " world-tool call remains in this turn."
+                                 : " world-tool calls remain in this turn.")},
+  };
   events_.push_back(WorldEvent{
       .tick = next_tick_++,
       .turn = turn,
@@ -272,6 +330,7 @@ void ToolExecutor::append_event(
       .after = after,
       .direction = direction,
   });
+  return result;
 }
 
 } // namespace pigpen::agent

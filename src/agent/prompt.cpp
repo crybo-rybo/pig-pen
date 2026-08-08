@@ -78,10 +78,13 @@ std::string build_system_prompt(const Config &config) {
       "You have at most " + std::to_string(config.turn_budget) +
       " conversation turns, with at most " +
       std::to_string(config.max_tool_rounds) +
-      " tool rounds per turn. Each conversation turn should contain between "
-      "one and four useful tool calls, followed by a short final action "
-      "summary with no more tool calls. Prioritize calling the registered "
-      "world tools over extended thinking or describing what you might do. "
+      " tool rounds per turn. Pig Pen executes at most " +
+      std::to_string(max_world_tool_calls_per_turn) +
+      " world-tool calls per conversation turn, and every tool result reports "
+      "the remaining call budget. Each conversation turn should contain one "
+      "or more useful tool calls, followed by a short final action summary "
+      "with no more tool calls. Prioritize calling the registered world tools "
+      "over extended thinking or describing what you might do. "
       "Do not try to finish the whole episode or consume every allowed tool "
       "round at once; another Continue message will arrive. Do not provide "
       "hidden chain-of-thought. Stop when all positive-value items are gone "
@@ -95,7 +98,9 @@ std::string build_turn_prompt(const std::size_t turn,
                               const bool recover_zero_tool_turn) {
   std::string prompt =
       "Automatic turn instructions:\n"
-      "Continue exploring autonomously. Use one to four world-tool calls now, "
+      "Continue exploring autonomously. Use up to " +
+      std::to_string(max_world_tool_calls_per_turn) +
+      " world-tool calls now, "
       "then finish this turn with a brief action summary and no further tool "
       "call. Remember: move never eats an item; call eat explicitly to "
       "consume an item_here. Turn " +

@@ -42,6 +42,18 @@ libraries, so a seed means the same pen on every supported compiler.
 
 The model gets exactly three tools. Schemas set `additionalProperties: false`,
 so extra arguments are a hard validation error rather than being ignored.
+Pig Pen executes at most four world-tool calls per conversation turn. Every
+model-visible result includes a common `turn_tool_budget` object in addition to
+the tool-specific fields shown below:
+
+```json
+{"turn_tool_budget":
+  {"used": 3, "remaining": 1,
+   "instruction": "1 world-tool call remains in this turn."}}
+```
+
+The fourth result tells the model to return its final summary. Further calls
+are logged but do not change the world; they return `tool_budget_exhausted`.
 
 ### `look(direction)`
 
@@ -93,7 +105,8 @@ cell and applies its reward to the score.
 ### Tool errors
 
 Malformed calls come back as a structured result with an `error_code` of
-`unknown_tool`, `malformed_json`, or `invalid_arguments`:
+`unknown_tool`, `malformed_json`, or `invalid_arguments`. A valid call beyond
+the per-turn action limit returns `tool_budget_exhausted`:
 
 ```json
 {"ok": false, "error": "eat arguments must be an empty object",
