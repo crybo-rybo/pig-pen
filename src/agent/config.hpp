@@ -17,7 +17,7 @@ struct Config {
   std::uint64_t seed{};
   std::size_t turn_budget{20};
   std::uint32_t max_tool_rounds{8};
-  std::uint32_t max_output_tokens{2'048};
+  std::uint32_t max_output_tokens{8'096};
   double temperature{0.0};
 
   /// Include the item/reward table in the system prompt.
