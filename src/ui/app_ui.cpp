@@ -185,19 +185,33 @@ void draw_item(ImDrawList &draw_list, const world::ItemType item,
   return {1.0F, 1.0F, 1.0F, 1.0F};
 }
 
-[[nodiscard]] std::string
-verified_action_label(const agent::WorldEvent &event) {
+[[nodiscard]] std::string decoded_call_label(const agent::WorldEvent &event) {
   auto label = event.tool;
   if (event.arguments.contains("direction") &&
       event.arguments.at("direction").is_string()) {
     label += " " + event.arguments.at("direction").get<std::string>();
   }
-  if (event.result.contains("ok") && event.result.at("ok").is_boolean() &&
-      !event.result.at("ok").get<bool>()) {
+  const auto *payload =
+      event.result.contains("result") && event.result.at("result").is_object()
+          ? &event.result.at("result")
+          : nullptr;
+  const auto world_failure = payload != nullptr && payload->contains("ok") &&
+                             payload->at("ok").is_boolean() &&
+                             !payload->at("ok").get<bool>();
+  if (!event.action_executed || world_failure) {
     label += " (failed";
-    if (event.result.contains("reason") &&
-        event.result.at("reason").is_string()) {
-      label += ": " + event.result.at("reason").get<std::string>();
+    std::optional<std::string> reason;
+    if (!event.action_executed && event.result.contains("error") &&
+        event.result.at("error").is_object() &&
+        event.result.at("error").contains("code") &&
+        event.result.at("error").at("code").is_string()) {
+      reason = event.result.at("error").at("code").get<std::string>();
+    } else if (world_failure && payload->contains("reason") &&
+               payload->at("reason").is_string()) {
+      reason = payload->at("reason").get<std::string>();
+    }
+    if (reason) {
+      label += ": " + *reason;
     }
     label += ")";
   }
@@ -537,11 +551,11 @@ void AppUi::draw_world_panel() {
               simulation.score(), simulation.position().x,
               simulation.position().y, animation_.queued_action_count());
   if (session_->events().empty()) {
-    ImGui::TextDisabled("Last executed: none");
+    ImGui::TextDisabled("Last decoded call: none");
   } else {
-    const auto last_action = verified_action_label(session_->events().back());
-    ImGui::TextColored({0.95F, 0.78F, 0.32F, 1.0F}, "Last executed: %s",
-                       last_action.c_str());
+    const auto last_call = decoded_call_label(session_->events().back());
+    ImGui::TextColored({0.95F, 0.78F, 0.32F, 1.0F}, "Last decoded call: %s",
+                       last_call.c_str());
   }
   if (const auto item = simulation.item_at(simulation.position())) {
     ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(item_color(*item)),
@@ -560,7 +574,7 @@ void AppUi::draw_transcript_panel() {
   }
   ImGui::Checkbox("Auto-scroll", &transcript_auto_scroll_);
   ImGui::SameLine();
-  ImGui::TextDisabled("Verified actions are sourced from world events");
+  ImGui::TextDisabled("Decoded world-tool calls are sourced from world events");
   ImGui::Separator();
 
   if (!session_) {
@@ -588,13 +602,13 @@ void AppUi::draw_transcript_panel() {
     ImGui::PushID(static_cast<int>(index));
     if (entry.role == agent::TranscriptRole::assistant) {
       ImGui::TextColored({0.95F, 0.78F, 0.32F, 1.0F},
-                         "Turn %u · Verified actions", entry.turn);
-      auto verified_actions = 0U;
+                         "Turn %u · Decoded world-tool calls", entry.turn);
+      auto decoded_calls = 0U;
       for (const auto &event : events) {
         if (event.turn != entry.turn) {
           continue;
         }
-        ++verified_actions;
+        ++decoded_calls;
         const auto arguments = compact(event.arguments, 72U);
         const auto result = compact(event.result, 110U);
         ImGui::TextColored({0.95F, 0.78F, 0.32F, 1.0F}, "  %s",
@@ -602,13 +616,13 @@ void AppUi::draw_transcript_panel() {
         ImGui::SameLine();
         ImGui::TextDisabled("%s -> %s", arguments.c_str(), result.c_str());
       }
-      if (verified_actions == 0U) {
+      if (decoded_calls == 0U) {
         const auto active_turn = snapshot.turns_used + 1U;
         if (snapshot.turn_in_flight && entry.turn == active_turn) {
-          ImGui::TextDisabled("  No verified actions yet");
+          ImGui::TextDisabled("  No decoded world-tool calls yet");
         } else {
           ImGui::TextColored({1.0F, 0.52F, 0.32F, 1.0F},
-                             "  No verified actions executed");
+                             "  No decoded world-tool calls");
         }
       }
       ImGui::TextColored(role_color(entry.role), "Model narration");
@@ -646,7 +660,8 @@ void AppUi::draw_event_log_panel() {
   ImGui::InputTextWithHint("##event-filter", "Filter tool, args, result...",
                            event_filter_.data(), event_filter_.size());
   ImGui::SameLine();
-  ImGui::TextDisabled("%zu calls", session_ ? session_->events().size() : 0U);
+  ImGui::TextDisabled("%zu decoded calls",
+                      session_ ? session_->events().size() : 0U);
 
   if (!session_) {
     ImGui::TextDisabled("No tool events yet.");
@@ -687,9 +702,14 @@ void AppUi::draw_event_log_panel() {
         ImGui::SetTooltip("%s", arguments_full.c_str());
       }
       ImGui::TableSetColumnIndex(4);
-      const auto failed = event.result.contains("ok") &&
-                          event.result.at("ok").is_boolean() &&
-                          !event.result.at("ok").get<bool>();
+      const auto *payload = event.result.contains("result") &&
+                                    event.result.at("result").is_object()
+                                ? &event.result.at("result")
+                                : nullptr;
+      const auto failed =
+          !event.action_executed ||
+          (payload != nullptr && payload->contains("ok") &&
+           payload->at("ok").is_boolean() && !payload->at("ok").get<bool>());
       if (failed) {
         ImGui::TextColored({1.0F, 0.58F, 0.35F, 1.0F}, "%s",
                            result_short.c_str());
@@ -852,7 +872,7 @@ void AppUi::draw_stats_panel() {
       ++looks;
     } else if (event.tool == "eat") {
       ++eat_attempts;
-      if (event.result.value("ok", false)) {
+      if (event.eaten) {
         ++successful_eats;
       } else {
         ++failed_eats;
@@ -877,7 +897,7 @@ void AppUi::draw_stats_panel() {
         std::pair{"move", moves},
         std::pair{"look", looks},
         std::pair{"eat attempts", eat_attempts},
-        std::pair{"all calls", session_->tool_call_count()},
+        std::pair{"decoded calls", session_->tool_call_count()},
     };
     for (std::size_t index = 0; index < item_types.size(); ++index) {
       ImGui::TableNextRow();

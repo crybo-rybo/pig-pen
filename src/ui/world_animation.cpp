@@ -114,6 +114,9 @@ std::size_t WorldAnimationState::queued_action_count() const noexcept {
 }
 
 void WorldAnimationState::enqueue(const agent::WorldEvent &event) {
+  if (!event.action_executed) {
+    return;
+  }
   if (event.tool == "move") {
     if (!same_position(event.before, event.after)) {
       pending_.push_back({

@@ -2,17 +2,20 @@
 
 #include "agent/metrics_writer.hpp"
 #include "agent/prompt.hpp"
+#include "agent/reflected_json.hpp"
 #include "agent/scry_transport.hpp"
-#include "agent/tool_executor.hpp"
+#include "agent/world_tools.hpp"
 
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <functional>
 #include <memory>
-#include <nlohmann/json.hpp>
 #include <optional>
+#include <scry/reflection.hpp>
 #include <scry/scry.hpp>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 
 namespace pigpen::agent {
@@ -21,16 +24,6 @@ namespace {
 [[nodiscard]] std::string environment(const char *name) {
   const auto *value = std::getenv(name);
   return value == nullptr ? std::string{} : std::string{value};
-}
-
-[[nodiscard]] scry::ToolDefinition
-tool_definition(std::string name, std::string description,
-                const nlohmann::json &schema) {
-  return {
-      .name = std::move(name),
-      .description = std::move(description),
-      .input_schema = {.text = schema.dump()},
-  };
 }
 
 [[nodiscard]] scry::Result<scry::Harness> create_harness(const Config &config) {
@@ -64,7 +57,7 @@ public:
         metrics(std::move(initial_metrics)),
         harness(std::move(initial_harness)),
         conversation(std::move(initial_conversation)),
-        tools(*world, events, this->config),
+        tools(*world, this->config),
         transport(this->harness, this->conversation),
         runner(
             transport, static_cast<std::uint32_t>(this->config.turn_budget),
@@ -95,10 +88,12 @@ public:
   std::unique_ptr<MetricsWriter> metrics;
   scry::Harness harness;
   scry::Conversation conversation;
-  ToolExecutor tools;
+  WorldTools tools;
   ScryTurnTransport transport;
   EpisodeRunner runner;
+  std::uint64_t next_tool_tick{1};
   std::string metrics_error{};
+  bool metrics_failure_pending{};
 };
 
 std::expected<std::shared_ptr<Session>, std::string>
@@ -160,12 +155,15 @@ Session::~Session() = default;
 
 std::expected<void, std::string> Session::register_tools() {
   const std::weak_ptr<Session> weak_session{shared_from_this()};
-  const auto add = [this, &weak_session](scry::ToolDefinition definition,
-                                         std::string name) {
-    return impl_->harness.tools().add(
-        std::move(definition),
-        [weak_session, name = std::move(name)](
-            scry::Json arguments) -> scry::Result<scry::Json> {
+  const auto add = [this, weak_session]<typename Arguments, typename Invoke>(
+                       scry::reflection::ToolMetadata metadata, Invoke invoke) {
+    using Execution = std::invoke_result_t<Invoke &, WorldTools &, Arguments>;
+    using Response = typename Execution::response_type;
+    auto name = metadata.name;
+    return scry::reflection::add<Arguments>(
+        impl_->harness.tools(), std::move(metadata),
+        [weak_session, name = std::move(name), invoke = std::move(invoke)](
+            Arguments arguments) mutable -> scry::Result<Response> {
           const auto session = weak_session.lock();
           if (!session) {
             return std::unexpected(scry::Error{
@@ -175,55 +173,58 @@ std::expected<void, std::string> Session::register_tools() {
           }
           const auto snapshot = session->impl_->runner.snapshot();
           const auto turn = snapshot.turns_used + 1U;
-          const auto event_index = session->impl_->events.size();
-          auto executed = session->impl_->tools.execute_serialized(
-              turn, name, arguments.text);
-          if (session->impl_->events.size() != event_index + 1U) {
-            return std::unexpected(scry::Error{
-                .category = scry::ErrorCategory::invalid_state,
-                .message = "tool execution did not append exactly one event",
-            });
-          }
-          const auto &event = session->impl_->events[event_index];
+          auto arguments_json = reflected_json(arguments);
+          session->impl_->tools.begin_turn(turn);
+          auto execution =
+              std::invoke(invoke, session->impl_->tools, std::move(arguments));
+          auto response_json = reflected_json(execution.response);
+          session->impl_->events.push_back(WorldEvent{
+              .tick = session->impl_->next_tool_tick++,
+              .turn = turn,
+              .tool = name,
+              .arguments = std::move(arguments_json),
+              .result = std::move(response_json),
+              .before = execution.before,
+              .after = execution.after,
+              .direction = execution.direction,
+              .action_executed = execution.action_executed,
+              .eaten = execution.eaten,
+          });
+          const auto &event = session->impl_->events.back();
           if (auto recorded = session->impl_->metrics->record_tool(
                   event, session->impl_->world->score());
               !recorded) {
-            session->impl_->metrics_error = recorded.error();
-            return std::unexpected(scry::Error{
-                .category = scry::ErrorCategory::tool,
-                .message = std::move(recorded.error()),
-            });
+            session->impl_->metrics_error = std::move(recorded.error());
+            session->impl_->metrics_failure_pending = true;
           }
-          if (!executed) {
-            return std::unexpected(scry::Error{
-                .category = scry::ErrorCategory::tool,
-                .message = std::move(executed.error().message),
-            });
-          }
-          return scry::Json{.text = executed->dump()};
+          return std::move(execution.response);
         });
   };
 
-  if (auto status = add(
-          tool_definition("move", "Move one cell north, south, east, or west.",
-                          ToolExecutor::move_schema()),
-          "move");
+  if (auto status = add.template operator()<DirectionArguments>(
+          {
+              .name = "move",
+              .description = "Move one cell north, south, east, or west.",
+          },
+          &WorldTools::move);
       !status) {
     return std::unexpected(status.error().message);
   }
-  if (auto status =
-          add(tool_definition("look",
-                              "Scan every cell in one direction to the wall.",
-                              ToolExecutor::look_schema()),
-              "look");
+  if (auto status = add.template operator()<DirectionArguments>(
+          {
+              .name = "look",
+              .description = "Scan every cell in one direction to the wall.",
+          },
+          &WorldTools::look);
       !status) {
     return std::unexpected(status.error().message);
   }
-  if (auto status =
-          add(tool_definition("eat",
-                              "Eat the item on the current cell, if present.",
-                              ToolExecutor::eat_schema()),
-              "eat");
+  if (auto status = add.template operator()<EatArguments>(
+          {
+              .name = "eat",
+              .description = "Eat the item on the current cell, if present.",
+          },
+          &WorldTools::eat);
       !status) {
     return std::unexpected(status.error().message);
   }
@@ -235,7 +236,14 @@ PumpStats Session::pump() {
       .time_budget = std::chrono::milliseconds{2},
       .max_callbacks = 32,
   });
-  impl_->runner.tick();
+  if (std::exchange(impl_->metrics_failure_pending, false)) {
+    // The world action and its typed response have already committed. Fail the
+    // episode only after Harness::update returns so the model receives that
+    // truthful response and cancellation is not re-entrant through dispatch.
+    static_cast<void>(impl_->runner.fail(impl_->metrics_error));
+  } else {
+    impl_->runner.tick();
+  }
   return {
       .callbacks_delivered = stats.callbacks_delivered,
       .events_remaining = stats.events_remaining,

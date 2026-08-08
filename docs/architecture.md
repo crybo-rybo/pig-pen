@@ -1,8 +1,8 @@
 # Architecture
 
-About 3,900 lines of C++23 under `src/` in three layers, plus two thin `main`s
-and roughly 1,200 lines of tests. The point of the layering is that everything
-except the last layer is testable without a window or a model server.
+Pig Pen is a C++26 application in three layers plus two thin entry points. The
+point of the layering is that everything except the final transport integration
+is testable without a window or a model server.
 
 ```
 src/app/main.cpp              src/app/headless_main.cpp
@@ -12,7 +12,8 @@ src/app/main.cpp              src/app/headless_main.cpp
    AppUi, WorldAnimation          │
                                   ├── EpisodeRunner   turn loop, play/pause/stop
                                   ├── ScryTurnTransport ──► scry::Harness ──► HTTP
-                                  ├── ToolExecutor    schemas, validation, events
+                                  ├── WorldTools      typed actions and budgets
+                                  ├── Scry reflection schemas and marshalling
                                   ├── MetricsWriter   JSONL
                                   └── world::World    the simulation
 ```
@@ -31,7 +32,9 @@ serialisation used for determinism tests. Details in [World and tools](world.md)
 |---|---|
 | `config.hpp` | `Config`: endpoint, model, seed, budgets, and the three model-visibility flags shared by both front ends |
 | `prompt.cpp` | builds the system prompt and the per-turn nudge from a `Config` |
-| `tool_executor.cpp` | the model-facing boundary: publishes the three JSON schemas, validates arguments exactly, applies the action, shapes the visible result, and appends one `WorldEvent` per invocation — including rejected ones |
+| `tool_contract.hpp` | reflected argument, result, error-envelope, and budget declarations; these C++ types are the model-facing contract |
+| `world_tools.cpp` | typed world actions and the explicit per-turn action-budget lifecycle; it contains no JSON parsing or schema code |
+| `reflected_json.hpp` | P2996-based projection of supported values into nlohmann JSON for application observability only |
 | `events.hpp` | `WorldEvent` and the append-only `EventFeed` that the UI, animation, and logger all read |
 | `turn_transport.hpp` | `ITurnTransport`, the interface a "send one turn, get callbacks" implementation must satisfy |
 | `scry_transport.cpp` | the real implementation, over `scry::Harness` / `scry::Conversation` |
@@ -42,8 +45,23 @@ serialisation used for determinism tests. Details in [World and tools](world.md)
 Two seams make this testable. `ITurnTransport` lets `EpisodeRunner` be driven
 by a scripted transport in `tests/episode_runner_tests.cpp`, so the whole turn
 loop — including stop-cancels-in-flight-turn — is covered without a model.
-`ToolExecutor` holds no world state and speaks only JSON in and JSON out, so
-the exact model-visible contract is asserted directly.
+`WorldTools` accepts and returns only reflected C++ values, so world behavior,
+fixed response shapes, and budgets are tested without JSON or a registry.
+
+### Reflection is the tool boundary
+
+`Session` registers `DirectionArguments` and `EatArguments` through
+`scry::reflection::add`. Scry derives closed JSON Schemas at compile time,
+strictly decodes incoming arguments, invokes the typed handler on the pump
+thread, and encodes its typed response. Scoped enum identifiers are the JSON
+strings, so adding or renaming a direction changes schema, decode, and encode
+from the same declaration.
+
+Protocol failures belong to Scry: unknown tools and calls that cannot be
+decoded never enter `WorldTools`. Pig Pen's event feed therefore represents
+successfully decoded world-tool handler invocations. A handler invocation may
+still have `action_executed == false` when the four-call application budget is
+already exhausted.
 
 ### `Session` is the reset unit
 
@@ -90,11 +108,14 @@ transcript and event feed, and the exit-code policy described in
 
 ## Build layout
 
-`CMakeLists.txt` builds `pigpen_world` and `pigpen_agent` as static libraries,
-then three executables on top. Source files are globbed with
-`CONFIGURE_DEPENDS`, and the target definitions guard on file existence so the
-project stays configurable while a module is being added. Warnings
-(`-Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror`) apply through the
-`pigpen_project_options` interface target to pig-pen's own code only; fetched
-dependencies are added as `SYSTEM` with their tests and examples turned off.
+`CMakeLists.txt` requires GCC 16+, C++26, and Scry's reflection capability
+probe. It builds `pigpen_world`, `pigpen_reflected_tools`, and `pigpen_agent`
+as focused static libraries, then the GUI, headless program, and test executable
+from explicit source lists. Reflection compiler requirements stay scoped to the
+agent/tool boundary instead of leaking into fetched dependencies or front-end
+translation units.
+Warnings (`-Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror`) apply
+through the `pigpen_project_options` interface target to pig-pen's own code
+only; fetched dependencies are added as `SYSTEM` with their tests and examples
+turned off.
 See [Building](building.md).

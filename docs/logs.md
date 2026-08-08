@@ -22,7 +22,7 @@ Written when the session is created, before the model is contacted.
 
 ```json
 {"type":"header","model":"acme/pig-model:Q4_K_M","base_url":"http://127.0.0.1:11434/v1",
- "temperature":0.2,"max_output_tokens":2048,"seed":42,"started_at":"2026-08-07T06:45:12-0400","prompt_variant":"default",
+ "temperature":0.2,"max_output_tokens":8096,"seed":42,"started_at":"2026-08-07T06:45:12-0400","prompt_variant":"default",
  "scenario":{"grid":{"width":10,"height":10},"spawn":{"x":5,"y":5},
    "items":{"berry":6,"apple":3,"truffle":1,"toadstool":3},
    "turn_budget":2,"max_tool_rounds":8,"max_world_tool_calls_per_turn":4,
@@ -32,27 +32,31 @@ Written when the session is created, before the model is contacted.
 `prompt_variant` is whatever you passed to `--prompt-variant`, or the GUI
 preset name. `temperature` records model sampling separately from the
 deterministic world `seed`, and `max_output_tokens` records the per-request
-generation ceiling. `max_world_tool_calls_per_turn` records the hard action cap
-enforced by Pig Pen. Everything needed to describe the run is in this line,
-although model sampling is not guaranteed to be reproducible.
+limit Pig Pen asks the provider to apply. `max_world_tool_calls_per_turn`
+records the hard action cap enforced by Pig Pen. Everything needed to describe
+the run is in this line, although model sampling is not guaranteed to be
+reproducible.
 
 ## `tool`
 
-One line per attempted tool call, including calls rejected by schema
-validation.
+One line per successfully decoded reflected world-tool invocation. Calls Scry
+rejects during protocol or schema validation do not enter Pig Pen's world
+layer and therefore do not produce a `tool` record.
 
 ```json
 {"type":"tool","turn":1,"tick":2,"tool":"look",
  "args":{"direction":"south"},
- "result":{"direction":"south","cells":[{"distance":1,"item":"berry"}],"wall_at_distance":6},
- "before":{"x":5,"y":5},"after":{"x":5,"y":5},"score_after":0}
+ "result":{"error":null,"result":{"cells":[{"distance":1,"item":"berry"}],"direction":"south","wall_at_distance":6},"turn_tool_budget":{"used":2,"remaining":2,"instruction":"2 world-tool calls remain in this turn."}},
+ "before":{"x":5,"y":5},"after":{"x":5,"y":5},"action_executed":true,"score_after":0}
 ```
 
 `tick` is a monotonic counter across the whole episode. `before`/`after` are
 the blob's position either side of the call — identical for `look`, `eat`, a
-wall-blocked `move`, and any rejected call. `result` is exactly the JSON the
-model received, so a log made with `--opaque-look` shows `"something"` here
-too.
+wall-blocked `move`, and a call rejected by Pig Pen's action budget.
+`action_executed` distinguishes that budget rejection from an executed world
+operation. `result` is projected from the same reflected response object Scry
+encodes for the model, so a log made with `--opaque-look` shows `"something"`
+here too.
 
 ## `turn`
 
@@ -67,9 +71,10 @@ One line per conversation turn, flushed as it completes.
 ```
 
 `status` is `completed`, `cancelled`, or `error`. `tool_calls` is counted from
-verified world events for this turn and `zero_tool_turn` makes narration-only
-turns easy to query. Token counts come from the provider; `latency_ms` is
-measured locally around the turn.
+successfully decoded reflected handler invocations for this turn and
+`zero_tool_turn` makes narration-only or invalid-call-only turns easy to query.
+Token counts come from the provider; `latency_ms` is measured locally around
+the turn.
 
 ## `footer`
 
@@ -89,24 +94,24 @@ it, and it cannot be written twice.
 
 ## Reading a log
 
-Header, footer, and every tool call at a glance:
+Header, footer, and every decoded world-tool call at a glance:
 
 ```sh
 jq -s '{header: first, footer: last, tools: [.[] | select(.type == "tool")]}' \
   logs/<run>.jsonl
 ```
 
-Just the action trace:
+Just the decoded-call trace (including budget rejections):
 
 ```sh
 jq -r 'select(.type=="tool")
   | "\(.tick) \(.tool) \(.args) -> \(.result | tostring[0:80])"' logs/<run>.jsonl
 ```
 
-Calls the schema rejected — a good first stop when a model scores nothing:
+Calls rejected by Pig Pen's per-turn action budget:
 
 ```sh
-jq -c 'select(.type=="tool" and .result.error_code)' logs/<run>.jsonl
+jq -c 'select(.type=="tool" and (.action_executed | not))' logs/<run>.jsonl
 ```
 
 Compare the outcome of several runs:

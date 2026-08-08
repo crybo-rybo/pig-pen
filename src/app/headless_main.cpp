@@ -97,7 +97,7 @@ void print_usage(std::ostream &output, const std::string_view program) {
          "API key.\n\n"
       << "Exit codes: 0 success, 1 runtime error, 2 invalid options, 3 "
          "timeout,\n"
-      << "            4 metrics error, 5 model made no tool calls, 130 "
+      << "            4 metrics error, 5 no decoded world-tool calls, 130 "
          "SIGINT,\n"
       << "            143 SIGTERM. Signals request graceful cancellation and "
          "log finalization.\n";
@@ -407,7 +407,6 @@ void print_updates(const pigpen::agent::Session &session,
   const auto started = std::chrono::steady_clock::now();
   std::optional<std::chrono::steady_clock::time_point> stop_started;
   bool timed_out = false;
-  bool stopped_for_metrics = false;
   bool cancellation_stalled = false;
   int termination_signal = 0;
 
@@ -433,13 +432,6 @@ void print_updates(const pigpen::agent::Session &session,
     }
 
     const auto now = std::chrono::steady_clock::now();
-    if (!stopped_for_metrics && !session->metrics_error().empty()) {
-      stopped_for_metrics = true;
-      stop_started = now;
-      std::cerr << "metrics error: " << session->metrics_error()
-                << "; stopping episode\n";
-      static_cast<void>(session->stop());
-    }
     if (!timed_out && now - started >= options.timeout) {
       timed_out = true;
       if (!stop_started) {
@@ -503,7 +495,8 @@ void print_updates(const pigpen::agent::Session &session,
     return runtime_error_exit;
   }
   if (session->tool_call_count() == 0) {
-    std::cerr << "validation error: model completed without calling a tool\n";
+    std::cerr << "validation error: model completed without a successfully "
+                 "decoded world-tool invocation\n";
     return no_tools_exit;
   }
   return 0;

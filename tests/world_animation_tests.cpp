@@ -15,10 +15,10 @@ move_event(const std::uint64_t tick, const pigpen::world::Position before,
       .turn = 1,
       .tool = "move",
       .arguments = {{"direction", "east"}},
-      .result = {{"ok", true}},
       .before = before,
       .after = after,
       .direction = pigpen::world::Direction::east,
+      .action_executed = true,
   };
 }
 
@@ -60,19 +60,19 @@ TEST_CASE("look and eat events become ordered transient effects") {
           .turn = 1,
           .tool = "look",
           .arguments = {{"direction", "north"}},
-          .result = {{"direction", "north"}},
           .before = {.x = 5, .y = 5},
           .after = {.x = 5, .y = 5},
           .direction = pigpen::world::Direction::north,
+          .action_executed = true,
       },
       {
           .tick = 2,
           .turn = 1,
           .tool = "eat",
           .arguments = nlohmann::json::object(),
-          .result = {{"ok", false}},
           .before = {.x = 5, .y = 5},
           .after = {.x = 5, .y = 5},
+          .action_executed = true,
       },
   };
 
@@ -105,4 +105,25 @@ TEST_CASE("animation speed changes move duration") {
   animation.update(events, {.x = 2, .y = 1}, 3.075);
   CHECK(animation.queued_action_count() == 0);
   CHECK(animation.blob_position().x == Catch::Approx(2.0F));
+}
+
+TEST_CASE("application-budget rejections do not animate as world actions") {
+  pigpen::ui::WorldAnimationState animation;
+  animation.reset({.x = 5, .y = 5});
+  const pigpen::agent::EventFeed events{{
+      .tick = 1,
+      .turn = 1,
+      .tool = "look",
+      .arguments = {{"direction", "north"}},
+      .before = {.x = 5, .y = 5},
+      .after = {.x = 5, .y = 5},
+      .direction = pigpen::world::Direction::north,
+      .action_executed = false,
+  }};
+
+  animation.update(events, {.x = 5, .y = 5}, 4.0);
+  CHECK(animation.queued_action_count() == 0);
+  CHECK_FALSE(animation.active_effect());
+  CHECK(animation.blob_position().x == Catch::Approx(5.0F));
+  CHECK(animation.blob_position().y == Catch::Approx(5.0F));
 }

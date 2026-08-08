@@ -9,15 +9,13 @@ project(
 
 include(FetchContent)
 
-# Pin the language level for every target in the build graph, dependencies
-# included. Fetched projects that only request a floor (Catch2 asks for
-# cxx_std_14) otherwise compile at the compiler default, which is gnu++17 for
-# GCC but gnu++14 for AppleClang. That split silently drops the C++17 halves of
-# their ABI -- Catch2's StringMaker<std::string_view> among them -- and the link
-# fails on macOS only.
-set(CMAKE_CXX_STANDARD 23)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
+# C++26 reflection is Pig Pen's model-facing type system, not an optional
+# enhancement. Scry's supported P2996/P3394 implementation currently requires
+# GCC 16 or newer and its explicit -freflection gate.
+if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR
+   CMAKE_CXX_COMPILER_VERSION VERSION_LESS 16)
+  message(FATAL_ERROR "Pig Pen requires GCC 16 or newer with C++26 reflection")
+endif()
 
 option(PIGPEN_BUILD_GUI "Build the Dear ImGui application" ON)
 option(PIGPEN_BUILD_TESTS "Build pig-pen's test suite" ON)
@@ -30,25 +28,29 @@ set(
 )
 
 add_library(pigpen_project_options INTERFACE)
-target_compile_features(pigpen_project_options INTERFACE cxx_std_23)
 target_compile_options(
   pigpen_project_options
   INTERFACE
-    "$<$<COMPILE_LANG_AND_ID:CXX,AppleClang,Clang,GNU>:-Wall;-Wextra;-Wpedantic;-Wconversion;-Wshadow>"
-    # Catch2's registration macros expand __COUNTER__. Clang 22 classifies that
-    # long-standing extension under -Wpedantic, so retain the strict warning
-    # set while allowing the framework's macro implementation.
-    "$<$<COMPILE_LANG_AND_ID:CXX,Clang>:-Wno-c2y-extensions>"
-    "$<$<CXX_COMPILER_ID:MSVC>:/W4;/permissive->"
+    -Wall
+    -Wextra
+    -Wpedantic
+    -Wconversion
+    -Wshadow
 )
 if(PIGPEN_WARNINGS_AS_ERRORS)
-  target_compile_options(
-    pigpen_project_options
-    INTERFACE
-      "$<$<COMPILE_LANG_AND_ID:CXX,AppleClang,Clang,GNU>:-Werror>"
-      "$<$<CXX_COMPILER_ID:MSVC>:/WX>"
-  )
+  target_compile_options(pigpen_project_options INTERFACE -Werror)
 endif()
+
+function(pigpen_configure_target target)
+  target_link_libraries(${target} PRIVATE pigpen_project_options)
+  set_target_properties(
+    ${target}
+    PROPERTIES
+      CXX_STANDARD 26
+      CXX_STANDARD_REQUIRED ON
+      CXX_EXTENSIONS OFF
+  )
+endfunction()
 
 # Keep all upstream projects out of the default test/example graph. Warnings are
 # still enabled for pig-pen through pigpen_project_options, but are not imposed
@@ -58,7 +60,7 @@ set(SCRY_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(SCRY_ENABLE_FORMAT_CHECK OFF CACHE BOOL "" FORCE)
 set(SCRY_ENABLE_CLANG_TIDY OFF CACHE BOOL "" FORCE)
 set(SCRY_WARNINGS_AS_ERRORS OFF CACHE BOOL "" FORCE)
-set(SCRY_ENABLE_REFLECTION OFF CACHE BOOL "" FORCE)
+set(SCRY_ENABLE_REFLECTION ON CACHE BOOL "" FORCE)
 set(SCRY_BUILD_FUZZERS OFF CACHE BOOL "" FORCE)
 set(SCRY_BUILD_IMGUI_SHOWCASE OFF CACHE BOOL "" FORCE)
 set(SCRY_BUILD_LOCAL_MODEL_SMOKE OFF CACHE BOOL "" FORCE)
@@ -107,86 +109,60 @@ FetchContent_Declare(
 
 FetchContent_MakeAvailable(scry nlohmann_json)
 
-set(PIGPEN_WORLD_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/src/world/world.cpp")
-if(EXISTS "${PIGPEN_WORLD_SOURCE}")
-  add_library(pigpen_world STATIC "${PIGPEN_WORLD_SOURCE}")
-  target_link_libraries(pigpen_world PRIVATE pigpen_project_options)
-  target_include_directories(
-    pigpen_world
-    PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>"
-  )
-  set_target_properties(
-    pigpen_world
-    PROPERTIES CXX_EXTENSIONS OFF CXX_STANDARD_REQUIRED ON
-  )
-else()
-  # This branch keeps configure usable while the test-driven source skeleton is
-  # being added. Reconfiguring after world.cpp appears creates the real library.
-  add_library(pigpen_world INTERFACE)
-  target_link_libraries(pigpen_world INTERFACE pigpen_project_options)
-  target_include_directories(
-    pigpen_world
-    INTERFACE "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>"
-  )
+if(NOT TARGET scry::reflection)
+  message(FATAL_ERROR "The selected Scry source does not provide scry::reflection")
 endif()
 
-file(
-  GLOB PIGPEN_AGENT_SOURCES
-  CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/agent/*.cpp"
+add_library(pigpen_world STATIC src/world/world.cpp)
+pigpen_configure_target(pigpen_world)
+target_compile_features(pigpen_world PUBLIC cxx_std_26)
+target_include_directories(
+  pigpen_world
+  PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>"
 )
-if(PIGPEN_AGENT_SOURCES)
-  add_library(pigpen_agent STATIC ${PIGPEN_AGENT_SOURCES})
-  target_link_libraries(
-    pigpen_agent
-    PUBLIC
-      pigpen_world
-      nlohmann_json::nlohmann_json
-      scry::scry
-    PRIVATE pigpen_project_options
-  )
-  target_include_directories(
-    pigpen_agent
-    PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>"
-  )
-  set_target_properties(
-    pigpen_agent
-    PROPERTIES CXX_EXTENSIONS OFF CXX_STANDARD_REQUIRED ON
-  )
-else()
-  add_library(pigpen_agent INTERFACE)
-  target_link_libraries(
-    pigpen_agent
-    INTERFACE
-      pigpen_world
-      nlohmann_json::nlohmann_json
-      scry::scry
-  )
-  target_include_directories(
-    pigpen_agent
-    INTERFACE "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>"
-  )
-endif()
 
-set(PIGPEN_HEADLESS_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/src/app/headless_main.cpp")
-if(EXISTS "${PIGPEN_HEADLESS_SOURCE}")
-  add_executable(pig-pen-headless "${PIGPEN_HEADLESS_SOURCE}")
-  target_link_libraries(
-    pig-pen-headless
-    PRIVATE pigpen_agent pigpen_project_options
-  )
-  set_target_properties(
-    pig-pen-headless
-    PROPERTIES CXX_EXTENSIONS OFF CXX_STANDARD_REQUIRED ON
-  )
-else()
-  add_custom_target(
-    pig-pen-headless
-    COMMAND
-      "${CMAKE_COMMAND}" -E echo
-      "pig-pen-headless will be compiled after src/app/headless_main.cpp is added"
-    VERBATIM
-  )
-endif()
+add_library(pigpen_reflected_tools STATIC src/agent/world_tools.cpp)
+target_compile_features(pigpen_reflected_tools PUBLIC cxx_std_26)
+target_link_libraries(
+  pigpen_reflected_tools
+  PUBLIC
+    nlohmann_json::nlohmann_json
+    pigpen_world
+    scry::reflection
+)
+pigpen_configure_target(pigpen_reflected_tools)
+target_include_directories(
+  pigpen_reflected_tools
+  PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>"
+)
+
+add_library(
+  pigpen_agent STATIC
+    src/agent/episode_runner.cpp
+    src/agent/metrics_writer.cpp
+    src/agent/prompt.cpp
+    src/agent/scry_transport.cpp
+    src/agent/session.cpp
+)
+target_compile_features(pigpen_agent PUBLIC cxx_std_26)
+target_link_libraries(
+  pigpen_agent
+  PUBLIC
+    pigpen_world
+    nlohmann_json::nlohmann_json
+  PRIVATE
+    pigpen_reflected_tools
+    scry::scry
+)
+pigpen_configure_target(pigpen_agent)
+target_include_directories(
+  pigpen_agent
+  PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>"
+)
+
+add_executable(pig-pen-headless src/app/headless_main.cpp)
+target_link_libraries(pig-pen-headless PRIVATE pigpen_agent)
+pigpen_configure_target(pig-pen-headless)
 
 if(PIGPEN_BUILD_GUI)
   set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
@@ -228,46 +204,24 @@ if(PIGPEN_BUILD_GUI)
       "${imgui_SOURCE_DIR}/backends"
   )
   target_link_libraries(pigpen_imgui PUBLIC glfw OpenGL::GL)
-  # macOS deprecated the whole OpenGL framework in 10.14, so every GL entry
-  # point carries a deprecation attribute. The API still works (Apple ships an
-  # OpenGL 4.1 core profile); only the warning is new, and -Werror turns it
-  # fatal. PUBLIC so the GUI target's own GL calls are covered too.
-  if(APPLE)
-    target_compile_definitions(pigpen_imgui PUBLIC GL_SILENCE_DEPRECATION)
-  endif()
-
-  set(PIGPEN_GUI_MAIN "${CMAKE_CURRENT_SOURCE_DIR}/src/app/main.cpp")
-  file(
-    GLOB PIGPEN_UI_SOURCES
-    CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/ui/*.cpp"
+  add_executable(
+    pig-pen
+      src/app/main.cpp
+      src/ui/app_ui.cpp
+      src/ui/gui_options.cpp
+      src/ui/world_animation.cpp
   )
-  if(EXISTS "${PIGPEN_GUI_MAIN}")
-    add_executable(pig-pen "${PIGPEN_GUI_MAIN}" ${PIGPEN_UI_SOURCES})
-    target_link_libraries(
-      pig-pen
-      PRIVATE pigpen_agent pigpen_imgui pigpen_project_options
-    )
-    target_include_directories(
-      pig-pen
-      PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
-    )
-    set_target_properties(
-      pig-pen
-      PROPERTIES CXX_EXTENSIONS OFF CXX_STANDARD_REQUIRED ON
-    )
-  else()
-    add_custom_target(
-      pig-pen
-      COMMAND
-        "${CMAKE_COMMAND}" -E echo
-        "pig-pen will be compiled after src/app/main.cpp is added"
-      VERBATIM
-    )
-  endif()
+  target_link_libraries(
+    pig-pen
+    PRIVATE pigpen_agent pigpen_imgui
+  )
+  pigpen_configure_target(pig-pen)
+  target_include_directories(pig-pen PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 endif()
 
 if(PIGPEN_BUILD_TESTS)
   include(CTest)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
   set(CATCH_BUILD_TESTING OFF CACHE BOOL "" FORCE)
   set(CATCH_INSTALL_DOCS OFF CACHE BOOL "" FORCE)
   set(CATCH_INSTALL_EXTRAS OFF CACHE BOOL "" FORCE)
@@ -281,85 +235,98 @@ if(PIGPEN_BUILD_TESTS)
   )
   FetchContent_MakeAvailable(Catch2)
 
-  file(
-    GLOB PIGPEN_TEST_SOURCES
-    CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp"
+  add_executable(
+    pigpen_tests
+      tests/episode_runner_tests.cpp
+      tests/gui_options_tests.cpp
+      tests/metrics_writer_tests.cpp
+      tests/prompt_tests.cpp
+      tests/session_tests.cpp
+      tests/world_animation_tests.cpp
+      tests/world_tests.cpp
+      src/ui/gui_options.cpp
+      src/ui/world_animation.cpp
   )
-  if(PIGPEN_TEST_SOURCES)
-    add_executable(pigpen_tests ${PIGPEN_TEST_SOURCES})
-    target_sources(
-      pigpen_tests
-      PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/ui/gui_options.cpp"
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/ui/world_animation.cpp"
-    )
-    target_link_libraries(
-      pigpen_tests
-      PRIVATE
-        Catch2::Catch2WithMain
-        pigpen_agent
-        pigpen_project_options
-    )
-    target_include_directories(
-      pigpen_tests
-      PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
-    )
-    set_target_properties(
-      pigpen_tests
-      PROPERTIES CXX_EXTENSIONS OFF CXX_STANDARD_REQUIRED ON
-    )
+  target_link_libraries(
+    pigpen_tests
+    PRIVATE
+      Catch2::Catch2WithMain
+      pigpen_agent
+  )
+  pigpen_configure_target(pigpen_tests)
+  target_include_directories(
+    pigpen_tests
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
+  )
 
-    list(APPEND CMAKE_MODULE_PATH "${catch2_SOURCE_DIR}/extras")
-    include(Catch)
-    catch_discover_tests(pigpen_tests)
-  endif()
+  list(APPEND CMAKE_MODULE_PATH "${catch2_SOURCE_DIR}/extras")
+  include(Catch)
+  catch_discover_tests(pigpen_tests)
 
-  if(TARGET pig-pen-headless)
-    add_test(NAME pigpen_headless_help COMMAND pig-pen-headless --help)
-    add_test(
-      NAME pigpen_headless_requires_model
-      COMMAND pig-pen-headless
-    )
-    set_tests_properties(
-      pigpen_headless_requires_model
-      PROPERTIES WILL_FAIL TRUE
-    )
-    add_test(
-      NAME pigpen_headless_rejects_invalid_bounds
-      COMMAND pig-pen-headless --max-tool-rounds 65
-    )
-    set_tests_properties(
-      pigpen_headless_rejects_invalid_bounds
-      PROPERTIES WILL_FAIL TRUE
-    )
-    add_test(
-      NAME pigpen_headless_rejects_invalid_temperature
-      COMMAND pig-pen-headless --temperature nan
-    )
-    set_tests_properties(
-      pigpen_headless_rejects_invalid_temperature
-      PROPERTIES WILL_FAIL TRUE
-    )
+  add_executable(
+    pigpen_reflection_tests
+      tests/world_tools_tests.cpp
+  )
+  target_link_libraries(
+    pigpen_reflection_tests
+    PRIVATE
+      Catch2::Catch2WithMain
+      pigpen_reflected_tools
+  )
+  pigpen_configure_target(pigpen_reflection_tests)
+  target_include_directories(
+    pigpen_reflection_tests
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
+  )
+  catch_discover_tests(pigpen_reflection_tests)
 
-    if(UNIX)
-      find_package(Python3 COMPONENTS Interpreter QUIET)
-      if(Python3_Interpreter_FOUND)
-        foreach(PIGPEN_SIGNAL IN ITEMS SIGINT SIGTERM)
-          string(TOLOWER "${PIGPEN_SIGNAL}" PIGPEN_SIGNAL_TEST_SUFFIX)
-          add_test(
-            NAME "pigpen_headless_graceful_${PIGPEN_SIGNAL_TEST_SUFFIX}"
-            COMMAND
-              "${Python3_EXECUTABLE}"
-              "${CMAKE_CURRENT_SOURCE_DIR}/tests/headless_signal_test.py"
-              "$<TARGET_FILE:pig-pen-headless>"
-              "${PIGPEN_SIGNAL}"
-          )
-          set_tests_properties(
-            "pigpen_headless_graceful_${PIGPEN_SIGNAL_TEST_SUFFIX}"
-            PROPERTIES TIMEOUT 30
-          )
-        endforeach()
-      endif()
-    endif()
+  add_test(NAME pigpen_headless_help COMMAND pig-pen-headless --help)
+  add_test(NAME pigpen_headless_requires_model COMMAND pig-pen-headless)
+  set_tests_properties(
+    pigpen_headless_requires_model
+    PROPERTIES WILL_FAIL TRUE
+  )
+  add_test(
+    NAME pigpen_headless_rejects_invalid_bounds
+    COMMAND pig-pen-headless --max-tool-rounds 65
+  )
+  set_tests_properties(
+    pigpen_headless_rejects_invalid_bounds
+    PROPERTIES WILL_FAIL TRUE
+  )
+  add_test(
+    NAME pigpen_headless_rejects_invalid_temperature
+    COMMAND pig-pen-headless --temperature nan
+  )
+  set_tests_properties(
+    pigpen_headless_rejects_invalid_temperature
+    PROPERTIES WILL_FAIL TRUE
+  )
+
+  add_test(
+    NAME pigpen_reflection_integration
+    COMMAND
+      "${Python3_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/reflection_integration_test.py"
+      "$<TARGET_FILE:pig-pen-headless>"
+  )
+  set_tests_properties(pigpen_reflection_integration PROPERTIES TIMEOUT 45)
+
+  if(UNIX)
+    foreach(PIGPEN_SIGNAL IN ITEMS SIGINT SIGTERM)
+      string(TOLOWER "${PIGPEN_SIGNAL}" PIGPEN_SIGNAL_TEST_SUFFIX)
+      add_test(
+        NAME "pigpen_headless_graceful_${PIGPEN_SIGNAL_TEST_SUFFIX}"
+        COMMAND
+          "${Python3_EXECUTABLE}"
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/headless_signal_test.py"
+          "$<TARGET_FILE:pig-pen-headless>"
+          "${PIGPEN_SIGNAL}"
+      )
+      set_tests_properties(
+        "pigpen_headless_graceful_${PIGPEN_SIGNAL_TEST_SUFFIX}"
+        PROPERTIES TIMEOUT 30
+      )
+    endforeach()
   endif()
 endif()

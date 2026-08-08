@@ -12,21 +12,27 @@ cmake --build --preset dev
 ctest --preset dev
 ```
 
-51 tests, a few seconds end to end. **No model server and no network access are
-required** — the transport is faked everywhere, so the suite is safe to run in
-CI or offline.
+The suite completes in a few seconds. **No external model server or external
+network access is required** after dependencies have been fetched. Unit tests
+use fake transports; the public-boundary integration test runs real Scry/Curl
+traffic against a loopback stub, so the suite remains safe to run offline.
+
+Configuration itself is part of the reflection gate: it requires GCC 16+ and a
+Python 3 interpreter, asks Scry to probe the P2996/P3394 facilities it uses,
+and fails before compilation if that surface is unavailable.
 
 ## What runs
 
 `ctest` picks up two kinds of test.
 
-**Catch2 cases (45)** from `pigpen_tests`, registered individually via
-`catch_discover_tests`, covering:
+**Catch2 cases** from `pigpen_tests` and the reflection-isolated
+`pigpen_reflection_tests`, registered individually via `catch_discover_tests`,
+covering:
 
 | file | covers |
 |---|---|
 | `tests/world_tests.cpp` | grid constants, seeded placement, movement and wall failures, `look` rays, eating and scoring, positive-item exhaustion, and seed determinism via `World::dump()` |
-| `tests/tool_executor_tests.cpp` | the published tool schemas, argument validation, result shapes, the `opaque_look` and `reward_feedback` toggles, and the one-event-per-call invariant |
+| `tests/world_tools_tests.cpp` | compile-time reflected schemas, typed result envelopes, the explicit turn/budget lifecycle, reflection-based observability projection, and the `opaque_look` / `reward_feedback` toggles |
 | `tests/prompt_tests.cpp` | config defaults and that each prompt flag says what it claims — including that the hidden-values prompt never leaks the reward table |
 | `tests/episode_runner_tests.cpp` | the turn loop against a scripted transport: budget exhaustion, pause/resume, stop cancelling an in-flight turn, objective completion, terminal errors, and queued human input |
 | `tests/metrics_writer_tests.cpp` | header/tool/turn/footer reconciliation, the incomplete footer on destruction, and footer finality |
@@ -34,8 +40,11 @@ CI or offline.
 | `tests/world_animation_tests.cpp` | the event feed becoming an ordered visual timeline, with caller-supplied time |
 | `tests/gui_options_tests.cpp` | GUI startup parsing for model and endpoint arguments, including both value syntaxes and invalid input |
 
-**CLI tests (6)** registered directly in `CMakeLists.txt`:
+**CLI tests** registered directly in `CMakeLists.txt`:
 
+- `pigpen_reflection_integration` — a loopback OpenAI-compatible server verifies
+  the provider-visible reflected schemas, strict typed decode, encoded response
+  envelope, world event, and JSONL record through the real Scry/Curl path
 - `pigpen_headless_help` — `--help` exits 0
 - `pigpen_headless_requires_model` — omitting `--model` must fail
 - `pigpen_headless_rejects_invalid_bounds` — `--max-tool-rounds 65` must fail
@@ -47,9 +56,9 @@ CI or offline.
   request and JSONL header, then asserts the exit status is `128 + signal`
   *and* that the JSONL file still ends with a finalized footer
 
-The two signal tests need a Python 3 interpreter and only register on UNIX. If
-CMake does not find one they are silently skipped; the rest of the suite is
-unaffected.
+Python 3 is required whenever tests are enabled. The two signal tests only
+register on UNIX; the loopback reflection integration test runs on every
+supported platform.
 
 ## Running a subset
 
@@ -59,6 +68,7 @@ ctest --preset dev --output-on-failure   # already the preset default
 ./build/dev/pigpen_tests --list-tests
 ./build/dev/pigpen_tests "[determinism]" # Catch2 tags
 ./build/dev/pigpen_tests -s "eating consumes each item and applies its reward"
+./build/dev/pigpen_reflection_tests --list-tests
 ```
 
 ## Testing against a real model
@@ -71,8 +81,9 @@ run a short episode and check the exit code:
 echo $?
 ```
 
-Exit `0` means the episode finished *and* the model called at least one tool;
-exit `5` means it talked without ever touching the world. See
+Exit `0` means the episode finished and produced at least one successfully
+decoded world-tool invocation. Exit `5` means it produced none, including a
+turn containing only schema-invalid calls. See
 [Running](running.md#exit-codes) for the rest, and [Logs](logs.md) for
 inspecting what happened.
 

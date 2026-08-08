@@ -21,7 +21,7 @@ TEST_CASE("Agent configuration requires callers to select a model") {
   CHECK(config.seed == 0);
   CHECK(config.turn_budget == 20);
   CHECK(config.max_tool_rounds == 8);
-  CHECK(config.max_output_tokens == 2'048);
+  CHECK(config.max_output_tokens == 8'096);
   CHECK(pigpen::agent::max_world_tool_calls_per_turn == 4);
   CHECK(config.temperature == 0.0);
   CHECK(config.known_item_values);
@@ -47,8 +47,8 @@ TEST_CASE(
   CHECK(contains(prompt, "eat()"));
   CHECK(contains(prompt, "at most 11 conversation turns"));
   CHECK(contains(prompt, "at most 6 tool rounds per turn"));
-  CHECK(contains(prompt, "executes at most 4 world-tool calls"));
-  CHECK(contains(prompt, "every tool result reports"));
+  CHECK(contains(prompt, "executes at most 4 world-tool actions"));
+  CHECK(contains(prompt, "successfully decoded world-tool result reports"));
   CHECK(contains(prompt, "followed by a short final action summary"));
   CHECK(contains(prompt, "Prioritize calling the registered world tools"));
   CHECK(contains(prompt, "over extended thinking"));
