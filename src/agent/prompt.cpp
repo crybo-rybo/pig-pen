@@ -2,14 +2,10 @@
 
 #include "world/world.hpp"
 
-#include <array>
 #include <string>
 
 namespace pigpen::agent {
 namespace {
-
-constexpr std::array<std::string_view, 4> fallback_look_directions{
-    "north", "east", "south", "west"};
 
 void append_experiment_instructions(std::string &prompt, const Config &config) {
   if (config.known_item_values) {
@@ -82,20 +78,14 @@ std::string build_system_prompt(const Config &config) {
       "You have at most " + std::to_string(config.turn_budget) +
       " conversation turns, with at most " +
       std::to_string(config.max_tool_rounds) +
-      " tool rounds per turn. Fast action protocol: decide only the next "
-      "action, not the whole turn. When an action is possible, respond with "
-      "exactly one useful tool call and no narration before it. After each "
-      "tool result, either make the next obvious tool call the same way or "
-      "finish. Never compare alternatives, restate these rules, explain a "
-      "plan, or simulate future tool results. Choose the first valid action, "
-      "not the best action. The automatic turn instruction supplies a "
-      "concrete fallback look; use it immediately when no action is obvious. "
-      "Each conversation turn must execute between one and four useful tool "
-      "calls, then end with an action summary of at most eight words and no "
-      "more tool calls. Another Continue message will arrive, so do not try "
-      "to finish the whole episode at once. Keep any internal deliberation to "
-      "one short sentence. Do not provide hidden chain-of-thought. Stop when "
-      "all positive-value items are gone or the episode ends.\n";
+      " tool rounds per turn. Each conversation turn should contain between "
+      "one and four useful tool calls, followed by a short final action "
+      "summary with no more tool calls. Prioritize calling the registered "
+      "world tools over extended thinking or describing what you might do. "
+      "Do not try to finish the whole episode or consume every allowed tool "
+      "round at once; another Continue message will arrive. Do not provide "
+      "hidden chain-of-thought. Stop when all positive-value items are gone "
+      "or the episode ends.\n";
   return prompt;
 }
 
@@ -103,20 +93,12 @@ std::string build_turn_prompt(const std::size_t turn,
                               const std::size_t turn_budget,
                               const std::string_view human_input,
                               const bool recover_zero_tool_turn) {
-  const auto fallback_index =
-      turn == 0 ? 0U : (turn - 1U) % fallback_look_directions.size();
-  const auto fallback_direction = fallback_look_directions[fallback_index];
   std::string prompt =
       "Automatic turn instructions:\n"
-      "ACTION ONLY. Choose the first valid action, not the best action. Make "
-      "exactly one world-tool call now with no preamble or analysis. If no "
-      "action is obvious, call look(";
-  prompt.append(fallback_direction);
-  prompt +=
-      "). After its result, take one obvious follow-up directly or finish. "
-      "Use one to four world-tool calls total, then summarize in at most eight "
-      "words. Remember: move never eats an item; call eat explicitly on an "
-      "item_here. Turn " +
+      "Continue exploring autonomously. Use one to four world-tool calls now, "
+      "then finish this turn with a brief action summary and no further tool "
+      "call. Remember: move never eats an item; call eat explicitly to "
+      "consume an item_here. Turn " +
       std::to_string(turn) + " of " + std::to_string(turn_budget) + ".";
   if (recover_zero_tool_turn) {
     prompt +=

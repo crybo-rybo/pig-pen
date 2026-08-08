@@ -46,14 +46,10 @@ TEST_CASE(
   CHECK(contains(prompt, "eat()"));
   CHECK(contains(prompt, "at most 11 conversation turns"));
   CHECK(contains(prompt, "at most 6 tool rounds per turn"));
-  CHECK(contains(prompt, "Fast action protocol"));
-  CHECK(contains(prompt, "exactly one useful tool call"));
-  CHECK(contains(prompt, "Never compare alternatives"));
-  CHECK(contains(prompt, "Choose the first valid action"));
-  CHECK(contains(prompt, "supplies a concrete fallback look"));
   CHECK(contains(prompt, "between one and four useful tool calls"));
-  CHECK(contains(prompt, "action summary of at most eight words"));
-  CHECK(contains(prompt, "internal deliberation to one short sentence"));
+  CHECK(contains(prompt, "followed by a short final action summary"));
+  CHECK(contains(prompt, "Prioritize calling the registered world tools"));
+  CHECK(contains(prompt, "over extended thinking"));
   CHECK(contains(prompt, "Use look and move calls proactively"));
   CHECK(contains(prompt, "move never collects or consumes an item"));
   CHECK(contains(prompt, "Only eat can consume one"));
@@ -107,13 +103,9 @@ TEST_CASE("Prompt accurately describes observation and feedback toggles") {
 
 TEST_CASE("Turn prompts sustain exploration and carry optional human input") {
   const auto automatic = pigpen::agent::build_turn_prompt(7, 20);
-  CHECK(contains(automatic, "ACTION ONLY"));
-  CHECK(contains(automatic, "first valid action"));
-  CHECK(contains(automatic, "exactly one world-tool call"));
-  CHECK(contains(automatic, "with no preamble or analysis"));
-  CHECK(contains(automatic, "call look(south)"));
+  CHECK(contains(automatic, "Continue exploring autonomously"));
   CHECK(contains(automatic, "one to four world-tool calls"));
-  CHECK(contains(automatic, "summarize in at most eight words"));
+  CHECK(contains(automatic, "brief action summary"));
   CHECK(contains(automatic, "move never eats an item"));
   CHECK(contains(automatic, "call eat explicitly"));
   CHECK(contains(automatic, "Turn 7 of 20."));
@@ -122,7 +114,6 @@ TEST_CASE("Turn prompts sustain exploration and carry optional human input") {
   const auto guided =
       pigpen::agent::build_turn_prompt(8, 20, "Please inspect the north wall.");
   CHECK(contains(guided, "Turn 8 of 20."));
-  CHECK(contains(guided, "call look(west)"));
   CHECK(contains(guided, "Human guidance:\nPlease inspect the north wall."));
   CHECK(contains(guided, "one to four world-tool calls"));
 

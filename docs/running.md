@@ -50,13 +50,9 @@ design — pipe it to a file, or read the JSONL log instead, if you want the
 turn's text in one piece. Tool lines go to stdout; errors, timeouts, and signal
 notices go to stderr.
 
-Each request allows at most 2048 output tokens. The action prompt asks the
-model to choose the first valid action, make one immediate tool call per
-response, and keep the final action summary to eight words. When no action is
-obvious, the host supplies a concrete fallback look direction rather than
-asking the model to compare alternatives. This leaves room for models that
-always produce a reasoning trace while nudging them to spend fewer tokens on
-it.
+Each request allows at most 2048 output tokens. The prompt asks the model to
+prioritize calling the registered world tools over extended thinking or
+describing intended actions.
 
 ### Options
 
