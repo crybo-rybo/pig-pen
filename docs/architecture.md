@@ -63,6 +63,9 @@ successfully decoded world-tool handler invocations. A handler invocation may
 still have `action_executed == false` when the four-call application budget is
 already exhausted.
 
+The planned follow-up that removes JSON from Pig Pen's event and UI layers is
+captured in [Tool activity refactor handoff](tool-activity-handoff.md).
+
 ### `Session` is the reset unit
 
 A `Session` owns the world, the conversation, the scry harness with its
