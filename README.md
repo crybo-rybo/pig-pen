@@ -4,8 +4,9 @@
 watch it play. The model is a blob that can only perceive the pen through three
 tools — `look`, `move`, and `eat` — registered with
 [scry](https://github.com/crybo-rybo/scry). You get the omniscient view: the
-full grid, the model's fog-of-war, its streamed output, every tool call and
-result, live stats, and a JSONL log of the run.
+full grid, the model's fog-of-war, its streamed output, every successfully
+decoded world-tool invocation and result, live stats, and a JSONL log of the
+run.
 
 Two front ends share the same world, prompt, tools, episode runner, and logger:
 
@@ -27,9 +28,11 @@ Two front ends share the same world, prompt, tools, episode runner, and logger:
 
 ## Quick start
 
-You need CMake 3.25+, Ninja, a C++23 compiler, libcurl, OpenGL 3, and the
-platform development libraries GLFW needs. Every C++ dependency is pinned and
-fetched by CMake.
+You need CMake 3.25+, Ninja, GCC 16+ on Linux, Python 3 for tests, libcurl,
+OpenGL 3, and the platform development libraries GLFW needs. Pig Pen uses
+C++26 reflection as its main tool-definition and marshalling path; CMake enables
+`-std=c++26 -freflection` and rejects compilers without the required P2996 and
+P3394 support. Every C++ dependency is pinned and fetched by CMake.
 
 Serve a model first. The default endpoint is Ollama on `127.0.0.1:11434`, but
 Pig Pen does not choose a model for you:

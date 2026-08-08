@@ -90,7 +90,7 @@ TEST_CASE("session atomically owns a seeded world registered harness and "
   CHECK(header.at("model") == config.model);
   CHECK(header.at("seed") == 2026);
   CHECK(header.at("temperature") == 0.2);
-  CHECK(header.at("max_output_tokens") == 2'048);
+  CHECK(header.at("max_output_tokens") == config.max_output_tokens);
   CHECK(header.at("scenario").at("max_world_tool_calls_per_turn") == 4);
   CHECK(footer.at("type") == "footer");
   CHECK(footer.at("finish_reason") == "abandoned");

@@ -6,11 +6,11 @@
 |---|---|
 | CMake 3.25+ | presets use schema version 6 |
 | Ninja | the generator both presets select |
-| C++23 compiler | GCC, Clang, AppleClang, or MSVC; `std::expected` is required |
+| GCC 16+ on Linux | C++26 P2996/P3394 reflection; configured with `-std=c++26 -freflection` |
+| Python 3 | required when the test suite is enabled; drives public-boundary integration tests |
 | libcurl | scry's HTTP transport links against it |
 | OpenGL 3.3 | only needed for the GUI target |
 | GLFW platform libraries | X11 and/or Wayland development headers on Linux |
-| Python 3 | optional; enables the two headless signal tests |
 
 Everything else is pinned in `CMakeLists.txt` and fetched at configure time:
 [scry](https://github.com/crybo-rybo/scry), nlohmann/json, GLFW, Dear ImGui,
@@ -20,7 +20,7 @@ takes a few minutes; later configures reuse `build/<preset>/_deps`.
 On Arch:
 
 ```sh
-sudo pacman -S --needed cmake ninja curl mesa libx11 libxrandr libxinerama libxcursor libxi wayland
+sudo pacman -S --needed gcc cmake ninja python curl mesa libx11 libxrandr libxinerama libxcursor libxi wayland
 ```
 
 ## Presets
@@ -38,6 +38,7 @@ Binaries land in `build/<preset>/`:
 - `pig-pen` — the ImGui application
 - `pig-pen-headless` — the CLI
 - `pigpen_tests` — the Catch2 test binary
+- `pigpen_reflection_tests` — the reflection-isolated Catch2 test binary
 
 ## justfile recipes
 
@@ -62,11 +63,16 @@ preset named `--model`.
 | option | default | effect |
 |---|---|---|
 | `PIGPEN_BUILD_GUI` | `ON` | build `pig-pen`; turn off to skip GLFW, ImGui, and OpenGL entirely |
-| `PIGPEN_BUILD_TESTS` | `ON` | build `pigpen_tests` and register the CTest cases |
-| `PIGPEN_WARNINGS_AS_ERRORS` | `ON` | `-Werror` / `/WX` for pig-pen's own code only |
+| `PIGPEN_BUILD_TESTS` | `ON` | build both Catch2 test binaries and register all CTest cases |
+| `PIGPEN_WARNINGS_AS_ERRORS` | `ON` | `-Werror` for pig-pen's own code only |
 | `PIGPEN_SCRY_SOURCE` | *(empty)* | path to a local scry checkout instead of the pinned revision |
 
-pig-pen builds with `-Wall -Wextra -Wpedantic -Wconversion -Wshadow`. Those
+Pig Pen is intentionally a reflection-first C++26 application. Configuration
+rejects non-GNU compilers and GCC versions older than 16. Scry performs an
+additional compile probe for the exact P2996/P3394 annotation-query surface
+Pig Pen uses.
+
+Pig Pen builds with `-Wall -Wextra -Wpedantic -Wconversion -Wshadow`. Those
 flags apply to pig-pen sources only; fetched dependencies are added as `SYSTEM`
 and keep their own warning settings.
 
@@ -84,8 +90,9 @@ cmake --preset dev -DPIGPEN_SCRY_SOURCE=../scry
 ```
 
 The path is resolved relative to the source directory and must contain a
-`CMakeLists.txt`, otherwise configure fails with an explicit error. Clearing the
-cache variable (or deleting `build/dev/`) goes back to the pinned commit.
+`CMakeLists.txt`. The checkout must provide its reflection component and pass
+Scry's GCC 16 capability probe; otherwise configure fails. Clearing the cache
+variable (or deleting `build/dev/`) goes back to the pinned commit.
 
 ## Troubleshooting
 
@@ -100,3 +107,8 @@ detection reruns.
 **A dependency looks stale after changing `PIGPEN_SCRY_SOURCE` or a pinned tag.**
 `FetchContent` caches under `build/<preset>/_deps`. Remove that directory or the
 whole build directory and reconfigure.
+
+**CMake still reports an older compiler after installing GCC 16.** Compiler
+selection is cached per build directory. Reconfigure from a fresh directory,
+or run `cmake --preset dev --fresh -DCMAKE_CXX_COMPILER=g++-16` on systems that
+install versioned compiler executables.

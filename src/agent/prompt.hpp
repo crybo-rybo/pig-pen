@@ -14,7 +14,7 @@ namespace pigpen::agent {
 /// Builds the bounded automatic nudge for an episode turn. Human guidance,
 /// when present, is delivered as a separately labelled section without
 /// weakening the autonomy instruction. A zero-tool recovery can require a
-/// verified action after a narration-only turn.
+/// decoded world-tool invocation after a turn that produced none.
 [[nodiscard]] std::string
 build_turn_prompt(std::size_t turn, std::size_t turn_budget,
                   std::string_view human_input = {},

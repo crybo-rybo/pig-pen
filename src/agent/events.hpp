@@ -11,9 +11,9 @@
 
 namespace pigpen::agent {
 
-/// One model tool invocation and its observable world transition. Boundary
-/// failures carry a structured error result and identical before/after
-/// positions.
+/// One successfully decoded world-tool handler invocation and its observable
+/// world transition. Application-budget rejections carry a structured error
+/// response and identical before/after positions.
 struct WorldEvent {
   std::uint64_t tick{};
   std::size_t turn{};
@@ -23,6 +23,8 @@ struct WorldEvent {
   world::Position before{};
   world::Position after{};
   std::optional<world::Direction> direction{};
+  bool action_executed{};
+  std::optional<world::ItemType> eaten{};
 
   friend bool operator==(const WorldEvent &, const WorldEvent &) = default;
 };

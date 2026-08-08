@@ -166,9 +166,8 @@ MetricsWriter::record_tool(const WorldEvent &event, const int score_after) {
   }
   ++tool_counts_[event.tool];
   last_score_ = score_after;
-  if (event.tool == "eat" && event.result.value("ok", false) &&
-      event.result.contains("ate") && event.result.at("ate").is_string()) {
-    ++eaten_counts_[event.result.at("ate").get<std::string>()];
+  if (event.eaten) {
+    ++eaten_counts_[std::string{world::item_name(*event.eaten)}];
   }
   return write_line({
       {"type", "tool"},
@@ -179,6 +178,7 @@ MetricsWriter::record_tool(const WorldEvent &event, const int score_after) {
       {"result", event.result},
       {"before", position_json(event.before)},
       {"after", position_json(event.after)},
+      {"action_executed", event.action_executed},
       {"score_after", score_after},
   });
 }
