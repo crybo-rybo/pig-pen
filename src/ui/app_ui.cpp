@@ -219,6 +219,7 @@ AppUi::AppUi(const agent::Config &initial_config) {
   seed_ = initial_config.seed;
   turn_budget_ = static_cast<int>(initial_config.turn_budget);
   max_tool_rounds_ = static_cast<int>(initial_config.max_tool_rounds);
+  max_output_tokens_ = initial_config.max_output_tokens;
   temperature_ = initial_config.temperature;
   known_item_values_ = initial_config.known_item_values;
   reward_feedback_ = initial_config.reward_feedback;
@@ -277,6 +278,7 @@ agent::Config AppUi::config_from_controls() const {
           static_cast<std::size_t>(std::clamp(turn_budget_, 1, 10'000)),
       .max_tool_rounds =
           static_cast<std::uint32_t>(std::clamp(max_tool_rounds_, 1, 64)),
+      .max_output_tokens = max_output_tokens_,
       .temperature = std::clamp(temperature_, 0.0, 2.0),
       .known_item_values = known_item_values_,
       .reward_feedback = reward_feedback_,

@@ -21,6 +21,8 @@ TEST_CASE("Agent configuration requires callers to select a model") {
   CHECK(config.seed == 0);
   CHECK(config.turn_budget == 20);
   CHECK(config.max_tool_rounds == 8);
+  CHECK(config.max_output_tokens == 2'048);
+  CHECK(pigpen::agent::max_world_tool_calls_per_turn == 4);
   CHECK(config.temperature == 0.0);
   CHECK(config.known_item_values);
   CHECK(config.reward_feedback);
@@ -45,8 +47,11 @@ TEST_CASE(
   CHECK(contains(prompt, "eat()"));
   CHECK(contains(prompt, "at most 11 conversation turns"));
   CHECK(contains(prompt, "at most 6 tool rounds per turn"));
-  CHECK(contains(prompt, "between one and four useful tool calls"));
+  CHECK(contains(prompt, "executes at most 4 world-tool calls"));
+  CHECK(contains(prompt, "every tool result reports"));
   CHECK(contains(prompt, "followed by a short final action summary"));
+  CHECK(contains(prompt, "Prioritize calling the registered world tools"));
+  CHECK(contains(prompt, "over extended thinking"));
   CHECK(contains(prompt, "Use look and move calls proactively"));
   CHECK(contains(prompt, "move never collects or consumes an item"));
   CHECK(contains(prompt, "Only eat can consume one"));
@@ -101,7 +106,7 @@ TEST_CASE("Prompt accurately describes observation and feedback toggles") {
 TEST_CASE("Turn prompts sustain exploration and carry optional human input") {
   const auto automatic = pigpen::agent::build_turn_prompt(7, 20);
   CHECK(contains(automatic, "Continue exploring autonomously"));
-  CHECK(contains(automatic, "one to four world-tool calls"));
+  CHECK(contains(automatic, "up to 4 world-tool calls"));
   CHECK(contains(automatic, "brief action summary"));
   CHECK(contains(automatic, "move never eats an item"));
   CHECK(contains(automatic, "call eat explicitly"));
@@ -112,7 +117,7 @@ TEST_CASE("Turn prompts sustain exploration and carry optional human input") {
       pigpen::agent::build_turn_prompt(8, 20, "Please inspect the north wall.");
   CHECK(contains(guided, "Turn 8 of 20."));
   CHECK(contains(guided, "Human guidance:\nPlease inspect the north wall."));
-  CHECK(contains(guided, "one to four world-tool calls"));
+  CHECK(contains(guided, "up to 4 world-tool calls"));
 
   const auto corrective = pigpen::agent::build_turn_prompt(9, 20, {}, true);
   CHECK(contains(corrective, "previous turn executed zero world tools"));

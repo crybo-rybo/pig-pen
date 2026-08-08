@@ -41,7 +41,7 @@ tool_definition(std::string name, std::string description,
       .dialect = scry::ProviderDialect::openai_compatible,
       .sampling = {.temperature = config.temperature,
                    .top_p = std::nullopt,
-                   .max_tokens = 1024},
+                   .max_tokens = config.max_output_tokens},
       // Explicitly disabling hidden reasoning keeps bounded local runs finite
       // and leaves the visible transcript focused on actions across providers.
       .reasoning_mode = scry::ReasoningMode::disabled,
@@ -121,6 +121,9 @@ Session::create(Config config, std::filesystem::path log_directory,
   }
   if (config.max_tool_rounds > 64) {
     return std::unexpected("maximum tool rounds must not exceed 64");
+  }
+  if (config.max_output_tokens == 0) {
+    return std::unexpected("maximum output tokens must be greater than zero");
   }
   if (!std::isfinite(config.temperature) || config.temperature < 0.0 ||
       config.temperature > 2.0) {

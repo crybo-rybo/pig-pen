@@ -49,21 +49,30 @@ public:
 
 private:
   [[nodiscard]] std::expected<nlohmann::json, ToolError>
+  execute_reserved(std::size_t turn, std::string_view tool,
+                   const nlohmann::json &arguments);
+  [[nodiscard]] std::expected<nlohmann::json, ToolError>
   execute_directional(std::size_t turn, std::string_view tool,
                       const nlohmann::json &arguments);
   [[nodiscard]] std::expected<nlohmann::json, ToolError>
   execute_eat(std::size_t turn, const nlohmann::json &arguments);
+  [[nodiscard]] bool reserve_tool_call(std::size_t turn);
+  [[nodiscard]] nlohmann::json
+  reject_exhausted_budget(std::size_t turn, std::string_view tool,
+                          const nlohmann::json &arguments);
 
-  void append_event(std::size_t turn, std::string_view tool,
-                    const nlohmann::json &arguments,
-                    const nlohmann::json &result, world::Position before,
-                    world::Position after,
-                    std::optional<world::Direction> direction = {});
+  [[nodiscard]] nlohmann::json
+  append_event(std::size_t turn, std::string_view tool,
+               const nlohmann::json &arguments, nlohmann::json result,
+               world::Position before, world::Position after,
+               std::optional<world::Direction> direction = {});
 
   world::World &world_;
   EventFeed &events_;
   Config config_;
   std::uint64_t next_tick_{1};
+  std::optional<std::size_t> active_budget_turn_{};
+  std::size_t tool_calls_used_this_turn_{};
 };
 
 } // namespace pigpen::agent

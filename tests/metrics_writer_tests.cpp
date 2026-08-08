@@ -76,6 +76,10 @@ TEST_CASE("metrics log contains a reconcilable header tool turn and footer") {
   REQUIRE(records.front().at("type") == "header");
   REQUIRE(records.front().at("seed") == 42);
   REQUIRE(records.front().at("temperature") == 0.5);
+  REQUIRE(records.front().at("max_output_tokens") == 2'048);
+  REQUIRE(records.front()
+              .at("scenario")
+              .at("max_world_tool_calls_per_turn") == 4);
   REQUIRE(records[1].at("type") == "tool");
   REQUIRE(records[2].at("type") == "turn");
   REQUIRE(records[2].at("tool_calls") == 1);

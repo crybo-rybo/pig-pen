@@ -53,6 +53,15 @@ struct ItemViewpoint {
   };
 }
 
+void check_budget(const nlohmann::json &result, const std::size_t used,
+                  const std::size_t remaining) {
+  REQUIRE(result.contains("turn_tool_budget"));
+  const auto &budget = result.at("turn_tool_budget");
+  CHECK(budget.at("used") == used);
+  CHECK(budget.at("remaining") == remaining);
+  CHECK(budget.at("instruction").is_string());
+}
+
 } // namespace
 
 TEST_CASE("Tool schemas express the exact public argument contracts") {
@@ -89,14 +98,16 @@ TEST_CASE(
       nlohmann::json{{"direction", "up"}},
   };
 
+  std::size_t turn = 1;
   for (const auto &arguments : invalid_arguments) {
-    const auto move = executor.execute(1, "move", arguments);
+    const auto move = executor.execute(turn, "move", arguments);
     REQUIRE_FALSE(move);
     CHECK(move.error().code == ToolErrorCode::invalid_arguments);
 
-    const auto look = executor.execute(1, "look", arguments);
+    const auto look = executor.execute(turn, "look", arguments);
     REQUIRE_FALSE(look);
     CHECK(look.error().code == ToolErrorCode::invalid_arguments);
+    ++turn;
   }
 
   CHECK(events.size() == invalid_arguments.size() * 2);
@@ -122,7 +133,9 @@ TEST_CASE("Eat accepts only an empty object") {
   CHECK(events.back().result.at("error_code") == "invalid_arguments");
   const auto valid = executor.execute(2, "eat", nlohmann::json::object());
   REQUIRE(valid);
-  CHECK(*valid == nlohmann::json{{"ok", false}, {"reason", "nothing_here"}});
+  CHECK(valid->at("ok") == false);
+  CHECK(valid->at("reason") == "nothing_here");
+  check_budget(*valid, 4, 0);
   REQUIRE(events.size() == 4);
 }
 
@@ -149,25 +162,65 @@ TEST_CASE("Move returns structured success and wall failure results") {
   World world{37};
   EventFeed events;
   ToolExecutor executor{world, events};
+  std::size_t turn = 1;
 
-  const auto east = executor.execute(3, "move", {{"direction", "east"}});
+  const auto east = executor.execute(turn++, "move", {{"direction", "east"}});
   REQUIRE(east);
   CHECK(east->at("ok") == true);
   CHECK(east->at("position") == nlohmann::json{{"x", 6}, {"y", 5}});
   CHECK(east->contains("item_here"));
 
   for (int y = world.position().y; y < World::height - 1; ++y) {
-    REQUIRE(executor.execute(3, "move", {{"direction", "north"}}));
+    REQUIRE(executor.execute(turn++, "move", {{"direction", "north"}}));
   }
   const auto before_wall = world.position();
-  const auto wall = executor.execute(3, "move", {{"direction", "north"}});
+  const auto wall =
+      executor.execute(turn, "move", {{"direction", "north"}});
   REQUIRE(wall);
-  CHECK(*wall ==
-        nlohmann::json{
-            {"ok", false},
-            {"reason", "wall"},
-            {"position", {{"x", before_wall.x}, {"y", before_wall.y}}}});
+  CHECK(wall->at("ok") == false);
+  CHECK(wall->at("reason") == "wall");
+  CHECK(wall->at("position") ==
+        nlohmann::json{{"x", before_wall.x}, {"y", before_wall.y}});
+  check_budget(*wall, 1, 3);
   CHECK(world.position() == before_wall);
+}
+
+TEST_CASE("Per-turn tool budget annotates results and rejects extra actions") {
+  World world{37};
+  EventFeed events;
+  ToolExecutor executor{world, events};
+  const auto initial_position = world.position();
+  const auto initial_score = world.score();
+
+  for (std::size_t used = 1;
+       used <= pigpen::agent::max_world_tool_calls_per_turn; ++used) {
+    const auto result =
+        executor.execute(11, "look", {{"direction", "north"}});
+    REQUIRE(result);
+    check_budget(*result, used,
+                 pigpen::agent::max_world_tool_calls_per_turn - used);
+  }
+
+  const auto rejected =
+      executor.execute(11, "move", {{"direction", "east"}});
+  REQUIRE(rejected);
+  CHECK(rejected->at("ok") == false);
+  CHECK(rejected->at("error_code") == "tool_budget_exhausted");
+  check_budget(*rejected, pigpen::agent::max_world_tool_calls_per_turn, 0);
+  CHECK(world.position() == initial_position);
+  CHECK(world.score() == initial_score);
+  REQUIRE(events.size() == 5);
+  CHECK(events.back().before == initial_position);
+  CHECK(events.back().after == initial_position);
+  CHECK(events.back().result.at("error_code") == "tool_budget_exhausted");
+
+  const auto next_turn =
+      executor.execute(12, "move", {{"direction", "east"}});
+  REQUIRE(next_turn);
+  CHECK(next_turn->at("ok") == true);
+  check_budget(*next_turn, 1,
+               pigpen::agent::max_world_tool_calls_per_turn - 1);
+  CHECK(world.position() == (Position{.x = 6, .y = 5}));
 }
 
 TEST_CASE("Look reports a complete ray and can hide item identity") {

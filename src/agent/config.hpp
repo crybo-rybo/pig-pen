@@ -6,6 +6,9 @@
 
 namespace pigpen::agent {
 
+/// Hard application-side limit on world actions requested during one turn.
+inline constexpr std::size_t max_world_tool_calls_per_turn{4};
+
 /// Runtime and experiment settings shared by the headless and GUI front ends.
 struct Config {
   std::string base_url{"http://127.0.0.1:11434/v1"};
@@ -14,6 +17,7 @@ struct Config {
   std::uint64_t seed{};
   std::size_t turn_budget{20};
   std::uint32_t max_tool_rounds{8};
+  std::uint32_t max_output_tokens{8'096};
   double temperature{0.0};
 
   /// Include the item/reward table in the system prompt.
