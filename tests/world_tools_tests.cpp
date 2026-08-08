@@ -90,27 +90,25 @@ TEST_CASE("Move returns a fixed typed result for success and wall failure") {
 
   tools.begin_turn(turn++);
   const auto east = tools.move({.direction = Direction::east});
-  REQUIRE(east.response.result);
+  CHECK(east.response.ok);
   CHECK_FALSE(east.response.error);
-  CHECK(east.response.result->ok);
-  CHECK(east.response.result->position == (Position{.x = 6, .y = 5}));
-  CHECK(east.action_executed);
+  CHECK_FALSE(east.response.error_code);
+  CHECK(east.response.position == (Position{.x = 6, .y = 5}));
+  CHECK(east.response.action_executed);
 
   for (int y = world.position().y; y < World::height - 1; ++y) {
     tools.begin_turn(turn++);
     const auto moved = tools.move({.direction = Direction::north});
-    REQUIRE(moved.response.result);
-    REQUIRE(moved.response.result->ok);
+    REQUIRE(moved.response.ok);
   }
   const auto before_wall = world.position();
   tools.begin_turn(turn);
   const auto wall = tools.move({.direction = Direction::north});
-  REQUIRE(wall.response.result);
-  CHECK_FALSE(wall.response.result->ok);
-  REQUIRE(wall.response.result->reason);
-  CHECK(*wall.response.result->reason == pigpen::world::MoveFailure::wall);
-  CHECK(wall.response.result->position == before_wall);
-  CHECK(wall.action_executed);
+  CHECK_FALSE(wall.response.ok);
+  REQUIRE(wall.response.reason);
+  CHECK(*wall.response.reason == pigpen::world::MoveFailure::wall);
+  CHECK(wall.response.position == before_wall);
+  CHECK(wall.response.action_executed);
   CHECK(wall.before == wall.after);
 }
 
@@ -125,7 +123,7 @@ TEST_CASE("World-tool turn lifecycle is explicit and monotonic") {
   CHECK_THROWS_AS(tools.begin_turn(1), std::logic_error);
 }
 
-TEST_CASE("Per-turn budget returns a reflected error envelope without acting") {
+TEST_CASE("Per-turn budget returns a flat reflected failure without acting") {
   World world{37};
   WorldTools tools{world};
   const auto initial = world.position();
@@ -134,30 +132,41 @@ TEST_CASE("Per-turn budget returns a reflected error envelope without acting") {
   for (std::size_t used = 1;
        used <= pigpen::agent::max_world_tool_calls_per_turn; ++used) {
     const auto looked = tools.look({.direction = Direction::north});
-    REQUIRE(looked.response.result);
+    REQUIRE(looked.response.ok);
     CHECK_FALSE(looked.response.error);
+    CHECK_FALSE(looked.response.error_code);
     CHECK(looked.response.turn_tool_budget.used == used);
     CHECK(looked.response.turn_tool_budget.remaining ==
           pigpen::agent::max_world_tool_calls_per_turn - used);
   }
 
   const auto rejected = tools.move({.direction = Direction::east});
-  CHECK_FALSE(rejected.response.result);
-  REQUIRE(rejected.response.error);
-  CHECK(rejected.response.error->code ==
+  CHECK_FALSE(rejected.response.ok);
+  CHECK_FALSE(rejected.response.action_executed);
+  REQUIRE(rejected.response.error_code);
+  CHECK(*rejected.response.error_code ==
         ToolFailureCode::tool_budget_exhausted);
+  REQUIRE(rejected.response.error);
+  CHECK(*rejected.response.error ==
+        "No action was executed because this turn's world-tool call budget "
+        "is exhausted.");
+  CHECK(rejected.response.position == initial);
   CHECK(rejected.response.turn_tool_budget.used ==
         pigpen::agent::max_world_tool_calls_per_turn);
   CHECK(rejected.response.turn_tool_budget.remaining == 0);
-  CHECK_FALSE(rejected.action_executed);
   CHECK(world.position() == initial);
+
+  const auto rejected_json = pigpen::agent::reflected_json(rejected.response);
+  CHECK(rejected_json.at("ok") == false);
+  CHECK(rejected_json.at("action_executed") == false);
+  CHECK(rejected_json.at("error_code") == "tool_budget_exhausted");
+  CHECK_FALSE(rejected_json.contains("result"));
 
   tools.begin_turn(12);
   const auto next_turn = tools.move({.direction = Direction::east});
-  REQUIRE(next_turn.response.result);
-  CHECK(next_turn.response.result->ok);
+  REQUIRE(next_turn.response.ok);
   CHECK(next_turn.response.turn_tool_budget.used == 1);
-  CHECK(next_turn.action_executed);
+  CHECK(next_turn.response.action_executed);
 }
 
 TEST_CASE("Look returns a typed complete ray and supports opaque items") {
@@ -170,13 +179,13 @@ TEST_CASE("Look returns a typed complete ray and supports opaque items") {
   visible_tools.begin_turn(4);
 
   const auto visible = visible_tools.look({.direction = viewpoint.direction});
-  REQUIRE(visible.response.result);
-  REQUIRE_FALSE(visible.response.result->cells.empty());
-  REQUIRE(visible.response.result->cells.front().item);
-  CHECK(*visible.response.result->cells.front().item ==
+  REQUIRE(visible.response.ok);
+  REQUIRE_FALSE(visible.response.cells.empty());
+  REQUIRE(visible.response.cells.front().item);
+  CHECK(*visible.response.cells.front().item ==
         pigpen::world::item_name(placement.item));
-  CHECK(visible.response.result->wall_at_distance ==
-        static_cast<int>(visible.response.result->cells.size()) + 1);
+  CHECK(visible.response.wall_at_distance ==
+        static_cast<int>(visible.response.cells.size()) + 1);
 
   World opaque_world{seed};
   move_to(opaque_world, viewpoint.position);
@@ -185,9 +194,9 @@ TEST_CASE("Look returns a typed complete ray and supports opaque items") {
   WorldTools opaque_tools{opaque_world, config};
   opaque_tools.begin_turn(4);
   const auto opaque = opaque_tools.look({.direction = viewpoint.direction});
-  REQUIRE(opaque.response.result);
-  REQUIRE(opaque.response.result->cells.front().item);
-  CHECK(*opaque.response.result->cells.front().item == "something");
+  REQUIRE(opaque.response.ok);
+  REQUIRE(opaque.response.cells.front().item);
+  CHECK(*opaque.response.cells.front().item == "something");
 }
 
 TEST_CASE(
@@ -200,13 +209,10 @@ TEST_CASE(
   feedback_tools.begin_turn(5);
 
   const auto revealed = feedback_tools.eat({});
-  REQUIRE(revealed.response.result);
-  CHECK(revealed.response.result->ok);
-  CHECK(revealed.response.result->ate == placement.item);
-  CHECK(revealed.response.result->reward ==
-        pigpen::world::item_reward(placement.item));
-  CHECK(revealed.response.result->score ==
-        pigpen::world::item_reward(placement.item));
+  REQUIRE(revealed.response.ok);
+  CHECK(revealed.response.ate == placement.item);
+  CHECK(revealed.response.reward == pigpen::world::item_reward(placement.item));
+  CHECK(revealed.response.score == pigpen::world::item_reward(placement.item));
   CHECK(revealed.eaten == placement.item);
 
   World hidden_world{seed};
@@ -216,15 +222,14 @@ TEST_CASE(
   WorldTools hidden_tools{hidden_world, config};
   hidden_tools.begin_turn(5);
   const auto hidden = hidden_tools.eat({});
-  REQUIRE(hidden.response.result);
-  CHECK(hidden.response.result->ok);
-  CHECK_FALSE(hidden.response.result->reward);
-  CHECK_FALSE(hidden.response.result->score);
+  REQUIRE(hidden.response.ok);
+  CHECK_FALSE(hidden.response.reward);
+  CHECK_FALSE(hidden.response.score);
   CHECK(hidden.eaten == placement.item);
   CHECK(hidden_world.score() == pigpen::world::item_reward(placement.item));
 }
 
-TEST_CASE("Reflection projects the typed result envelope for observability") {
+TEST_CASE("Reflection projects the flat typed response for observability") {
   World world{9};
   WorldTools tools{world};
   tools.begin_turn(1);
@@ -234,10 +239,12 @@ TEST_CASE("Reflection projects the typed result envelope for observability") {
   const auto response = pigpen::agent::reflected_json(execution.response);
 
   CHECK(arguments == nlohmann::json{{"direction", "east"}});
+  CHECK(response.at("ok") == true);
+  CHECK(response.at("action_executed") == true);
+  CHECK(response.at("error_code").is_null());
   CHECK(response.at("error").is_null());
-  CHECK(response.at("result").at("ok") == true);
-  CHECK(response.at("result").at("position") ==
-        nlohmann::json{{"x", 6}, {"y", 5}});
-  CHECK(response.at("result").at("reason").is_null());
+  CHECK(response.at("position") == nlohmann::json{{"x", 6}, {"y", 5}});
+  CHECK(response.at("reason").is_null());
+  CHECK_FALSE(response.contains("result"));
   CHECK(response.at("turn_tool_budget").at("used") == 1);
 }

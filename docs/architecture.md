@@ -32,7 +32,7 @@ serialisation used for determinism tests. Details in [World and tools](world.md)
 |---|---|
 | `config.hpp` | `Config`: endpoint, model, seed, budgets, and the three model-visibility flags shared by both front ends |
 | `prompt.cpp` | builds the system prompt and the per-turn nudge from a `Config` |
-| `tool_contract.hpp` | reflected argument, result, error-envelope, and budget declarations; these C++ types are the model-facing contract |
+| `tool_contract.hpp` | reflected argument and flat response declarations, including status and budget fields; these C++ types are the model-facing contract |
 | `world_tools.cpp` | typed world actions and the explicit per-turn action-budget lifecycle; it contains no JSON parsing or schema code |
 | `reflected_json.hpp` | P2996-based projection of supported values into nlohmann JSON for application observability only |
 | `events.hpp` | `WorldEvent` and the append-only `EventFeed` that the UI, animation, and logger all read |

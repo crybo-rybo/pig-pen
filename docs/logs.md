@@ -46,7 +46,7 @@ layer and therefore do not produce a `tool` record.
 ```json
 {"type":"tool","turn":1,"tick":2,"tool":"look",
  "args":{"direction":"south"},
- "result":{"error":null,"result":{"cells":[{"distance":1,"item":"berry"}],"direction":"south","wall_at_distance":6},"turn_tool_budget":{"used":2,"remaining":2,"instruction":"2 world-tool calls remain in this turn."}},
+ "result":{"action_executed":true,"cells":[{"distance":1,"item":"berry"}],"direction":"south","error":null,"error_code":null,"ok":true,"turn_tool_budget":{"used":2,"remaining":2,"instruction":"2 world-tool calls remain in this turn."},"wall_at_distance":6},
  "before":{"x":5,"y":5},"after":{"x":5,"y":5},"action_executed":true,"score_after":0}
 ```
 

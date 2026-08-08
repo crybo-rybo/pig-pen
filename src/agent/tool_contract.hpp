@@ -32,22 +32,15 @@ enum class ToolFailureCode {
   tool_budget_exhausted,
 };
 
-struct ToolFailure {
-  ToolFailureCode code{};
-  std::string message{};
-};
-
-template <typename Result> struct ToolResponse {
-  std::optional<ToolFailure> error{};
-  std::optional<Result> result{};
-  TurnToolBudget turn_tool_budget{};
-};
-
-struct MoveToolResult {
-  std::optional<world::ItemType> item_here{};
+struct MoveToolResponse {
   bool ok{};
+  bool action_executed{};
+  std::optional<ToolFailureCode> error_code{};
+  std::optional<std::string> error{};
+  std::optional<world::ItemType> item_here{};
   world::Position position{};
   std::optional<world::MoveFailure> reason{};
+  TurnToolBudget turn_tool_budget{};
 };
 
 struct LookToolCell {
@@ -55,23 +48,28 @@ struct LookToolCell {
   std::optional<std::string> item{};
 };
 
-struct LookToolResult {
-  std::vector<LookToolCell> cells{};
+struct LookToolResponse {
+  bool ok{};
+  bool action_executed{};
+  std::optional<ToolFailureCode> error_code{};
+  std::optional<std::string> error{};
   world::Direction direction{};
+  std::vector<LookToolCell> cells{};
   int wall_at_distance{};
+  TurnToolBudget turn_tool_budget{};
 };
 
-struct EatToolResult {
-  std::optional<world::ItemType> ate{};
+struct EatToolResponse {
   bool ok{};
+  bool action_executed{};
+  std::optional<ToolFailureCode> error_code{};
+  std::optional<std::string> error{};
+  std::optional<world::ItemType> ate{};
   std::optional<world::EatFailure> reason{};
   std::optional<int> reward{};
   std::optional<int> score{};
+  TurnToolBudget turn_tool_budget{};
 };
-
-using MoveToolResponse = ToolResponse<MoveToolResult>;
-using LookToolResponse = ToolResponse<LookToolResult>;
-using EatToolResponse = ToolResponse<EatToolResult>;
 
 static_assert(scry::reflection::ToolArguments<DirectionArguments>);
 static_assert(scry::reflection::ToolArguments<EatArguments>);

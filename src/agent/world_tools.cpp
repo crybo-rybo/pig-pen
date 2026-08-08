@@ -25,28 +25,28 @@ WorldTools::move(const DirectionArguments arguments) {
   auto permit = begin_call();
   if (!permit.execute) {
     return {
-        .response = budget_exhausted<MoveToolResult>(std::move(permit.budget)),
+        .response = budget_exhausted(MoveToolResponse{.position = before},
+                                     std::move(permit.budget)),
         .before = before,
         .after = before,
         .direction = arguments.direction,
-        .action_executed = false,
     };
   }
 
   const auto moved = world_.move(arguments.direction);
   return {
-      .response = completed(
-          MoveToolResult{
-              .item_here = moved.item_here,
+      .response =
+          {
               .ok = moved.ok,
+              .action_executed = true,
+              .item_here = moved.item_here,
               .position = moved.position,
               .reason = moved.failure,
+              .turn_tool_budget = std::move(permit.budget),
           },
-          std::move(permit.budget)),
       .before = before,
       .after = world_.position(),
       .direction = arguments.direction,
-      .action_executed = true,
   };
 }
 
@@ -56,11 +56,12 @@ WorldTools::look(const DirectionArguments arguments) {
   auto permit = begin_call();
   if (!permit.execute) {
     return {
-        .response = budget_exhausted<LookToolResult>(std::move(permit.budget)),
+        .response =
+            budget_exhausted(LookToolResponse{.direction = arguments.direction},
+                             std::move(permit.budget)),
         .before = before,
         .after = before,
         .direction = arguments.direction,
-        .action_executed = false,
     };
   }
 
@@ -80,17 +81,18 @@ WorldTools::look(const DirectionArguments arguments) {
   }
 
   return {
-      .response = completed(
-          LookToolResult{
-              .cells = std::move(cells),
+      .response =
+          {
+              .ok = true,
+              .action_executed = true,
               .direction = looked.direction,
+              .cells = std::move(cells),
               .wall_at_distance = looked.wall_at_distance,
+              .turn_tool_budget = std::move(permit.budget),
           },
-          std::move(permit.budget)),
       .before = before,
       .after = world_.position(),
       .direction = arguments.direction,
-      .action_executed = true,
   };
 }
 
@@ -100,29 +102,30 @@ WorldTools::eat(const EatArguments /*arguments*/) {
   auto permit = begin_call();
   if (!permit.execute) {
     return {
-        .response = budget_exhausted<EatToolResult>(std::move(permit.budget)),
+        .response =
+            budget_exhausted(EatToolResponse{}, std::move(permit.budget)),
         .before = before,
         .after = before,
-        .action_executed = false,
     };
   }
 
   const auto eaten = world_.eat();
-  auto result = EatToolResult{
-      .ate = eaten.ate,
+  auto response = EatToolResponse{
       .ok = eaten.ok,
+      .action_executed = true,
+      .ate = eaten.ate,
       .reason = eaten.failure,
+      .turn_tool_budget = std::move(permit.budget),
   };
   if (eaten.ok && config_.reward_feedback) {
-    result.reward = eaten.reward;
-    result.score = eaten.score;
+    response.reward = eaten.reward;
+    response.score = eaten.score;
   }
 
   return {
-      .response = completed(std::move(result), std::move(permit.budget)),
+      .response = std::move(response),
       .before = before,
       .after = world_.position(),
-      .action_executed = true,
       .eaten = eaten.ate,
   };
 }

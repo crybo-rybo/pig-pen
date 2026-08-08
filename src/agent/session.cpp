@@ -187,7 +187,7 @@ std::expected<void, std::string> Session::register_tools() {
               .before = execution.before,
               .after = execution.after,
               .direction = execution.direction,
-              .action_executed = execution.action_executed,
+              .action_executed = execution.response.action_executed,
               .eaten = execution.eaten,
           });
           const auto &event = session->impl_->events.back();

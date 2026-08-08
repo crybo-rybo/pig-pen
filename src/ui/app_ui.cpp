@@ -191,24 +191,18 @@ void draw_item(ImDrawList &draw_list, const world::ItemType item,
       event.arguments.at("direction").is_string()) {
     label += " " + event.arguments.at("direction").get<std::string>();
   }
-  const auto *payload =
-      event.result.contains("result") && event.result.at("result").is_object()
-          ? &event.result.at("result")
-          : nullptr;
-  const auto world_failure = payload != nullptr && payload->contains("ok") &&
-                             payload->at("ok").is_boolean() &&
-                             !payload->at("ok").get<bool>();
+  const auto world_failure = event.result.contains("ok") &&
+                             event.result.at("ok").is_boolean() &&
+                             !event.result.at("ok").get<bool>();
   if (!event.action_executed || world_failure) {
     label += " (failed";
     std::optional<std::string> reason;
-    if (!event.action_executed && event.result.contains("error") &&
-        event.result.at("error").is_object() &&
-        event.result.at("error").contains("code") &&
-        event.result.at("error").at("code").is_string()) {
-      reason = event.result.at("error").at("code").get<std::string>();
-    } else if (world_failure && payload->contains("reason") &&
-               payload->at("reason").is_string()) {
-      reason = payload->at("reason").get<std::string>();
+    if (!event.action_executed && event.result.contains("error_code") &&
+        event.result.at("error_code").is_string()) {
+      reason = event.result.at("error_code").get<std::string>();
+    } else if (world_failure && event.result.contains("reason") &&
+               event.result.at("reason").is_string()) {
+      reason = event.result.at("reason").get<std::string>();
     }
     if (reason) {
       label += ": " + *reason;
@@ -702,14 +696,10 @@ void AppUi::draw_event_log_panel() {
         ImGui::SetTooltip("%s", arguments_full.c_str());
       }
       ImGui::TableSetColumnIndex(4);
-      const auto *payload = event.result.contains("result") &&
-                                    event.result.at("result").is_object()
-                                ? &event.result.at("result")
-                                : nullptr;
       const auto failed =
           !event.action_executed ||
-          (payload != nullptr && payload->contains("ok") &&
-           payload->at("ok").is_boolean() && !payload->at("ok").get<bool>());
+          (event.result.contains("ok") && event.result.at("ok").is_boolean() &&
+           !event.result.at("ok").get<bool>());
       if (failed) {
         ImGui::TextColored({1.0F, 0.58F, 0.35F, 1.0F}, "%s",
                            result_short.c_str());

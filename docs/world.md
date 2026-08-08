@@ -48,12 +48,16 @@ strings. Generated object schemas set `additionalProperties: false`, so extra
 arguments are rejected rather than ignored.
 
 Pig Pen executes at most four world-tool actions per conversation turn. Every
-successfully decoded call returns the same reflected envelope:
+successfully decoded call returns a flat reflected response with common status
+and budget fields plus the tool-specific fields:
 
 ```json
 {
+  "action_executed": true,
   "error": null,
-  "result": {"...": "tool-specific fields"},
+  "error_code": null,
+  "ok": true,
+  "...": "tool-specific fields",
   "turn_tool_budget": {
     "used": 3,
     "remaining": 1,
@@ -64,7 +68,7 @@ successfully decoded call returns the same reflected envelope:
 
 The fourth result tells the model to return its final summary. Further calls
 reach the typed handler and are logged, but do not change the world; they return
-`result: null` plus a `tool_budget_exhausted` error.
+`ok: false`, `action_executed: false`, and a `tool_budget_exhausted` error.
 
 ### `look(direction)`
 
@@ -76,13 +80,14 @@ observed.
 ```
 ```json
 {
+  "action_executed": true,
+  "cells": [{"distance": 1, "item": null}, {"distance": 2, "item": "berry"}],
+  "direction": "north",
   "error": null,
-  "result": {
-    "cells": [{"distance": 1, "item": null}, {"distance": 2, "item": "berry"}],
-    "direction": "north",
-    "wall_at_distance": 5
-  },
-  "turn_tool_budget": {"used": 1, "remaining": 3, "instruction": "3 world-tool calls remain in this turn."}
+  "error_code": null,
+  "ok": true,
+  "turn_tool_budget": {"used": 1, "remaining": 3, "instruction": "3 world-tool calls remain in this turn."},
+  "wall_at_distance": 5
 }
 ```
 
@@ -97,8 +102,13 @@ models most often get wrong.
 
 ```json
 {
+  "action_executed": true,
   "error": null,
-  "result": {"item_here": "apple", "ok": true, "position": {"x": 5, "y": 6}, "reason": null},
+  "error_code": null,
+  "item_here": "apple",
+  "ok": true,
+  "position": {"x": 5, "y": 6},
+  "reason": null,
   "turn_tool_budget": {"used": 1, "remaining": 3, "instruction": "3 world-tool calls remain in this turn."}
 }
 ```
@@ -107,8 +117,13 @@ Walking into a wall is a normal, recoverable outcome, not an error:
 
 ```json
 {
+  "action_executed": true,
   "error": null,
-  "result": {"item_here": null, "ok": false, "position": {"x": 5, "y": 9}, "reason": "wall"},
+  "error_code": null,
+  "item_here": null,
+  "ok": false,
+  "position": {"x": 5, "y": 9},
+  "reason": "wall",
   "turn_tool_budget": {"used": 1, "remaining": 3, "instruction": "3 world-tool calls remain in this turn."}
 }
 ```
@@ -120,15 +135,27 @@ cell and applies its reward to the score.
 
 ```json
 {
+  "action_executed": true,
+  "ate": "truffle",
   "error": null,
-  "result": {"ate": "truffle", "ok": true, "reason": null, "reward": 10, "score": 11},
+  "error_code": null,
+  "ok": true,
+  "reason": null,
+  "reward": 10,
+  "score": 11,
   "turn_tool_budget": {"used": 1, "remaining": 3, "instruction": "3 world-tool calls remain in this turn."}
 }
 ```
 ```json
 {
+  "action_executed": true,
+  "ate": null,
   "error": null,
-  "result": {"ate": null, "ok": false, "reason": "nothing_here", "reward": null, "score": null},
+  "error_code": null,
+  "ok": false,
+  "reason": "nothing_here",
+  "reward": null,
+  "score": null,
   "turn_tool_budget": {"used": 1, "remaining": 3, "instruction": "3 world-tool calls remain in this turn."}
 }
 ```
@@ -141,15 +168,17 @@ enter `WorldTools`, consume Pig Pen's action budget, or create a decoded world
 event.
 
 A successfully decoded call beyond the per-turn action limit does reach
-`WorldTools` and returns the normal typed envelope without executing an action:
+`WorldTools` and returns a flat typed failure without executing an action:
 
 ```json
 {
-  "error": {
-    "code": "tool_budget_exhausted",
-    "message": "No action was executed because this turn's world-tool call budget is exhausted."
-  },
-  "result": null,
+  "action_executed": false,
+  "error": "No action was executed because this turn's world-tool call budget is exhausted.",
+  "error_code": "tool_budget_exhausted",
+  "item_here": null,
+  "ok": false,
+  "position": {"x": 5, "y": 5},
+  "reason": null,
   "turn_tool_budget": {
     "used": 4,
     "remaining": 0,
@@ -170,7 +199,7 @@ The world, the score, and the log always record the truth.
 | flag | CLI | effect |
 |---|---|---|
 | `known_item_values` | `--hidden-values` turns it off | on: the system prompt lists the full reward table. Off: it says values are hidden and must be inferred from tool feedback. |
-| `reward_feedback` | `--no-reward-feedback` turns it off | on: a successful `eat` returns numeric `reward` and `score`. Off: those fixed envelope fields are `null`. |
+| `reward_feedback` | `--no-reward-feedback` turns it off | on: a successful `eat` returns numeric `reward` and `score`. Off: those fixed response fields are `null`. |
 | `opaque_look` | `--opaque-look` turns it on | on: `look` reports an occupied cell as `"something"` instead of naming the item. |
 
 The system prompt is assembled in `src/agent/prompt.cpp` and describes the

@@ -430,7 +430,7 @@ def assert_reflected_tools(request: ProviderRequest) -> None:
         )
 
 
-def extract_tool_envelope(request: ProviderRequest) -> dict[str, Any]:
+def extract_tool_response(request: ProviderRequest) -> dict[str, Any]:
     check(
         request.path == "/v1/chat/completions",
         f"unexpected follow-up endpoint: {request.path}",
@@ -455,41 +455,53 @@ def extract_tool_envelope(request: ProviderRequest) -> dict[str, Any]:
     check(
         isinstance(content, str), f"tool result content is not JSON text: {content!r}"
     )
-    envelope = json.loads(content)
-    check(isinstance(envelope, dict), f"tool result is not an object: {envelope!r}")
+    response = json.loads(content)
+    check(isinstance(response, dict), f"tool result is not an object: {response!r}")
 
     check(
-        set(envelope) == {"error", "result", "turn_tool_budget"},
-        f"tool result is not the fixed typed envelope: {envelope!r}",
+        set(response)
+        == {
+            "ok",
+            "action_executed",
+            "error_code",
+            "error",
+            "item_here",
+            "position",
+            "reason",
+            "turn_tool_budget",
+        },
+        f"tool result is not the flat typed response: {response!r}",
     )
-    check(envelope["error"] is None, f"move unexpectedly failed: {envelope!r}")
-    result = envelope["result"]
-    check(isinstance(result, dict), f"move result is not an object: {result!r}")
+    check(response["ok"] is True, f"east move was not successful: {response!r}")
     check(
-        set(result) == {"item_here", "ok", "position", "reason"},
-        f"move result has the wrong reflected shape: {result!r}",
+        response["action_executed"] is True,
+        f"east move was not executed: {response!r}",
     )
-    check(result["ok"] is True, f"east move was not successful: {result!r}")
+    check(response["error_code"] is None, f"move has an error code: {response!r}")
+    check(response["error"] is None, f"move unexpectedly failed: {response!r}")
     check(
-        result["position"] == {"x": 6, "y": 5},
-        f"east move reached the wrong position: {result!r}",
-    )
-    check(result["reason"] is None, f"successful move has a reason: {result!r}")
-    check(
-        result["item_here"] is None
-        or result["item_here"] in {"berry", "apple", "truffle", "toadstool"},
-        f"move returned an invalid reflected item enum: {result!r}",
+        response["position"] == {"x": 6, "y": 5},
+        f"east move reached the wrong position: {response!r}",
     )
     check(
-        envelope["turn_tool_budget"]
+        response["reason"] is None,
+        f"successful move has a reason: {response!r}",
+    )
+    check(
+        response["item_here"] is None
+        or response["item_here"] in {"berry", "apple", "truffle", "toadstool"},
+        f"move returned an invalid reflected item enum: {response!r}",
+    )
+    check(
+        response["turn_tool_budget"]
         == {
             "used": 1,
             "remaining": 3,
             "instruction": "3 world-tool calls remain in this turn.",
         },
-        f"unexpected typed turn budget: {envelope['turn_tool_budget']!r}",
+        f"unexpected typed turn budget: {response['turn_tool_budget']!r}",
     )
-    return envelope
+    return response
 
 
 def assert_reflection_rejection(request: ProviderRequest) -> None:
@@ -551,7 +563,7 @@ def assert_reflection_rejection(request: ProviderRequest) -> None:
 
 
 def assert_valid_jsonl_log(
-    records: list[dict[str, Any]], envelope: dict[str, Any], base_url: str
+    records: list[dict[str, Any]], response: dict[str, Any], base_url: str
 ) -> None:
     tool_records = [record for record in records if record.get("type") == "tool"]
     check(len(tool_records) == 1, f"expected one tool log record: {records!r}")
@@ -564,7 +576,7 @@ def assert_valid_jsonl_log(
         f"reflected arguments were not logged: {tool!r}",
     )
     check(
-        tool.get("result") == envelope,
+        tool.get("result") == response,
         f"logged result differs from provider tool result: {tool!r}",
     )
     check(tool.get("before") == {"x": 5, "y": 5}, f"wrong before: {tool!r}")
@@ -674,8 +686,8 @@ def main() -> int:
         f"expected two valid provider requests, got {len(valid.requests)}",
     )
     assert_reflected_tools(valid.requests[0])
-    envelope = extract_tool_envelope(valid.requests[1])
-    assert_valid_jsonl_log(valid.records, envelope, valid.base_url)
+    response = extract_tool_response(valid.requests[1])
+    assert_valid_jsonl_log(valid.records, response, valid.base_url)
     check(
         FINAL_TEXT in valid.completed.stdout,
         f"valid final text was not printed: {valid.completed.stdout}",

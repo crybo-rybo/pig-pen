@@ -17,7 +17,6 @@ template <typename Response> struct ToolExecution {
   world::Position before{};
   world::Position after{};
   std::optional<world::Direction> direction{};
-  bool action_executed{};
   std::optional<world::ItemType> eaten{};
 };
 
@@ -46,30 +45,17 @@ private:
   [[nodiscard]] CallPermit begin_call();
   [[nodiscard]] static TurnToolBudget make_budget(std::size_t used);
 
-  template <typename Result>
-  [[nodiscard]] static ToolResponse<Result> completed(Result result,
-                                                      TurnToolBudget budget) {
-    return {
-        .error = std::nullopt,
-        .result = std::move(result),
-        .turn_tool_budget = std::move(budget),
-    };
-  }
-
-  template <typename Result>
-  [[nodiscard]] static ToolResponse<Result>
-  budget_exhausted(TurnToolBudget budget) {
-    return {
-        .error =
-            ToolFailure{
-                .code = ToolFailureCode::tool_budget_exhausted,
-                .message =
-                    "No action was executed because this turn's world-tool "
-                    "call budget is exhausted.",
-            },
-        .result = std::nullopt,
-        .turn_tool_budget = std::move(budget),
-    };
+  template <typename Response>
+  [[nodiscard]] static Response budget_exhausted(Response response,
+                                                 TurnToolBudget budget) {
+    response.ok = false;
+    response.action_executed = false;
+    response.error_code = ToolFailureCode::tool_budget_exhausted;
+    response.error =
+        "No action was executed because this turn's world-tool call budget "
+        "is exhausted.";
+    response.turn_tool_budget = std::move(budget);
+    return response;
   }
 
   world::World &world_;
