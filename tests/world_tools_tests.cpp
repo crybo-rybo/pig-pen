@@ -1,13 +1,14 @@
-#include "agent/reflected_json.hpp"
-#include "agent/tool_contract.hpp"
 #include "agent/world_tools.hpp"
 
+#include "agent/reflected_json.hpp"
+#include "agent/tool_contract.hpp"
+
 #include <catch2/catch_test_macros.hpp>
+#include <nlohmann/json.hpp>
+#include <scry/reflection.hpp>
 
 #include <cstddef>
 #include <cstdint>
-#include <nlohmann/json.hpp>
-#include <scry/reflection.hpp>
 #include <stdexcept>
 #include <string>
 

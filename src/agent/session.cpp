@@ -6,14 +6,15 @@
 #include "agent/scry_transport.hpp"
 #include "agent/world_tools.hpp"
 
+#include <scry/reflection.hpp>
+#include <scry/scry.hpp>
+
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <functional>
 #include <memory>
 #include <optional>
-#include <scry/reflection.hpp>
-#include <scry/scry.hpp>
 #include <string_view>
 #include <type_traits>
 #include <utility>

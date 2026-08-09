@@ -2,14 +2,15 @@
 
 #include "agent/tool_contract.hpp"
 
+#include <nlohmann/json.hpp>
+#include <scry/reflection.hpp>
+
 #include <array>
 #include <cmath>
 #include <concepts>
 #include <cstddef>
 #include <meta>
-#include <nlohmann/json.hpp>
 #include <optional>
-#include <scry/reflection.hpp>
 #include <stdexcept>
 #include <string>
 #include <type_traits>

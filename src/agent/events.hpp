@@ -2,9 +2,10 @@
 
 #include "world/world.hpp"
 
+#include <nlohmann/json.hpp>
+
 #include <cstddef>
 #include <cstdint>
-#include <nlohmann/json.hpp>
 #include <optional>
 #include <string>
 #include <vector>

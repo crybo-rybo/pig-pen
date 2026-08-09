@@ -1,9 +1,10 @@
 #pragma once
 
-#include "turn_transport.hpp"
+#include "agent/turn_transport.hpp"
+
+#include <scry/scry.hpp>
 
 #include <memory>
-#include <scry/scry.hpp>
 
 namespace pigpen::agent {
 

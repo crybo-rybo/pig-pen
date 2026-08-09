@@ -2,9 +2,10 @@
 
 #include "world/world.hpp"
 
+#include <scry/reflection.hpp>
+
 #include <cstddef>
 #include <optional>
-#include <scry/reflection.hpp>
 #include <string>
 #include <vector>
 

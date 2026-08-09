@@ -18,8 +18,7 @@ TEST_CASE("GUI options populate startup configuration and reject bad input") {
                             "--base-url"sv, "http://model-host.test/v1"sv};
   const auto parsed_separate = pigpen::ui::parse_gui_options(separate);
   REQUIRE(parsed_separate.has_value());
-  CHECK(parsed_separate->config.model ==
-        "registry.example/pig-model:Q4_K_M");
+  CHECK(parsed_separate->config.model == "registry.example/pig-model:Q4_K_M");
   CHECK(parsed_separate->config.base_url == "http://model-host.test/v1");
   CHECK_FALSE(parsed_separate->help);
 
