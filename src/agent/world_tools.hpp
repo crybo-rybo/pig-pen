@@ -1,3 +1,8 @@
+/// @file world_tools.hpp
+/// @brief Typed world actions and the per-turn action-budget lifecycle.
+///
+/// No JSON or schema code lives here: scry's reflection layer decodes tool
+/// arguments, invokes these typed handlers, and encodes their responses.
 #pragma once
 
 #include "agent/config.hpp"
@@ -10,6 +15,9 @@
 
 namespace pigpen::agent {
 
+/// @brief A tool's typed response plus the facts the application observes:
+/// before/after positions, direction, and any eaten item feed the event
+/// log, animation, and metrics without re-deriving them from the response.
 template <typename Response> struct ToolExecution {
   using response_type = Response;
 
@@ -20,23 +28,37 @@ template <typename Response> struct ToolExecution {
   std::optional<world::ItemType> eaten{};
 };
 
-/// Typed application layer behind the reflected model-tool boundary.
+/// @brief Typed application layer behind the reflected model-tool boundary.
 ///
-/// Scry owns JSON Schema generation and strict argument marshalling. This class
-/// owns only world semantics and Pig Pen's per-turn action budget.
+/// Scry owns JSON Schema generation and strict argument marshalling. This
+/// class owns only world semantics and Pig Pen's per-turn action budget: a
+/// call beyond max_world_tool_calls_per_turn still returns a well-formed
+/// response, but with action_executed == false and the world untouched.
 class WorldTools final {
 public:
   explicit WorldTools(world::World &world, Config config = {});
 
+  /// @brief Open the budget window for @p turn; advancing the turn resets
+  /// the per-turn call counter.
+  /// @note Throws std::logic_error when @p turn moves backwards — turns
+  /// must be monotonic.
   void begin_turn(std::size_t turn);
 
+  /// @brief Step one cell in a direction, budget permitting.
   [[nodiscard]] ToolExecution<MoveToolResponse>
   move(DirectionArguments arguments);
+  /// @brief Scan every cell to the wall in a direction, budget permitting.
+  /// @note With Config::opaque_look, occupied cells report "something"
+  /// instead of the item name.
   [[nodiscard]] ToolExecution<LookToolResponse>
   look(DirectionArguments arguments);
+  /// @brief Consume the item underfoot, budget permitting.
+  /// @note Reward and score are omitted when Config::reward_feedback is
+  /// off; the world still scores truthfully.
   [[nodiscard]] ToolExecution<EatToolResponse> eat(EatArguments arguments);
 
 private:
+  /// @brief Outcome of charging the budget for one call.
   struct CallPermit {
     bool execute{};
     TurnToolBudget budget{};
@@ -45,6 +67,7 @@ private:
   [[nodiscard]] CallPermit begin_call();
   [[nodiscard]] static TurnToolBudget make_budget(std::size_t used);
 
+  /// @brief Shape @p response into the fixed budget-exhausted envelope.
   template <typename Response>
   [[nodiscard]] static Response budget_exhausted(Response response,
                                                  TurnToolBudget budget) {

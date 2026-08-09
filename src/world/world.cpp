@@ -1,3 +1,6 @@
+/// @file world.cpp
+/// @brief Seeded item placement, the three world actions, and the canonical
+/// state dump.
 #include "world/world.hpp"
 
 #include <algorithm>
@@ -12,6 +15,7 @@
 namespace pigpen::world {
 namespace {
 
+/// @brief The neighbouring position one cell away, ignoring bounds.
 [[nodiscard]] Position step(const Position position,
                             const Direction direction) noexcept {
   switch (direction) {
@@ -27,14 +31,17 @@ namespace {
   return position;
 }
 
+/// @brief City-block distance used to keep the truffle away from spawn.
 [[nodiscard]] int manhattan_distance(const Position lhs,
                                      const Position rhs) noexcept {
   return std::abs(lhs.x - rhs.x) + std::abs(lhs.y - rhs.y);
 }
 
-// std::uniform_int_distribution does not promise the same mapping on every
-// standard library. Keeping the bounded draw here makes a seed portable across
-// supported compilers and still avoids modulo bias.
+/// @brief Uniform draw in [0, bound) by rejection sampling.
+///
+/// std::uniform_int_distribution does not promise the same mapping on every
+/// standard library. Keeping the bounded draw here makes a seed portable
+/// across supported compilers and still avoids modulo bias.
 [[nodiscard]] std::size_t bounded_index(std::mt19937_64 &engine,
                                         const std::size_t bound) {
   const auto unsigned_bound = static_cast<std::uint64_t>(bound);
@@ -48,6 +55,7 @@ namespace {
   }
 }
 
+/// @brief Removes and returns a uniformly chosen candidate cell.
 [[nodiscard]] Position take_random(std::vector<Position> &candidates,
                                    std::mt19937_64 &engine) {
   const auto selected = bounded_index(engine, candidates.size());
@@ -56,6 +64,8 @@ namespace {
   return position;
 }
 
+/// @brief One-character cell glyph for dump(): '.' empty, item initial, or
+/// 'x' for a toadstool.
 [[nodiscard]] char item_glyph(const std::optional<ItemType> item) noexcept {
   if (!item) {
     return '.';

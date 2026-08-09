@@ -1,3 +1,6 @@
+/// @file session.cpp
+/// @brief Session implementation: config validation, composition, and
+/// reflection-based tool registration; the contract is in the header.
 #include "agent/session.hpp"
 
 #include "agent/metrics_writer.hpp"
@@ -22,11 +25,14 @@
 namespace pigpen::agent {
 namespace {
 
+/// @brief Read an environment variable; missing means empty.
 [[nodiscard]] std::string environment(const char *name) {
   const auto *value = std::getenv(name);
   return value == nullptr ? std::string{} : std::string{value};
 }
 
+/// @brief Build the scry harness from a validated Config, with
+/// PIGPEN_API_KEY from the environment as the credential.
 [[nodiscard]] scry::Result<scry::Harness> create_harness(const Config &config) {
   return scry::Harness::create({
       .base_url = config.base_url,

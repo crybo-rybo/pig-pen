@@ -1,3 +1,12 @@
+/// @file episode_runner_tests.cpp
+/// @brief Covers the turn loop: budget exhaustion, pause/resume, stop
+/// cancelling an in-flight turn, objective completion, terminal errors, and
+/// queued human guidance.
+///
+/// The runner is driven through a scripted ITurnTransport, so the whole state
+/// machine — including cancellation ordering — is exercised without a model
+/// or network.
+
 #include "agent/episode_runner.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -10,6 +19,11 @@
 
 namespace {
 
+/// @brief Scripted ITurnTransport that records sends and lets each test
+/// deliver deltas and the terminal callback at the exact moment under test.
+///
+/// send() only admits the turn; nothing completes until the test calls
+/// delta()/complete(), which is what makes in-flight cancellation testable.
 class FakeTransport final : public pigpen::agent::ITurnTransport {
 public:
   std::expected<void, std::string>

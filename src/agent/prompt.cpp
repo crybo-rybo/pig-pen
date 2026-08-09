@@ -1,3 +1,5 @@
+/// @file prompt.cpp
+/// @brief Assembles the system prompt and per-turn nudge text from a Config.
 #include "agent/prompt.hpp"
 
 #include "world/world.hpp"
@@ -7,6 +9,8 @@
 namespace pigpen::agent {
 namespace {
 
+/// @brief Appends the scenario-flag wording; each Config visibility flag has
+/// exactly one honest sentence per state, which prompt_tests.cpp asserts on.
 void append_experiment_instructions(std::string &prompt, const Config &config) {
   if (config.known_item_values) {
     prompt += "Item values are known: berry = +1, apple = +3, truffle = +10, "

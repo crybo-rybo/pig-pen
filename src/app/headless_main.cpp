@@ -1,3 +1,9 @@
+/// @file headless_main.cpp
+/// @brief CLI entry point: run one bounded episode and exit.
+///
+/// Everything here is argv parsing, SIGINT/SIGTERM handling, incremental
+/// printing of the transcript and event feed, and the exit-code policy from
+/// docs/running.md. Episode behavior itself lives in agent::Session.
 #include "agent/episode_runner.hpp"
 #include "agent/session.hpp"
 
@@ -30,25 +36,30 @@ constexpr int metrics_error_exit = 4;
 constexpr int no_tools_exit = 5;
 constexpr int signal_exit_base = 128;
 
-// A signal handler may not call into Session, iostreams, allocation, or the
-// runtime. Assignment to volatile sig_atomic_t is the only work performed in
-// signal context; ordinary main-loop code observes it and initiates the
-// cooperative cancellation.
+/// A signal handler may not call into Session, iostreams, allocation, or the
+/// runtime. Assignment to volatile sig_atomic_t is the only work performed in
+/// signal context; ordinary main-loop code observes it and initiates the
+/// cooperative cancellation.
 volatile std::sig_atomic_t requested_termination_signal = 0;
 
+/// @brief The SIGINT/SIGTERM handler; records the signal number, nothing
+/// else.
 extern "C" void request_termination(const int signal_number) noexcept {
   requested_termination_signal = signal_number;
 }
 
+/// @brief Routes SIGINT and SIGTERM to request_termination().
 [[nodiscard]] bool install_signal_handlers() noexcept {
   return std::signal(SIGINT, request_termination) != SIG_ERR &&
          std::signal(SIGTERM, request_termination) != SIG_ERR;
 }
 
+/// @brief Signal observed so far, or 0; polled by the pump loop.
 [[nodiscard]] int pending_termination_signal() noexcept {
   return static_cast<int>(requested_termination_signal);
 }
 
+/// @brief The full parsed command line.
 struct Options {
   pigpen::agent::Config config{};
   std::filesystem::path log_directory{"logs"};
@@ -58,6 +69,8 @@ struct Options {
   bool help{};
 };
 
+/// @brief How much of the transcript and event feed has been printed, so
+/// each pump iteration emits only what is new.
 struct OutputCursor {
   std::vector<std::size_t> transcript_offsets{};
   std::vector<bool> transcript_announced{};
@@ -103,6 +116,8 @@ void print_usage(std::ostream &output, const std::string_view program) {
          "log finalization.\n";
 }
 
+/// @brief Parses a sampling temperature, rejecting non-finite values and
+/// anything outside 0.0..2.0.
 [[nodiscard]] std::expected<double, std::string>
 parse_temperature(const std::string_view value) {
   double parsed{};
@@ -118,6 +133,8 @@ parse_temperature(const std::string_view value) {
   return parsed;
 }
 
+/// @brief Parses a full-string unsigned decimal for @p option, capped at
+/// @p maximum; leading signs are rejected rather than wrapped.
 template <typename Integer>
 [[nodiscard]] std::expected<Integer, std::string>
 parse_unsigned(const std::string_view value, const std::string_view option,
@@ -141,6 +158,9 @@ parse_unsigned(const std::string_view value, const std::string_view option,
   return static_cast<Integer>(parsed);
 }
 
+/// @brief Parses the whole command line, accepting `--option value` and
+/// `--option=value`; validation errors exit 2 in main().
+/// @note `--help` short-circuits validation so it works with no other flags.
 [[nodiscard]] std::expected<Options, std::string> parse_options(const int argc,
                                                                 char **argv) {
   Options options;
@@ -324,6 +344,9 @@ transcript_role_name(const pigpen::agent::TranscriptRole role) noexcept {
   return "unknown";
 }
 
+/// @brief Prints transcript and event-feed entries added since the last
+/// call: assistant text streams as per-chunk lines, other roles print once
+/// complete, and each decoded tool call gets one line.
 void print_updates(const pigpen::agent::Session &session,
                    OutputCursor &cursor) {
   const auto &transcript = session.runner().transcript();
@@ -373,6 +396,9 @@ void print_updates(const pigpen::agent::Session &session,
   std::cout.flush();
 }
 
+/// @brief Creates the session, pumps it until the episode finishes — honoring
+/// signals and the wall-clock timeout via cooperative cancellation so the
+/// JSONL footer is still written — and maps the outcome to an exit code.
 [[nodiscard]] int run(const Options &options) {
   auto created = pigpen::agent::Session::create(
       options.config, options.log_directory, options.prompt_variant);

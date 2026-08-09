@@ -1,3 +1,9 @@
+/// @file main.cpp
+/// @brief GUI entry point: GLFW/OpenGL/ImGui setup and the frame loop.
+///
+/// Nothing application-specific lives here — panels, controls, and session
+/// ownership belong to ui::AppUi, which this loop pumps and draws once per
+/// frame.
 #include "ui/app_ui.hpp"
 #include "ui/gui_options.hpp"
 

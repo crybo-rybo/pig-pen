@@ -1,4 +1,6 @@
-#include "scry_transport.hpp"
+/// @file scry_transport.cpp
+/// @brief ScryTurnTransport implementation; the contract is in the header.
+#include "agent/scry_transport.hpp"
 
 #include <optional>
 #include <utility>
@@ -6,6 +8,8 @@
 namespace pigpen::agent {
 namespace {
 
+/// @brief Map a scry finish reason to an error message; empty means the
+/// turn completed normally.
 [[nodiscard]] std::string finish_reason_error(const scry::FinishReason reason) {
   switch (reason) {
   case scry::FinishReason::completed:

@@ -1,3 +1,11 @@
+/// @file world_tools_tests.cpp
+/// @brief Covers the reflected tool boundary: compile-time input schemas,
+/// typed result envelopes, the explicit begin_turn/budget lifecycle, and the
+/// opaque_look / reward_feedback visibility toggles.
+///
+/// WorldTools accepts and returns only reflected C++ values, so everything
+/// here runs without JSON parsing, a scry registry, or a model.
+
 #include "agent/world_tools.hpp"
 
 #include "agent/reflected_json.hpp"
@@ -23,6 +31,8 @@ using pigpen::world::Direction;
 using pigpen::world::Position;
 using pigpen::world::World;
 
+/// @brief Walks the blob to @p destination one legal step at a time,
+/// asserting every intermediate move succeeds.
 void move_to(World &world, const Position destination) {
   while (world.position().x < destination.x) {
     REQUIRE(world.move(Direction::east).ok);
@@ -38,11 +48,14 @@ void move_to(World &world, const Position destination) {
   }
 }
 
+/// @brief A cell adjacent to an item plus the direction that looks at it.
 struct ItemViewpoint {
   Position position{};
   Direction direction{};
 };
 
+/// @brief Picks an in-bounds cell next to @p item from which a single look
+/// puts the item in the ray's first cell.
 [[nodiscard]] ItemViewpoint viewpoint_for(const Position item) {
   if (item.x > 0) {
     return {

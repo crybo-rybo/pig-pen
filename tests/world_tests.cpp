@@ -1,3 +1,10 @@
+/// @file world_tests.cpp
+/// @brief Covers the pen contract: constants, seeded placement, movement and
+/// wall failures, look rays, eating and scoring, and seed determinism.
+///
+/// World is a pure value type, so every case runs on direct calls — no JSON,
+/// registry, or transport. Determinism is asserted via World::dump().
+
 #include "world/world.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -33,6 +40,8 @@ count_item(const std::vector<ItemPlacement> &placements, const ItemType item) {
                     [item](const auto &value) { return value.item == item; }));
 }
 
+/// @brief Locates the first placement of @p item, failing the test if the
+/// seed produced none.
 [[nodiscard]] Position find_item(const std::vector<ItemPlacement> &placements,
                                  const ItemType item) {
   const auto found =
@@ -42,6 +51,8 @@ count_item(const std::vector<ItemPlacement> &placements, const ItemType item) {
   return found->position;
 }
 
+/// @brief Walks the blob to @p destination one legal step at a time,
+/// asserting every intermediate move succeeds.
 void move_to(World &world, const Position destination) {
   while (world.position().x < destination.x) {
     REQUIRE(world.move(Direction::east).ok);

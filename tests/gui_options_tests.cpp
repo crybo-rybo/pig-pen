@@ -1,3 +1,8 @@
+/// @file gui_options_tests.cpp
+/// @brief Covers GUI startup argument parsing: model and endpoint in both
+/// value syntaxes, --help, and rejection of empty, unknown, or positional
+/// input.
+
 #include "ui/gui_options.hpp"
 
 #include <catch2/catch_test_macros.hpp>

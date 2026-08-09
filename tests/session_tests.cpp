@@ -1,3 +1,10 @@
+/// @file session_tests.cpp
+/// @brief Covers config rejection and that a session atomically owns a seeded
+/// world, a registered tool harness, and an already-open truthful log.
+///
+/// Session is the reset unit: creation either yields the whole composed
+/// object or fails without side effects (no directory, no log file).
+
 #include "agent/session.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -11,6 +18,8 @@
 
 namespace {
 
+/// @brief Yields a unique temp-directory path per invocation so concurrent
+/// test runs never share a log directory.
 [[nodiscard]] std::filesystem::path session_test_directory() {
   const auto stamp =
       std::chrono::steady_clock::now().time_since_epoch().count();

@@ -1,3 +1,5 @@
+/// @file gui_options.hpp
+/// @brief Command-line parsing for the GUI entry point.
 #pragma once
 
 #include "agent/config.hpp"
@@ -9,11 +11,20 @@
 
 namespace pigpen::ui {
 
+/// @brief Result of parsing the GUI command line.
 struct GuiOptions {
+  /// Config seeded with any `--model` / `--base-url` values; other fields
+  /// keep their defaults and are edited in the Controls panel.
   agent::Config config{};
+  /// `--help` was requested; the caller prints usage and exits 0.
   bool help{};
 };
 
+/// @brief Parses `--model`, `--base-url`, and `--help` from @p arguments,
+/// accepting both `--option value` and `--option=value` forms.
+/// @return Parsed options, or a human-readable error for the caller to print.
+/// @note Length caps on the values mirror the fixed-size ImGui input buffers
+/// in AppUi, so an accepted value always fits the widgets.
 [[nodiscard]] std::expected<GuiOptions, std::string>
 parse_gui_options(std::span<const std::string_view> arguments);
 
