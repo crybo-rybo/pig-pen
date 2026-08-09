@@ -9,7 +9,7 @@ jobs:
   format-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       # Pinned to the version .clang-format documents; a different major
       # version can format differently and fail the check spuriously.
       - name: Install pinned formatters
