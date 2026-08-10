@@ -31,13 +31,13 @@ model names; the value is forwarded directly to the configured server:
 ```
 
 It prints the session settings and log path up front, streams the assistant
-text as it arrives, prints one line per decoded world-tool call with the before
-→ after position, and ends with a summary:
+text as it arrives, prints one line per decoded world-tool call with its
+truthful outcome and score, and ends with a summary:
 
 ```
 session model="llama3.1:8b-instruct-q4_K_M" base_url="http://127.0.0.1:11434/v1" seed=42 turns=4 max_tool_rounds=8 max_world_tool_calls_per_turn=4 max_output_tokens=8096 temperature=0
 log_path="logs/20260807-101500-123-llama3.1_8b-instruct-q4_K_M-42.jsonl"
-tool[turn=1,tick=1] look args={"direction":"north"} result={"action_executed":true,"cells":[...],"direction":"north","error":null,"error_code":null,"ok":true,"turn_tool_budget":{...},"wall_at_distance":5} position=(5,5)->(5,5)
+tool[turn=1,tick=1] look north: 1 occupied of 4 cells, wall at distance 5 [outcome=succeeded, score=0]
 assistant[turn=1]: I
 assistant[turn=1]:  scanned
 assistant[turn=1]:  north

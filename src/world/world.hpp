@@ -45,6 +45,17 @@ enum class ItemType : std::uint8_t {
   toadstool,
 };
 
+/// @brief Number of ItemType enumerators, for counter arrays.
+inline constexpr std::size_t item_type_count{4};
+static_assert(static_cast<std::size_t>(ItemType::toadstool) + 1U ==
+                  item_type_count,
+              "item_type_count must track the ItemType enumerators");
+
+/// @brief Canonical lowercase name of a direction, matching the enumerator
+/// spelling the model sends and receives.
+[[nodiscard]] constexpr std::string_view
+direction_name(Direction direction) noexcept;
+
 /// @brief Canonical lowercase name of an item, as shown to the model.
 [[nodiscard]] constexpr std::string_view item_name(ItemType item) noexcept;
 /// @brief Score delta for eating an item (toadstools are negative).
@@ -201,8 +212,22 @@ private:
   int score_{};
   std::array<std::optional<ItemType>, cell_count> items_{};
   std::bitset<cell_count> observed_{};
-  std::array<std::size_t, 4> eaten_counts_{};
+  std::array<std::size_t, item_type_count> eaten_counts_{};
 };
+
+constexpr std::string_view direction_name(const Direction direction) noexcept {
+  switch (direction) {
+  case Direction::north:
+    return "north";
+  case Direction::south:
+    return "south";
+  case Direction::east:
+    return "east";
+  case Direction::west:
+    return "west";
+  }
+  return "unknown";
+}
 
 constexpr std::string_view item_name(const ItemType item) noexcept {
   switch (item) {

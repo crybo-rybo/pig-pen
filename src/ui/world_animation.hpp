@@ -1,5 +1,6 @@
 /// @file world_animation.hpp
-/// @brief Converts the world event feed into a played-back visual timeline.
+/// @brief Converts the tool-activity journal into a played-back visual
+/// timeline.
 ///
 /// A turn can produce a burst of tool calls at once; this state machine
 /// replays them one timed step at a time so the burst reads as a sequence
@@ -8,12 +9,13 @@
 /// drive it directly.
 #pragma once
 
-#include "agent/events.hpp"
+#include "agent/tool_activity.hpp"
 #include "world/world.hpp"
 
 #include <cstddef>
 #include <deque>
 #include <optional>
+#include <span>
 
 namespace pigpen::ui {
 
@@ -39,7 +41,7 @@ struct VisualEffect {
   float progress{};
 };
 
-/// @brief Converts the append-only world event feed into a deterministic
+/// @brief Converts the append-only activity history into a deterministic
 /// visual timeline.
 ///
 /// Time is supplied by the caller so the state can be tested without a
@@ -47,19 +49,21 @@ struct VisualEffect {
 class WorldAnimationState final {
 public:
   /// @brief Drops all queued steps and snaps the blob to @p position.
-  /// @param event_cursor Feed index to resume consuming from; pass the feed
-  /// size when adopting a fresh session so old events are not replayed.
-  void reset(world::Position position, std::size_t event_cursor = 0U) noexcept;
+  /// @param activity_cursor History index to resume consuming from; pass
+  /// the history size when adopting a fresh session so old activities are
+  /// not replayed.
+  void reset(world::Position position,
+             std::size_t activity_cursor = 0U) noexcept;
 
   /// @brief Sets the playback speed multiplier, clamped to a sane range.
   void set_speed(float speed) noexcept;
 
-  /// @brief Consumes new events and advances the active step.
+  /// @brief Consumes new activities and advances the active step.
   /// @param world_position Authoritative blob position, adopted once the
   /// queue drains so animation can never drift from the simulation.
   /// @param now_seconds Caller-supplied monotonic time.
-  void update(const agent::EventFeed &events, world::Position world_position,
-              double now_seconds);
+  void update(std::span<const agent::ToolActivity> activities,
+              world::Position world_position, double now_seconds);
 
   /// @brief Where to draw the blob this frame.
   [[nodiscard]] AnimatedPosition blob_position() const noexcept;
@@ -69,27 +73,21 @@ public:
   [[nodiscard]] std::size_t queued_action_count() const noexcept;
 
 private:
-  enum class StepKind {
-    move,
-    look,
-    eat,
-  };
-
   struct Step {
-    StepKind kind{StepKind::move};
+    agent::ToolKind kind{agent::ToolKind::move};
     world::Position before{};
     world::Position after{};
     std::optional<world::Direction> direction{};
   };
 
-  void enqueue(const agent::WorldEvent &event);
+  void enqueue(const agent::ToolActivity &activity);
   void start_next(double start_seconds);
   [[nodiscard]] double active_duration() const noexcept;
   [[nodiscard]] float active_progress() const noexcept;
 
   std::deque<Step> pending_{};
   std::optional<Step> active_{};
-  std::size_t event_cursor_{};
+  std::size_t activity_cursor_{};
   double active_started_{};
   double last_update_{};
   float speed_{1.0F};

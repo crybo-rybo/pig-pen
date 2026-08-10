@@ -2,8 +2,8 @@
 /// @brief CLI entry point: run one bounded episode and exit.
 ///
 /// Everything here is argv parsing, SIGINT/SIGTERM handling, incremental
-/// printing of the transcript and event feed, and the exit-code policy from
-/// docs/running.md. Episode behavior itself lives in agent::Session.
+/// printing of the transcript and activity journal, and the exit-code policy
+/// from docs/running.md. Episode behavior itself lives in agent::Session.
 #include "agent/episode_runner.hpp"
 #include "agent/session.hpp"
 
@@ -69,12 +69,12 @@ struct Options {
   bool help{};
 };
 
-/// @brief How much of the transcript and event feed has been printed, so
-/// each pump iteration emits only what is new.
+/// @brief How much of the transcript and activity journal has been printed,
+/// so each pump iteration emits only what is new.
 struct OutputCursor {
   std::vector<std::size_t> transcript_offsets{};
   std::vector<bool> transcript_announced{};
-  std::size_t events_printed{};
+  std::size_t activities_printed{};
 };
 
 void print_usage(std::ostream &output, const std::string_view program) {
@@ -384,14 +384,13 @@ void print_updates(const pigpen::agent::Session &session,
     cursor.transcript_offsets[index] = entry.text.size();
   }
 
-  const auto &events = session.events();
-  while (cursor.events_printed < events.size()) {
-    const auto &event = events[cursor.events_printed++];
-    std::cout << "tool[turn=" << event.turn << ",tick=" << event.tick << "] "
-              << event.tool << " args=" << event.arguments.dump()
-              << " result=" << event.result.dump() << " position=("
-              << event.before.x << ',' << event.before.y << ")->("
-              << event.after.x << ',' << event.after.y << ")\n";
+  const auto &activities = session.activity_journal().activities();
+  while (cursor.activities_printed < activities.size()) {
+    const auto &activity = activities[cursor.activities_printed++];
+    std::cout << "tool[turn=" << activity.turn << ",tick=" << activity.tick
+              << "] " << activity.summary << " [outcome="
+              << pigpen::agent::tool_outcome_name(activity.outcome)
+              << ", score=" << activity.score_after << "]\n";
   }
   std::cout.flush();
 }
@@ -496,7 +495,8 @@ void print_updates(const pigpen::agent::Session &session,
             << " turns_used=" << snapshot.turns_used
             << " turn_budget=" << snapshot.turn_budget
             << " score=" << session->world().score()
-            << " tool_calls=" << session->tool_call_count() << '\n'
+            << " tool_calls=" << session->activity_journal().call_count()
+            << '\n'
             << "log_path=" << std::quoted(session->metrics_path().string())
             << '\n';
   std::cout.flush();
@@ -520,7 +520,7 @@ void print_updates(const pigpen::agent::Session &session,
     }
     return runtime_error_exit;
   }
-  if (session->tool_call_count() == 0) {
+  if (session->activity_journal().call_count() == 0) {
     std::cerr << "validation error: model completed without a successfully "
                  "decoded world-tool invocation\n";
     return no_tools_exit;

@@ -32,19 +32,21 @@ covering:
 | file | covers |
 |---|---|
 | `tests/world_tests.cpp` | grid constants, seeded placement, movement and wall failures, `look` rays, eating and scoring, positive-item exhaustion, and seed determinism via `World::dump()` |
-| `tests/world_tools_tests.cpp` | compile-time reflected schemas, flat typed responses, the explicit turn/budget lifecycle, reflection-based observability projection, and the `opaque_look` / `reward_feedback` toggles |
+| `tests/world_tools_tests.cpp` | compile-time reflected schemas, flat typed responses, the explicit turn/budget lifecycle, and the `opaque_look` / `reward_feedback` toggles |
+| `tests/world_tool_controller_tests.cpp` | per-call orchestration against a recording sink: one truthful activity per decoded call, outcomes and summaries, budget rejections without world mutation, and dispatch-time turn resolution |
+| `tests/tool_activity_tests.cpp` | the typed activity record and the journal: tick stamping, call/eaten counters, persistence forwarding, and the latched failure the session consumes |
 | `tests/prompt_tests.cpp` | config defaults and that each prompt flag says what it claims — including that the hidden-values prompt never leaks the reward table |
 | `tests/episode_runner_tests.cpp` | the turn loop against a scripted transport: budget exhaustion, pause/resume, stop cancelling an in-flight turn, objective completion, terminal errors, and queued human input |
 | `tests/metrics_writer_tests.cpp` | header/tool/turn/footer reconciliation, the incomplete footer on destruction, and footer finality |
 | `tests/session_tests.cpp` | config rejection and that a session owns a seeded world plus a registered tool harness atomically |
-| `tests/world_animation_tests.cpp` | the event feed becoming an ordered visual timeline, with caller-supplied time |
+| `tests/world_animation_tests.cpp` | the activity journal becoming an ordered visual timeline, with caller-supplied time |
 | `tests/gui_options_tests.cpp` | GUI startup parsing for model and endpoint arguments, including both value syntaxes and invalid input |
 
 **CLI tests** registered directly in `CMakeLists.txt`:
 
 - `pigpen_reflection_integration` — a loopback OpenAI-compatible server verifies
   the provider-visible reflected schemas, strict typed decode, encoded response
-  shape, world event, and JSONL record through the real Scry/Curl path
+  shape, typed activity record, and JSONL record through the real Scry/Curl path
 - `pigpen_headless_help` — `--help` exits 0
 - `pigpen_headless_requires_model` — omitting `--model` must fail
 - `pigpen_headless_rejects_invalid_bounds` — `--max-tool-rounds 65` must fail

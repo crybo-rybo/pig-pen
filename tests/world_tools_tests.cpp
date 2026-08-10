@@ -8,7 +8,6 @@
 
 #include "agent/world_tools.hpp"
 
-#include "agent/reflected_json.hpp"
 #include "agent/tool_contract.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -170,12 +169,6 @@ TEST_CASE("Per-turn budget returns a flat reflected failure without acting") {
   CHECK(rejected.response.turn_tool_budget.remaining == 0);
   CHECK(world.position() == initial);
 
-  const auto rejected_json = pigpen::agent::reflected_json(rejected.response);
-  CHECK(rejected_json.at("ok") == false);
-  CHECK(rejected_json.at("action_executed") == false);
-  CHECK(rejected_json.at("error_code") == "tool_budget_exhausted");
-  CHECK_FALSE(rejected_json.contains("result"));
-
   tools.begin_turn(12);
   const auto next_turn = tools.move({.direction = Direction::east});
   REQUIRE(next_turn.response.ok);
@@ -241,24 +234,4 @@ TEST_CASE(
   CHECK_FALSE(hidden.response.score);
   CHECK(hidden.eaten == placement.item);
   CHECK(hidden_world.score() == pigpen::world::item_reward(placement.item));
-}
-
-TEST_CASE("Reflection projects the flat typed response for observability") {
-  World world{9};
-  WorldTools tools{world};
-  tools.begin_turn(1);
-  const auto execution = tools.move({.direction = Direction::east});
-  const auto arguments = pigpen::agent::reflected_json(
-      DirectionArguments{.direction = Direction::east});
-  const auto response = pigpen::agent::reflected_json(execution.response);
-
-  CHECK(arguments == nlohmann::json{{"direction", "east"}});
-  CHECK(response.at("ok") == true);
-  CHECK(response.at("action_executed") == true);
-  CHECK(response.at("error_code").is_null());
-  CHECK(response.at("error").is_null());
-  CHECK(response.at("position") == nlohmann::json{{"x", 6}, {"y", 5}});
-  CHECK(response.at("reason").is_null());
-  CHECK_FALSE(response.contains("result"));
-  CHECK(response.at("turn_tool_budget").at("used") == 1);
 }

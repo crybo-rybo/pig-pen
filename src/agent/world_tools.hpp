@@ -57,6 +57,10 @@ public:
   /// off; the world still scores truthfully.
   [[nodiscard]] ToolExecution<EatToolResponse> eat(EatArguments arguments);
 
+  /// @brief Read-only view of the world these tools mutate, so callers can
+  /// report truthful facts about the same simulation.
+  [[nodiscard]] const world::World &world() const noexcept { return world_; }
+
 private:
   /// @brief Outcome of charging the budget for one call.
   struct CallPermit {

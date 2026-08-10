@@ -5,8 +5,8 @@
 
 #include "agent/metrics_writer.hpp"
 #include "agent/prompt.hpp"
-#include "agent/reflected_json.hpp"
 #include "agent/scry_transport.hpp"
+#include "agent/world_tool_controller.hpp"
 #include "agent/world_tools.hpp"
 
 #include <scry/reflection.hpp>
@@ -19,7 +19,6 @@
 #include <memory>
 #include <optional>
 #include <string_view>
-#include <type_traits>
 #include <utility>
 
 namespace pigpen::agent {
@@ -59,16 +58,18 @@ class Session::Impl final {
 public:
   Impl(Config initial_config, std::unique_ptr<MetricsWriter> initial_metrics,
        scry::Harness initial_harness, scry::Conversation initial_conversation)
-      : config(std::move(initial_config)),
-        world(std::make_shared<world::World>(this->config.seed)),
+      : config(std::move(initial_config)), world(this->config.seed),
         metrics(std::move(initial_metrics)),
         harness(std::move(initial_harness)),
         conversation(std::move(initial_conversation)),
-        tools(*world, this->config),
+        tools(world, this->config),
+        journal([this](const ToolActivity &activity) {
+          return metrics->record_tool(activity);
+        }),
         transport(this->harness, this->conversation),
         runner(
             transport, static_cast<std::uint32_t>(this->config.turn_budget),
-            [this] { return world->all_positive_items_eaten(); },
+            [this] { return world.all_positive_items_eaten(); },
             {
                 .on_turn_finished =
                     [this](const TurnRecord &record) {
@@ -81,26 +82,32 @@ public:
                 .on_episode_finished =
                     [this](const EpisodeResult &result) {
                       if (auto status =
-                              this->metrics->finish(result, world->score());
+                              this->metrics->finish(result, world.score());
                           !status) {
                         metrics_error = std::move(status.error());
                       }
                     },
             },
-            [this] { return events.size(); }) {}
+            [this] { return journal.call_count(); }),
+        controller(tools, journal,
+                   [this] { return runner.snapshot().turns_used + 1U; }) {}
+
+  // Members hold this-capturing lambdas and references to their siblings;
+  // an Impl must never be copied or moved.
+  Impl(const Impl &) = delete;
+  Impl &operator=(const Impl &) = delete;
 
   Config config;
-  std::shared_ptr<world::World> world;
-  EventFeed events{};
+  world::World world;
   std::unique_ptr<MetricsWriter> metrics;
   scry::Harness harness;
   scry::Conversation conversation;
   WorldTools tools;
+  ToolActivityJournal journal;
   ScryTurnTransport transport;
   EpisodeRunner runner;
-  std::uint64_t next_tool_tick{1};
+  WorldToolController controller;
   std::string metrics_error{};
-  bool metrics_failure_pending{};
 };
 
 std::expected<std::shared_ptr<Session>, std::string>
@@ -162,15 +169,14 @@ Session::~Session() = default;
 
 std::expected<void, std::string> Session::register_tools() {
   const std::weak_ptr<Session> weak_session{shared_from_this()};
-  const auto add = [this, weak_session]<typename Arguments, typename Invoke>(
-                       scry::reflection::ToolMetadata metadata, Invoke invoke) {
-    using Execution = std::invoke_result_t<Invoke &, WorldTools &, Arguments>;
-    using Response = typename Execution::response_type;
-    auto name = metadata.name;
+  // Registration is metadata plus a thin typed callable: decode belongs to
+  // scry, and everything after decode belongs to WorldToolController.
+  const auto add = [this, weak_session]<typename Arguments, typename Response>(
+                       scry::reflection::ToolMetadata metadata,
+                       Response (WorldToolController::*handler)(Arguments)) {
     return scry::reflection::add<Arguments>(
         impl_->harness.tools(), std::move(metadata),
-        [weak_session, name = std::move(name), invoke = std::move(invoke)](
-            Arguments arguments) mutable -> scry::Result<Response> {
+        [weak_session, handler](Arguments arguments) -> scry::Result<Response> {
           const auto session = weak_session.lock();
           if (!session) {
             return std::unexpected(scry::Error{
@@ -178,60 +184,35 @@ std::expected<void, std::string> Session::register_tools() {
                 .message = "pig-pen session no longer exists",
             });
           }
-          const auto snapshot = session->impl_->runner.snapshot();
-          const auto turn = snapshot.turns_used + 1U;
-          auto arguments_json = reflected_json(arguments);
-          session->impl_->tools.begin_turn(turn);
-          auto execution =
-              std::invoke(invoke, session->impl_->tools, std::move(arguments));
-          auto response_json = reflected_json(execution.response);
-          session->impl_->events.push_back(WorldEvent{
-              .tick = session->impl_->next_tool_tick++,
-              .turn = turn,
-              .tool = name,
-              .arguments = std::move(arguments_json),
-              .result = std::move(response_json),
-              .before = execution.before,
-              .after = execution.after,
-              .direction = execution.direction,
-              .action_executed = execution.response.action_executed,
-              .eaten = execution.eaten,
-          });
-          const auto &event = session->impl_->events.back();
-          if (auto recorded = session->impl_->metrics->record_tool(
-                  event, session->impl_->world->score());
-              !recorded) {
-            session->impl_->metrics_error = std::move(recorded.error());
-            session->impl_->metrics_failure_pending = true;
-          }
-          return std::move(execution.response);
+          return std::invoke(handler, session->impl_->controller,
+                             std::move(arguments));
         });
   };
 
-  if (auto status = add.template operator()<DirectionArguments>(
+  if (auto status = add(
           {
               .name = "move",
               .description = "Move one cell north, south, east, or west.",
           },
-          &WorldTools::move);
+          &WorldToolController::move);
       !status) {
     return std::unexpected(status.error().message);
   }
-  if (auto status = add.template operator()<DirectionArguments>(
+  if (auto status = add(
           {
               .name = "look",
               .description = "Scan every cell in one direction to the wall.",
           },
-          &WorldTools::look);
+          &WorldToolController::look);
       !status) {
     return std::unexpected(status.error().message);
   }
-  if (auto status = add.template operator()<EatArguments>(
+  if (auto status = add(
           {
               .name = "eat",
               .description = "Eat the item on the current cell, if present.",
           },
-          &WorldTools::eat);
+          &WorldToolController::eat);
       !status) {
     return std::unexpected(status.error().message);
   }
@@ -243,10 +224,11 @@ PumpStats Session::pump() {
       .time_budget = std::chrono::milliseconds{2},
       .max_callbacks = 32,
   });
-  if (std::exchange(impl_->metrics_failure_pending, false)) {
+  if (impl_->journal.take_persistence_failure()) {
     // The world action and its typed response have already committed. Fail the
     // episode only after Harness::update returns so the model receives that
     // truthful response and cancellation is not re-entrant through dispatch.
+    impl_->metrics_error = impl_->journal.persistence_error();
     static_cast<void>(impl_->runner.fail(impl_->metrics_error));
   } else {
     impl_->runner.tick();
@@ -274,20 +256,22 @@ void Session::clear_pending_user_inputs() {
 }
 
 const Config &Session::config() const noexcept { return impl_->config; }
-const world::World &Session::world() const noexcept { return *impl_->world; }
-const EventFeed &Session::events() const noexcept { return impl_->events; }
+const world::World &Session::world() const noexcept { return impl_->world; }
+
+const ToolActivityJournal &Session::activity_journal() const noexcept {
+  return impl_->journal;
+}
+
 const EpisodeRunner &Session::runner() const noexcept { return impl_->runner; }
 EpisodeRunner &Session::runner() noexcept { return impl_->runner; }
-std::size_t Session::tool_call_count() const noexcept {
-  return impl_->events.size();
-}
 
 const std::filesystem::path &Session::metrics_path() const noexcept {
   return impl_->metrics->path();
 }
 
 const std::string &Session::metrics_error() const noexcept {
-  return impl_->metrics_error;
+  return impl_->metrics_error.empty() ? impl_->journal.persistence_error()
+                                      : impl_->metrics_error;
 }
 
 } // namespace pigpen::agent

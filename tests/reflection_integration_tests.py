@@ -562,27 +562,28 @@ def assert_reflection_rejection(request: ProviderRequest) -> None:
     )
 
 
-def assert_valid_jsonl_log(
-    records: list[dict[str, Any]], response: dict[str, Any], base_url: str
-) -> None:
+def assert_valid_jsonl_log(records: list[dict[str, Any]], base_url: str) -> None:
     tool_records = [record for record in records if record.get("type") == "tool"]
     check(len(tool_records) == 1, f"expected one tool log record: {records!r}")
     tool = tool_records[0]
     check(tool.get("turn") == 1, f"tool record has wrong turn: {tool!r}")
     check(tool.get("tick") == 1, f"tool record has wrong tick: {tool!r}")
     check(tool.get("tool") == "move", f"wrong tool was logged: {tool!r}")
+    check(tool.get("outcome") == "succeeded", f"wrong outcome: {tool!r}")
+    check(tool.get("direction") == "east", f"wrong direction: {tool!r}")
+    check(tool.get("eaten") is None, f"move ate something: {tool!r}")
     check(
-        tool.get("args") == {"direction": "east"},
-        f"reflected arguments were not logged: {tool!r}",
-    )
-    check(
-        tool.get("result") == response,
-        f"logged result differs from provider tool result: {tool!r}",
+        "args" not in tool and "result" not in tool,
+        f"tool record still mirrors provider JSON payloads: {tool!r}",
     )
     check(tool.get("before") == {"x": 5, "y": 5}, f"wrong before: {tool!r}")
     check(tool.get("after") == {"x": 6, "y": 5}, f"wrong after: {tool!r}")
     check(tool.get("action_executed") is True, f"move was not marked: {tool!r}")
     check(tool.get("score_after") == 0, f"move changed the score: {tool!r}")
+    check(
+        tool.get("summary") == "move east: (5, 5) -> (6, 5)",
+        f"wrong presentation summary: {tool!r}",
+    )
 
     header = records[0]
     check(header.get("type") == "header", f"missing JSONL header: {records!r}")
@@ -686,8 +687,8 @@ def main() -> int:
         f"expected two valid provider requests, got {len(valid.requests)}",
     )
     assert_reflected_tools(valid.requests[0])
-    response = extract_tool_response(valid.requests[1])
-    assert_valid_jsonl_log(valid.records, response, valid.base_url)
+    extract_tool_response(valid.requests[1])
+    assert_valid_jsonl_log(valid.records, valid.base_url)
     check(
         FINAL_TEXT in valid.completed.stdout,
         f"valid final text was not printed: {valid.completed.stdout}",

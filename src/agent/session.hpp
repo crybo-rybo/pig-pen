@@ -2,13 +2,14 @@
 /// @brief Session: the composition root and atomic reset unit.
 ///
 /// A Session owns the world, conversation, scry harness with its registered
-/// tools, episode runner, and metrics writer. There is no partial reset —
-/// starting over means destroying the session and creating a new one.
+/// tools, tool-activity journal, episode runner, and metrics writer. There
+/// is no partial reset — starting over means destroying the session and
+/// creating a new one.
 #pragma once
 
 #include "agent/config.hpp"
 #include "agent/episode_runner.hpp"
-#include "agent/events.hpp"
+#include "agent/tool_activity_journal.hpp"
 #include "world/world.hpp"
 
 #include <cstddef>
@@ -69,14 +70,13 @@ public:
   [[nodiscard]] const Config &config() const noexcept;
   /// @brief The simulation; mutated only through registered tools.
   [[nodiscard]] const world::World &world() const noexcept;
-  /// @brief Append-only feed of successfully decoded tool invocations.
-  [[nodiscard]] const EventFeed &events() const noexcept;
+  /// @brief Append-only journal of decoded tool invocations plus derived
+  /// counters; the single typed source for UI, animation, and stats.
+  [[nodiscard]] const ToolActivityJournal &activity_journal() const noexcept;
   /// @brief The episode state machine.
   [[nodiscard]] const EpisodeRunner &runner() const noexcept;
   /// @brief The episode state machine.
   [[nodiscard]] EpisodeRunner &runner() noexcept;
-  /// @brief Number of successfully decoded world-tool invocations so far.
-  [[nodiscard]] std::size_t tool_call_count() const noexcept;
   /// @brief Path of this session's JSONL metrics log.
   [[nodiscard]] const std::filesystem::path &metrics_path() const noexcept;
   /// @brief Last metrics-write failure, or empty; a failure is terminal.

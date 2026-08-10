@@ -121,12 +121,15 @@ target_include_directories(
   PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>"
 )
 
-add_library(pigpen_reflected_tools STATIC src/agent/world_tools.cpp)
+add_library(
+  pigpen_reflected_tools STATIC
+    src/agent/world_tool_controller.cpp
+    src/agent/world_tools.cpp
+)
 target_compile_features(pigpen_reflected_tools PUBLIC cxx_std_26)
 target_link_libraries(
   pigpen_reflected_tools
   PUBLIC
-    nlohmann_json::nlohmann_json
     pigpen_world
     scry::reflection
 )
@@ -136,6 +139,9 @@ target_include_directories(
   PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>"
 )
 
+# JSON is deliberately PRIVATE: MetricsWriter is the only serialization
+# boundary, and front-end translation units must not even see nlohmann's
+# headers. Test binaries that parse the JSONL output link nlohmann directly.
 add_library(
   pigpen_agent STATIC
     src/agent/episode_runner.cpp
@@ -143,14 +149,15 @@ add_library(
     src/agent/prompt.cpp
     src/agent/scry_transport.cpp
     src/agent/session.cpp
+    src/agent/tool_activity_journal.cpp
 )
 target_compile_features(pigpen_agent PUBLIC cxx_std_26)
 target_link_libraries(
   pigpen_agent
   PUBLIC
     pigpen_world
-    nlohmann_json::nlohmann_json
   PRIVATE
+    nlohmann_json::nlohmann_json
     pigpen_reflected_tools
     scry::scry
 )
@@ -242,15 +249,19 @@ if(PIGPEN_BUILD_TESTS)
       tests/metrics_writer_tests.cpp
       tests/prompt_tests.cpp
       tests/session_tests.cpp
+      tests/tool_activity_tests.cpp
       tests/world_animation_tests.cpp
       tests/world_tests.cpp
       src/ui/gui_options.cpp
       src/ui/world_animation.cpp
   )
+  # nlohmann is linked directly because these tests parse the JSONL logs the
+  # application writes; the application targets themselves keep it PRIVATE.
   target_link_libraries(
     pigpen_tests
     PRIVATE
       Catch2::Catch2WithMain
+      nlohmann_json::nlohmann_json
       pigpen_agent
   )
   pigpen_configure_target(pigpen_tests)
@@ -265,12 +276,14 @@ if(PIGPEN_BUILD_TESTS)
 
   add_executable(
     pigpen_reflection_tests
+      tests/world_tool_controller_tests.cpp
       tests/world_tools_tests.cpp
   )
   target_link_libraries(
     pigpen_reflection_tests
     PRIVATE
       Catch2::Catch2WithMain
+      nlohmann_json::nlohmann_json
       pigpen_reflected_tools
   )
   pigpen_configure_target(pigpen_reflection_tests)

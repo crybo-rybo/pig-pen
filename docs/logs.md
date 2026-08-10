@@ -39,24 +39,31 @@ reproducible.
 
 ## `tool`
 
-One line per successfully decoded reflected world-tool invocation. Calls Scry
-rejects during protocol or schema validation do not enter Pig Pen's world
-layer and therefore do not produce a `tool` record.
+One line per successfully decoded reflected world-tool invocation, serialized
+from the same typed `ToolActivity` record the UI, animation, and statistics
+consume. Calls Scry rejects during protocol or schema validation do not enter
+Pig Pen's application layer and therefore do not produce a `tool` record.
 
 ```json
-{"type":"tool","turn":1,"tick":2,"tool":"look",
- "args":{"direction":"south"},
- "result":{"action_executed":true,"cells":[{"distance":1,"item":"berry"}],"direction":"south","error":null,"error_code":null,"ok":true,"turn_tool_budget":{"used":2,"remaining":2,"instruction":"2 world-tool calls remain in this turn."},"wall_at_distance":6},
- "before":{"x":5,"y":5},"after":{"x":5,"y":5},"action_executed":true,"score_after":0}
+{"type":"tool","turn":1,"tick":2,"tool":"look","outcome":"succeeded",
+ "direction":"south","before":{"x":5,"y":5},"after":{"x":5,"y":5},
+ "eaten":null,"action_executed":true,"score_after":0,
+ "summary":"look south: 1 occupied of 5 cells, wall at distance 6"}
 ```
 
-`tick` is a monotonic counter across the whole episode. `before`/`after` are
-the blob's position either side of the call — identical for `look`, `eat`, a
-wall-blocked `move`, and a call rejected by Pig Pen's action budget.
-`action_executed` distinguishes that budget rejection from an executed world
-operation. `result` is projected from the same reflected response object Scry
-encodes for the model, so a log made with `--opaque-look` shows `"something"`
-here too.
+`tick` is a monotonic counter across the whole episode. `outcome` is one of
+`succeeded`, `blocked_by_wall`, `nothing_to_eat`, or `budget_exhausted`;
+`action_executed` is the derived convenience flag that is `false` only for
+`budget_exhausted`, when Pig Pen's per-turn action budget rejected the call
+before it could touch the world. `before`/`after` are the blob's position
+either side of the call — identical for `look`, `eat`, a wall-blocked `move`,
+and a budget rejection.
+
+The record describes Pig Pen semantics rather than mirroring the provider
+payload, and it always records the truth: `eaten`, `score_after`, and
+`summary` come from the world, so a log made with `--opaque-look` or
+`--no-reward-feedback` still shows real items and real scores even though the
+model saw less.
 
 ## `turn`
 
@@ -105,7 +112,7 @@ Just the decoded-call trace (including budget rejections):
 
 ```sh
 jq -r 'select(.type=="tool")
-  | "\(.tick) \(.tool) \(.args) -> \(.result | tostring[0:80])"' logs/<run>.jsonl
+  | "\(.tick) [\(.outcome)] \(.summary)"' logs/<run>.jsonl
 ```
 
 Calls rejected by Pig Pen's per-turn action budget:

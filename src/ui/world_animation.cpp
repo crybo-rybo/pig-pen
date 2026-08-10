@@ -1,25 +1,16 @@
 /// @file world_animation.cpp
-/// @brief Implements the event-feed-to-visual-timeline state machine.
+/// @brief Implements the activity-to-visual-timeline state machine.
 #include "ui/world_animation.hpp"
 
 #include <algorithm>
-#include <string_view>
 
 namespace pigpen::ui {
-namespace {
-
-[[nodiscard]] bool same_position(const world::Position left,
-                                 const world::Position right) noexcept {
-  return left == right;
-}
-
-} // namespace
 
 void WorldAnimationState::reset(const world::Position position,
-                                const std::size_t event_cursor) noexcept {
+                                const std::size_t activity_cursor) noexcept {
   pending_.clear();
   active_.reset();
-  event_cursor_ = event_cursor;
+  activity_cursor_ = activity_cursor;
   active_started_ = 0.0;
   last_update_ = 0.0;
   blob_ = {
@@ -33,22 +24,22 @@ void WorldAnimationState::set_speed(const float speed) noexcept {
   speed_ = std::clamp(speed, 0.1F, 8.0F);
 }
 
-void WorldAnimationState::update(const agent::EventFeed &events,
-                                 const world::Position world_position,
-                                 const double now_seconds) {
+void WorldAnimationState::update(
+    const std::span<const agent::ToolActivity> activities,
+    const world::Position world_position, const double now_seconds) {
   if (!initialized_) {
     reset(world_position);
   }
-  if (events.size() < event_cursor_) {
-    // A smaller feed means the owning Session was replaced. The application
-    // normally calls reset explicitly; this keeps the renderer safe if it did
-    // not get that notification.
-    reset(world_position, events.size());
+  if (activities.size() < activity_cursor_) {
+    // A smaller history means the owning Session was replaced. The
+    // application normally calls reset explicitly; this keeps the renderer
+    // safe if it did not get that notification.
+    reset(world_position, activities.size());
   }
 
-  while (event_cursor_ < events.size()) {
-    enqueue(events[event_cursor_]);
-    ++event_cursor_;
+  while (activity_cursor_ < activities.size()) {
+    enqueue(activities[activity_cursor_]);
+    ++activity_cursor_;
   }
 
   last_update_ = now_seconds;
@@ -61,7 +52,7 @@ void WorldAnimationState::update(const agent::EventFeed &events,
     const auto elapsed = std::max(0.0, now_seconds - active_started_);
     const auto progress = std::clamp(elapsed / duration, 0.0, 1.0);
 
-    if (active_->kind == StepKind::move) {
+    if (active_->kind == agent::ToolKind::move) {
       const auto from_x = static_cast<double>(active_->before.x);
       const auto from_y = static_cast<double>(active_->before.y);
       blob_.x = static_cast<float>(
@@ -74,7 +65,7 @@ void WorldAnimationState::update(const agent::EventFeed &events,
       return;
     }
 
-    if (active_->kind == StepKind::move) {
+    if (active_->kind == agent::ToolKind::move) {
       blob_ = {
           .x = static_cast<float>(active_->after.x),
           .y = static_cast<float>(active_->after.y),
@@ -99,12 +90,12 @@ AnimatedPosition WorldAnimationState::blob_position() const noexcept {
 
 std::optional<VisualEffect>
 WorldAnimationState::active_effect() const noexcept {
-  if (!active_ || active_->kind == StepKind::move) {
+  if (!active_ || active_->kind == agent::ToolKind::move) {
     return std::nullopt;
   }
   return VisualEffect{
-      .kind = active_->kind == StepKind::look ? VisualEffectKind::look
-                                              : VisualEffectKind::eat,
+      .kind = active_->kind == agent::ToolKind::look ? VisualEffectKind::look
+                                                     : VisualEffectKind::eat,
       .origin = active_->before,
       .direction = active_->direction,
       .progress = active_progress(),
@@ -115,45 +106,31 @@ std::size_t WorldAnimationState::queued_action_count() const noexcept {
   return pending_.size() + (active_ ? 1U : 0U);
 }
 
-void WorldAnimationState::enqueue(const agent::WorldEvent &event) {
-  if (!event.action_executed) {
+void WorldAnimationState::enqueue(const agent::ToolActivity &activity) {
+  // Budget rejections never touched the world, and a wall-blocked move has
+  // nowhere to go; neither earns a timeline step. Look and eat still play
+  // even when unsuccessful — the blob visibly tried.
+  if (!activity.action_executed()) {
     return;
   }
-  if (event.tool == "move") {
-    if (!same_position(event.before, event.after)) {
-      pending_.push_back({
-          .kind = StepKind::move,
-          .before = event.before,
-          .after = event.after,
-          .direction = event.direction,
-      });
-    }
+  if (activity.kind == agent::ToolKind::move &&
+      activity.before == activity.after) {
     return;
   }
-  if (event.tool == "look") {
-    pending_.push_back({
-        .kind = StepKind::look,
-        .before = event.before,
-        .after = event.after,
-        .direction = event.direction,
-    });
-    return;
-  }
-  if (event.tool == "eat") {
-    pending_.push_back({
-        .kind = StepKind::eat,
-        .before = event.before,
-        .after = event.after,
-        .direction = std::nullopt,
-    });
-  }
+  pending_.push_back({
+      .kind = activity.kind,
+      .before = activity.before,
+      .after = activity.after,
+      .direction = activity.kind == agent::ToolKind::eat ? std::nullopt
+                                                         : activity.direction,
+  });
 }
 
 void WorldAnimationState::start_next(const double start_seconds) {
   active_ = pending_.front();
   pending_.pop_front();
   active_started_ = start_seconds;
-  if (active_->kind == StepKind::move) {
+  if (active_->kind == agent::ToolKind::move) {
     blob_ = {
         .x = static_cast<float>(active_->before.x),
         .y = static_cast<float>(active_->before.y),
@@ -165,7 +142,8 @@ double WorldAnimationState::active_duration() const noexcept {
   if (!active_) {
     return 0.001;
   }
-  const auto base_duration = active_->kind == StepKind::move ? 0.150 : 0.230;
+  const auto base_duration =
+      active_->kind == agent::ToolKind::move ? 0.150 : 0.230;
   return base_duration / static_cast<double>(speed_);
 }
 

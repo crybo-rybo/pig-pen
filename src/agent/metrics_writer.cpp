@@ -4,6 +4,8 @@
 
 #include "world/world.hpp"
 
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -84,6 +86,17 @@ unique_log_path(const std::filesystem::path &directory, const Config &config,
 /// @brief Project a grid position into the log's {"x", "y"} shape.
 [[nodiscard]] nlohmann::json position_json(const world::Position position) {
   return {{"x", position.x}, {"y", position.y}};
+}
+
+/// @brief An optional enumerator name as a JSON string, or null.
+template <typename Enum>
+[[nodiscard]] nlohmann::json
+optional_name_json(const std::optional<Enum> value,
+                   std::string_view (*name)(Enum) noexcept) {
+  if (!value) {
+    return nullptr;
+  }
+  return std::string{name(*value)};
 }
 
 /// @brief Stable lowercase name recorded in turn lines.
@@ -171,26 +184,29 @@ MetricsWriter::~MetricsWriter() {
 }
 
 std::expected<void, std::string>
-MetricsWriter::record_tool(const WorldEvent &event, const int score_after) {
+MetricsWriter::record_tool(const ToolActivity &activity) {
   if (finalized_) {
     return std::unexpected("cannot record a tool after the metrics footer");
   }
-  ++tool_counts_[event.tool];
-  last_score_ = score_after;
-  if (event.eaten) {
-    ++eaten_counts_[std::string{world::item_name(*event.eaten)}];
+  ++tool_counts_[std::string{tool_kind_name(activity.kind)}];
+  last_score_ = activity.score_after;
+  if (activity.eaten) {
+    ++eaten_counts_[std::string{world::item_name(*activity.eaten)}];
   }
   return write_line({
       {"type", "tool"},
-      {"turn", event.turn},
-      {"tick", event.tick},
-      {"tool", event.tool},
-      {"args", event.arguments},
-      {"result", event.result},
-      {"before", position_json(event.before)},
-      {"after", position_json(event.after)},
-      {"action_executed", event.action_executed},
-      {"score_after", score_after},
+      {"turn", activity.turn},
+      {"tick", activity.tick},
+      {"tool", tool_kind_name(activity.kind)},
+      {"outcome", tool_outcome_name(activity.outcome)},
+      {"direction",
+       optional_name_json(activity.direction, world::direction_name)},
+      {"before", position_json(activity.before)},
+      {"after", position_json(activity.after)},
+      {"eaten", optional_name_json(activity.eaten, world::item_name)},
+      {"action_executed", activity.action_executed()},
+      {"score_after", activity.score_after},
+      {"summary", activity.summary},
   });
 }
 
@@ -226,7 +242,17 @@ MetricsWriter::finish(const EpisodeResult &result, const int final_score) {
 
 std::expected<void, std::string>
 MetricsWriter::write_line(const nlohmann::json &record, const bool flush) {
-  stream_ << record.dump() << '\n';
+  // Turn records carry model-produced text, which may contain invalid
+  // UTF-8: replace bad sequences with U+FFFD rather than losing the record,
+  // and keep this total so no exception escapes through Session::pump().
+  try {
+    stream_ << record.dump(-1, ' ', false,
+                           nlohmann::json::error_handler_t::replace)
+            << '\n';
+  } catch (const std::exception &error) {
+    return std::unexpected("failed serializing metrics record for " +
+                           path_.string() + ": " + error.what());
+  }
   if (flush) {
     stream_.flush();
   }

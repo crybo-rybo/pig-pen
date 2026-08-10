@@ -164,8 +164,8 @@ cell and applies its reward to the score.
 
 Scry owns JSON parsing, schema validation, and reflected decoding. Calls with
 unknown tools or invalid arguments are rejected at that boundary and never
-enter `WorldTools`, consume Pig Pen's action budget, or create a decoded world
-event.
+enter `WorldToolController`, consume Pig Pen's action budget, or create a
+tool activity.
 
 A successfully decoded call beyond the per-turn action limit does reach
 `WorldTools` and returns a flat typed failure without executing an action:
@@ -187,8 +187,9 @@ A successfully decoded call beyond the per-turn action limit does reach
 }
 ```
 
-Each successfully decoded handler invocation appends exactly one event. The
-event records whether an action actually executed, so budget rejections remain
+Each successfully decoded handler invocation publishes exactly one typed
+`ToolActivity` to the session's journal. The activity records its outcome —
+`budget_exhausted` means no action executed — so budget rejections remain
 observable without being animated as world actions.
 
 ## What the model is told
@@ -206,5 +207,5 @@ The system prompt is assembled in `src/agent/prompt.cpp` and describes the
 coordinate system, the three tools, the flags in force, and the turn and
 tool-round budgets. Each turn is then advanced by a short generated nudge.
 Human guidance is queued FIFO and delivered in its own labelled section, one
-message per turn. If a completed turn produces no decoded world-tool event,
+message per turn. If a completed turn produces no decoded world-tool call,
 the next automatic nudge explicitly requires a tool call before more narration.

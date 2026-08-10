@@ -1,14 +1,19 @@
 /// @file metrics_writer.hpp
 /// @brief Append-only JSONL episode log: header, tool, turn, footer.
 ///
-/// A log always terminates with exactly one footer: the destructor writes
-/// an "abandoned" footer whenever the episode ends before finish(), so even
-/// abnormal shutdown leaves a finalized record.
+/// This is Pig Pen's persistence boundary and the only application layer
+/// allowed to spell JSON: tool records serialize the typed ToolActivity, so
+/// the log describes Pig Pen semantics rather than mirroring the provider
+/// payload. A log always terminates with exactly one footer: the destructor
+/// writes an "abandoned" footer whenever the episode ends before finish(),
+/// so even abnormal shutdown leaves a finalized record.
 #pragma once
 
 #include "agent/config.hpp"
 #include "agent/episode_runner.hpp"
-#include "agent/events.hpp"
+#include "agent/tool_activity.hpp"
+
+#include <nlohmann/json_fwd.hpp>
 
 #include <chrono>
 #include <expected>
@@ -37,9 +42,9 @@ public:
   MetricsWriter(const MetricsWriter &) = delete;
   MetricsWriter &operator=(const MetricsWriter &) = delete;
 
-  /// @brief Append one successfully decoded world-tool invocation.
+  /// @brief Append one decoded world-tool invocation.
   [[nodiscard]] std::expected<void, std::string>
-  record_tool(const WorldEvent &event, int score_after);
+  record_tool(const ToolActivity &activity);
   /// @brief Append one finished model turn.
   [[nodiscard]] std::expected<void, std::string>
   record_turn(const TurnRecord &record);

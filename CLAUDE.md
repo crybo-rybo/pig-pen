@@ -84,11 +84,14 @@ integration is testable without a window or a model server
   with enumerated failures; `World::dump()` is the canonical serialisation used
   by determinism tests. Same seed + same actions ⇒ same world.
 - **`src/agent`** — the runtime. `Session` composes everything (world,
-  conversation, scry harness with registered tools, `EpisodeRunner`,
-  `MetricsWriter`) and is the **reset unit**: there is no partial reset, you
-  destroy and recreate the session (that's what the GUI Reset button does).
+  conversation, scry harness with registered tools, `WorldToolController`,
+  `ToolActivityJournal`, `EpisodeRunner`, `MetricsWriter`) and is the
+  **reset unit**: there is no partial reset, you destroy and recreate the
+  session (that's what the GUI Reset button does). Each decoded tool call
+  publishes one typed `ToolActivity` to the journal; the UI, animation,
+  stats, CLI output, and metrics all reconcile from that record.
 - **`src/ui`** — `AppUi` owns the `shared_ptr<Session>`;
-  `WorldAnimationState` turns the event feed into timed steps with
+  `WorldAnimationState` turns the activity journal into timed steps with
   caller-supplied time, so it is tested without ImGui or a wall clock.
 - **`src/app`** — `main.cpp` (GLFW/ImGui frame loop) and `headless_main.cpp`
   (argv, signals, exit codes) contain nothing testable-by-unit.
@@ -99,17 +102,20 @@ Key invariants to preserve:
   in `tool_contract.hpp` are the model-facing contract; scry derives JSON
   Schemas from them at compile time and does all decode/encode. Adding or
   renaming an enum value changes schema, decode, and encode from the one
-  declaration. `WorldTools` never touches JSON; protocol failures (unknown
-  tool, undecodable args) belong to scry and never reach it. Reflection
-  compiler requirements are scoped to the `pigpen_reflected_tools` /
-  `pigpen_agent` libraries — don't leak them into deps or front-end TUs.
+  declaration. `WorldTools` and `WorldToolController` never touch JSON;
+  protocol failures (unknown tool, undecodable args) belong to scry and never
+  reach them. Application-side JSON exists only in `MetricsWriter` (nlohmann
+  is a PRIVATE dep of `pigpen_agent`). Reflection compiler requirements are
+  scoped to the `pigpen_reflected_tools` / `pigpen_agent` libraries — don't
+  leak them into deps or front-end TUs.
 - **Nothing blocks, no background threads.** Both front ends drive
   `Session::pump()` from their own loop (GUI per frame, CLI in a sleep-1ms
   loop). Cancellation is cooperative: an episode isn't finished until the
   terminal callback arrives, which is what guarantees the JSONL footer is
   written even on SIGINT/timeout.
-- **Two test seams**: `ITurnTransport` lets `EpisodeRunner` be driven by a
-  scripted transport; `WorldTools` accepts/returns only reflected C++ values.
+- **Three test seams**: `ITurnTransport` lets `EpisodeRunner` be driven by a
+  scripted transport; `WorldTools` accepts/returns only reflected C++ values;
+  `IToolActivitySink` lets `WorldToolController` publish to a recording sink.
   New agent-layer code should stay testable through one of these.
 - Tools hold a `weak_ptr` back to the session so late callbacks fail cleanly.
 - The three scenario flags (`--hidden-values`, `--no-reward-feedback`,
