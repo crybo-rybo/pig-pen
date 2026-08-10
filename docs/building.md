@@ -6,7 +6,7 @@
 |---|---|
 | CMake 3.25+ | presets use schema version 6 |
 | Ninja | the generator both presets select |
-| GCC 16+ on Linux | C++26 P2996/P3394 reflection; configured with `-std=c++26 -freflection` |
+| GCC 16+ | C++26 P2996/P3394 reflection; configured with `-std=c++26 -freflection` |
 | Python 3 | required when the test suite is enabled; drives public-boundary integration tests |
 | libcurl | scry's HTTP transport links against it |
 | OpenGL 3.3 | only needed for the GUI target |
@@ -22,6 +22,32 @@ On Arch:
 ```sh
 sudo pacman -S --needed gcc cmake ninja python curl mesa libx11 libxrandr libxinerama libxcursor libxi wayland
 ```
+
+## macOS
+
+No released Clang — upstream or Apple — implements P2996 reflection, so the
+C++ must still be compiled with Homebrew GCC 16 on macOS. GCC, however,
+cannot parse the Apple blocks syntax (`^`) in the macOS SDK framework
+headers that GLFW's Cocoa backend and `glfw3native.h` rely on. The build is
+therefore a mixed toolchain: Apple Clang for C/Objective-C (GLFW), GCC for
+every C++ translation unit:
+
+```sh
+brew install gcc cmake ninja just
+CC=cc CXX=g++-16 cmake --preset dev
+cmake --build --preset dev
+```
+
+Only the C++ compiler is gated to GCC 16+; the C side may be any working
+compiler. Two macOS-only accommodations live in `CMakeLists.txt`: the ImGui
+GLFW backend is compiled with a force-included shim
+(`cmake/glfw_native_gcc_shim.h`) that replaces the blocks-bearing framework
+headers `glfw3native.h` would include, and `GL_SILENCE_DEPRECATION` keeps
+Apple's OpenGL deprecation warnings out of the `-Werror` build.
+
+Compiler selection is cached per build directory, so if a build directory
+was configured without `CC`/`CXX` set, delete `build/<preset>/CMakeCache.txt`
+and `build/<preset>/CMakeFiles` (keep `_deps`) and reconfigure.
 
 ## Presets
 

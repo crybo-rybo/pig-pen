@@ -211,6 +211,22 @@ if(PIGPEN_BUILD_GUI)
       "${imgui_SOURCE_DIR}/backends"
   )
   target_link_libraries(pigpen_imgui PUBLIC glfw OpenGL::GL)
+  if(APPLE)
+    # The GLFW backend's glfw3native.h include would drag in Apple framework
+    # headers whose blocks syntax GCC cannot parse. Build the C/Objective-C
+    # side (GLFW itself) with Apple Clang via CC while CXX stays GCC:
+    #   CC=cc CXX=g++-16 cmake --preset dev
+    # and shim the one C++ TU that touches the native header.
+    set_source_files_properties(
+      "${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp"
+      PROPERTIES
+        COMPILE_OPTIONS
+          "-include;${CMAKE_CURRENT_SOURCE_DIR}/cmake/glfw_native_gcc_shim.h"
+    )
+    # Apple deprecates the whole OpenGL API; the warnings would otherwise
+    # fail the -Werror build. PUBLIC so the GUI executable inherits it.
+    target_compile_definitions(pigpen_imgui PUBLIC GL_SILENCE_DEPRECATION)
+  endif()
   add_executable(
     pig-pen
       src/app/main.cpp
