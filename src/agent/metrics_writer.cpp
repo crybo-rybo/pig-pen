@@ -1,3 +1,5 @@
+/// @file metrics_writer.cpp
+/// @brief MetricsWriter implementation; the contract is in the header.
 #include "agent/metrics_writer.hpp"
 
 #include "world/world.hpp"
@@ -15,6 +17,8 @@
 namespace pigpen::agent {
 namespace {
 
+/// @brief Replace filename-hostile bytes with '_'; an empty component
+/// becomes "model" so the log stem stays well-formed.
 [[nodiscard]] std::string sanitized_filename_component(std::string value) {
   for (auto &character : value) {
     const auto byte = static_cast<unsigned char>(character);
@@ -26,6 +30,7 @@ namespace {
   return value.empty() ? "model" : value;
 }
 
+/// @brief Portable, reentrant localtime.
 [[nodiscard]] std::tm local_time(const std::time_t value) {
   std::tm result{};
 #if defined(_WIN32)
@@ -36,6 +41,7 @@ namespace {
   return result;
 }
 
+/// @brief Millisecond-resolution local timestamp for the log filename.
 [[nodiscard]] std::string
 timestamp(const std::chrono::system_clock::time_point now) {
   const auto as_time_t = std::chrono::system_clock::to_time_t(now);
@@ -50,6 +56,7 @@ timestamp(const std::chrono::system_clock::time_point now) {
   return result.str();
 }
 
+/// @brief ISO-8601 local timestamp recorded in the header line.
 [[nodiscard]] std::string
 iso_timestamp(const std::chrono::system_clock::time_point now) {
   const auto as_time_t = std::chrono::system_clock::to_time_t(now);
@@ -59,6 +66,8 @@ iso_timestamp(const std::chrono::system_clock::time_point now) {
   return result.str();
 }
 
+/// @brief Build <timestamp>-<model>-<seed>.jsonl, appending -N until the
+/// name is unused so concurrent episodes never share a log.
 [[nodiscard]] std::filesystem::path
 unique_log_path(const std::filesystem::path &directory, const Config &config,
                 const std::chrono::system_clock::time_point now) {
@@ -72,10 +81,12 @@ unique_log_path(const std::filesystem::path &directory, const Config &config,
   return candidate;
 }
 
+/// @brief Project a grid position into the log's {"x", "y"} shape.
 [[nodiscard]] nlohmann::json position_json(const world::Position position) {
   return {{"x", position.x}, {"y", position.y}};
 }
 
+/// @brief Stable lowercase name recorded in turn lines.
 [[nodiscard]] std::string_view turn_status_name(const TurnStatus status) {
   switch (status) {
   case TurnStatus::completed:

@@ -1,3 +1,8 @@
+/// @file prompt_tests.cpp
+/// @brief Covers Config defaults and that each prompt flag says what it
+/// claims — including that the hidden-values prompt never leaks the reward
+/// table.
+
 #include "agent/prompt.hpp"
 
 #include <catch2/catch_test_macros.hpp>

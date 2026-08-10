@@ -10,7 +10,6 @@ import socket
 import subprocess
 import sys
 import tempfile
-import threading
 
 
 def fail(message: str, process: subprocess.Popen[str] | None = None) -> None:
@@ -61,7 +60,7 @@ def main() -> int:
 
         try:
             connection, _ = listener.accept()
-        except (TimeoutError, socket.timeout) as error:
+        except TimeoutError as error:
             stdout, stderr = process.communicate(timeout=2)
             fail(
                 f"headless process never connected: {error}\nstdout={stdout}\n"
@@ -82,10 +81,9 @@ def main() -> int:
                     if not chunk:
                         break
                     request += chunk
-            except (TimeoutError, socket.timeout) as error:
+            except TimeoutError as error:
                 fail(
-                    f"timed out reading model request: {error}; "
-                    f"request={request!r}",
+                    f"timed out reading model request: {error}; request={request!r}",
                     process,
                 )
             if expected_json_string not in request:

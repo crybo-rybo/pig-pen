@@ -1,19 +1,28 @@
+/// @file events.hpp
+/// @brief The append-only feed of decoded world-tool invocations.
+///
+/// The UI, the animation, and the metrics writer all read the same feed, so
+/// one successfully decoded handler invocation produces exactly one record
+/// everywhere.
 #pragma once
 
 #include "world/world.hpp"
 
+#include <nlohmann/json.hpp>
+
 #include <cstddef>
 #include <cstdint>
-#include <nlohmann/json.hpp>
 #include <optional>
 #include <string>
 #include <vector>
 
 namespace pigpen::agent {
 
-/// One successfully decoded world-tool handler invocation and its observable
-/// world transition. Application-budget rejections carry a structured error
-/// response and identical before/after positions.
+/// @brief One successfully decoded world-tool handler invocation and its
+/// observable world transition.
+/// @note Application-budget rejections still appear here: they carry a
+/// structured error response, `action_executed == false`, and identical
+/// before/after positions.
 struct WorldEvent {
   std::uint64_t tick{};
   std::size_t turn{};
@@ -29,6 +38,8 @@ struct WorldEvent {
   friend bool operator==(const WorldEvent &, const WorldEvent &) = default;
 };
 
+/// @brief Append-only event history; indices are stable for the lifetime of
+/// a session.
 using EventFeed = std::vector<WorldEvent>;
 
 } // namespace pigpen::agent

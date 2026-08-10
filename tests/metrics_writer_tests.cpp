@@ -1,3 +1,7 @@
+/// @file metrics_writer_tests.cpp
+/// @brief Covers JSONL header/tool/turn/footer reconciliation, the incomplete
+/// "abandoned" footer emitted on destruction, and footer finality.
+
 #include "agent/metrics_writer.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -11,6 +15,8 @@
 
 namespace {
 
+/// @brief Parses every line of a JSONL log so assertions can address records
+/// by position and field rather than by raw text.
 [[nodiscard]] std::vector<nlohmann::json>
 read_records(const std::filesystem::path &path) {
   std::ifstream stream{path};
@@ -21,6 +27,8 @@ read_records(const std::filesystem::path &path) {
   return records;
 }
 
+/// @brief Yields a unique temp-directory path per invocation so concurrent
+/// test runs never share a log directory.
 [[nodiscard]] std::filesystem::path test_directory() {
   const auto stamp =
       std::chrono::steady_clock::now().time_since_epoch().count();

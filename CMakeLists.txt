@@ -307,7 +307,7 @@ if(PIGPEN_BUILD_TESTS)
     NAME pigpen_reflection_integration
     COMMAND
       "${Python3_EXECUTABLE}"
-      "${CMAKE_CURRENT_SOURCE_DIR}/tests/reflection_integration_test.py"
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/reflection_integration_tests.py"
       "$<TARGET_FILE:pig-pen-headless>"
   )
   set_tests_properties(pigpen_reflection_integration PROPERTIES TIMEOUT 45)
@@ -319,7 +319,7 @@ if(PIGPEN_BUILD_TESTS)
         NAME "pigpen_headless_graceful_${PIGPEN_SIGNAL_TEST_SUFFIX}"
         COMMAND
           "${Python3_EXECUTABLE}"
-          "${CMAKE_CURRENT_SOURCE_DIR}/tests/headless_signal_test.py"
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/headless_signal_tests.py"
           "$<TARGET_FILE:pig-pen-headless>"
           "${PIGPEN_SIGNAL}"
       )

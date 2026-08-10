@@ -1,16 +1,25 @@
+/// @file tool_contract.hpp
+/// @brief Reflected argument and response types: the model-facing contract.
+///
+/// Scry derives closed JSON Schemas from these declarations at compile time
+/// (P2996/P3394), strictly decodes incoming arguments, and encodes the typed
+/// responses. Adding or renaming a member or enumerator changes schema,
+/// decode, and encode from this one place.
 #pragma once
 
 #include "world/world.hpp"
 
+#include <scry/reflection.hpp>
+
 #include <cstddef>
 #include <optional>
-#include <scry/reflection.hpp>
 #include <string>
 #include <vector>
 
 namespace pigpen::agent {
 
-/// Shared reflected input for tools that act along a cardinal direction.
+/// @brief Shared reflected input for tools that act along a cardinal
+/// direction.
 struct DirectionArguments {
   // clang-format off: keep the P3394 annotation visually separate from its type.
   [[=scry::reflection::description{
@@ -19,19 +28,26 @@ struct DirectionArguments {
   // clang-format on
 };
 
-/// Reflected input for a tool that accepts no arguments.
+/// @brief Reflected input for a tool that accepts no arguments.
 struct EatArguments {};
 
+/// @brief Per-turn action budget reported inside every tool response so the
+/// model always knows how many world actions remain.
 struct TurnToolBudget {
   std::size_t used{};
   std::size_t remaining{};
   std::string instruction{};
 };
 
+/// @brief Application-level failure reported inside a decoded response.
+/// @note Distinct from protocol failures (unknown tool, undecodable
+/// arguments), which scry rejects before any handler runs.
 enum class ToolFailureCode {
   tool_budget_exhausted,
 };
 
+/// @brief Response envelope for `move`; `action_executed` is false when the
+/// per-turn budget rejected the action.
 struct MoveToolResponse {
   bool ok{};
   bool action_executed{};
@@ -43,11 +59,14 @@ struct MoveToolResponse {
   TurnToolBudget turn_tool_budget{};
 };
 
+/// @brief One scanned cell as shown to the model; `item` may read
+/// "something" in opaque-look episodes.
 struct LookToolCell {
   int distance{};
   std::optional<std::string> item{};
 };
 
+/// @brief Response envelope for `look`.
 struct LookToolResponse {
   bool ok{};
   bool action_executed{};
@@ -59,6 +78,8 @@ struct LookToolResponse {
   TurnToolBudget turn_tool_budget{};
 };
 
+/// @brief Response envelope for `eat`; `reward` and `score` are withheld in
+/// no-reward-feedback episodes.
 struct EatToolResponse {
   bool ok{};
   bool action_executed{};

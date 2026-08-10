@@ -1,3 +1,5 @@
+/// @file world_animation.cpp
+/// @brief Implements the event-feed-to-visual-timeline state machine.
 #include "ui/world_animation.hpp"
 
 #include <algorithm>

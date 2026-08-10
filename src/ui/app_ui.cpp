@@ -1,3 +1,5 @@
+/// @file app_ui.cpp
+/// @brief Panel drawing and widget state for the Dear ImGui front end.
 #include "ui/app_ui.hpp"
 
 #include "agent/episode_runner.hpp"
@@ -47,6 +49,8 @@ constexpr std::array preset_names{
     scenario_presets[4].name, "Custom",
 };
 
+/// @brief Copies @p value into a fixed-size ImGui text buffer, truncating
+/// and always leaving a terminating NUL.
 template <std::size_t Size>
 void set_text(std::array<char, Size> &destination,
               const std::string_view value) {
@@ -77,6 +81,8 @@ void set_text(std::array<char, Size> &destination,
   return value;
 }
 
+/// @brief Case-insensitive event-log filter over tick, turn, tool name, and
+/// the argument/result JSON.
 [[nodiscard]] bool matches_filter(const agent::WorldEvent &event,
                                   const std::string_view filter) {
   if (filter.empty()) {
@@ -89,6 +95,7 @@ void set_text(std::array<char, Size> &destination,
              .find(lowercase(std::string{filter})) != std::string::npos;
 }
 
+/// @brief Dumps JSON truncated with an ellipsis so table cells stay short.
 [[nodiscard]] std::string compact(const nlohmann::json &value,
                                   const std::size_t maximum = 150U) {
   auto text = value.dump();
@@ -114,6 +121,7 @@ void set_text(std::array<char, Size> &destination,
   return IM_COL32(220, 220, 220, alpha);
 }
 
+/// @brief Draws one item glyph, scaled to the current cell size.
 void draw_item(ImDrawList &draw_list, const world::ItemType item,
                const ImVec2 center, const float cell_size) {
   const auto radius = std::max(2.5F, cell_size * 0.13F);
@@ -185,6 +193,8 @@ void draw_item(ImDrawList &draw_list, const world::ItemType item,
   return {1.0F, 1.0F, 1.0F, 1.0F};
 }
 
+/// @brief Human-readable transcript label for a decoded call, including the
+/// budget or world failure reason when the action changed nothing.
 [[nodiscard]] std::string decoded_call_label(const agent::WorldEvent &event) {
   auto label = event.tool;
   if (event.arguments.contains("direction") &&
@@ -212,6 +222,7 @@ void draw_item(ImDrawList &draw_list, const world::ItemType item,
   return label;
 }
 
+/// @brief Maps a preset index to the `prompt_variant` stored in the log.
 [[nodiscard]] std::string preset_variant(const int preset) {
   if (preset >= 0 && preset < custom_preset) {
     return scenario_presets[static_cast<std::size_t>(preset)].variant;

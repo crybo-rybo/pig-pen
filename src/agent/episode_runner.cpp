@@ -1,4 +1,11 @@
-#include "episode_runner.hpp"
+/// @file episode_runner.cpp
+/// @brief EpisodeRunner implementation; the contract is in the header.
+///
+/// Transport callbacks capture a weak_ptr to SharedState plus a generation
+/// counter, so callbacks from a cancelled, superseded, or destroyed turn
+/// return without touching newer state. Callbacks only stage an outcome;
+/// tick() applies it on the caller's thread.
+#include "agent/episode_runner.hpp"
 
 #include "agent/prompt.hpp"
 

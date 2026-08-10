@@ -1,3 +1,5 @@
+/// @file gui_options.cpp
+/// @brief Implements command-line parsing for the GUI entry point.
 #include "ui/gui_options.hpp"
 
 #include <optional>

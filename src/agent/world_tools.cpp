@@ -1,3 +1,5 @@
+/// @file world_tools.cpp
+/// @brief WorldTools implementation; the contract is in the header.
 #include "agent/world_tools.hpp"
 
 #include <stdexcept>

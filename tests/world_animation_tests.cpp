@@ -1,12 +1,21 @@
+/// @file world_animation_tests.cpp
+/// @brief Covers the event feed becoming an ordered visual timeline: burst
+/// moves play back sequentially, look/eat become transient effects, and
+/// budget-rejected calls never animate.
+///
+/// WorldAnimationState takes the current time as a parameter, so these cases
+/// step a fake clock instead of needing ImGui or a real frame loop.
+
 #include "ui/world_animation.hpp"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
-
 #include <nlohmann/json.hpp>
 
 namespace {
 
+/// @brief Builds an executed eastward move event, varying only the fields the
+/// animation cares about (tick and the before/after positions).
 [[nodiscard]] pigpen::agent::WorldEvent
 move_event(const std::uint64_t tick, const pigpen::world::Position before,
            const pigpen::world::Position after) {

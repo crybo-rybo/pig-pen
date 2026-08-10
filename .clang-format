@@ -1,0 +1,25 @@
+---
+# Codifies the style the sources were written in: LLVM defaults (2-space
+# indent, 80 columns, attached braces, right-aligned pointers/references),
+# plus include regrouping into main header / project / third-party / standard
+# blocks — the layout src/ui/app_ui.cpp already follows.
+#
+# CI pins clang-format 22.1.8 (.github/workflows/format.yml); use the same
+# major version locally so both produce identical output.
+BasedOnStyle: LLVM
+Standard: Latest
+
+# foo.hpp is the main header of both foo.cpp and foo_tests.cpp and stays in
+# its own block at the top.
+IncludeIsMainRegex: '(_tests)?$'
+IncludeBlocks: Regroup
+IncludeCategories:
+  # Project headers: always quoted and rooted at src/ ("agent/config.hpp").
+  - Regex: '^"'
+    Priority: 1
+  # Fetched third-party dependencies.
+  - Regex: '^<(scry|nlohmann|imgui|GLFW|catch2)[/._>]'
+    Priority: 2
+  # C++ standard library.
+  - Regex: '.*'
+    Priority: 3

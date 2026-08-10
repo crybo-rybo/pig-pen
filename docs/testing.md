@@ -50,7 +50,7 @@ covering:
 - `pigpen_headless_rejects_invalid_bounds` — `--max-tool-rounds 65` must fail
 - `pigpen_headless_rejects_invalid_temperature` — non-finite sampling values
   must fail
-- `pigpen_headless_graceful_sigint` / `_sigterm` — `tests/headless_signal_test.py`
+- `pigpen_headless_graceful_sigint` / `_sigterm` — `tests/headless_signal_tests.py`
   starts a stub socket server on a loopback port, points the CLI at it, sends
   an exact tagged model identifier, verifies that identifier in the HTTP
   request and JSONL header, then asserts the exit status is `128 + signal`
