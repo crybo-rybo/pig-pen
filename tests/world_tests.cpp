@@ -77,6 +77,10 @@ TEST_CASE("world constants and names match the pen contract", "[world]") {
   CHECK(World::spawn == Position{5, 5});
   CHECK(World::default_item_count == 13);
 
+  CHECK(pigpen::world::direction_name(Direction::north) == "north");
+  CHECK(pigpen::world::direction_name(Direction::south) == "south");
+  CHECK(pigpen::world::direction_name(Direction::east) == "east");
+  CHECK(pigpen::world::direction_name(Direction::west) == "west");
   CHECK(pigpen::world::item_name(ItemType::berry) == "berry");
   CHECK(pigpen::world::item_name(ItemType::apple) == "apple");
   CHECK(pigpen::world::item_name(ItemType::truffle) == "truffle");

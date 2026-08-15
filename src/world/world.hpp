@@ -36,6 +36,11 @@ enum class Direction : std::uint8_t {
   west,
 };
 
+/// @brief Canonical lowercase name of a direction, matching its reflected
+/// protocol spelling.
+[[nodiscard]] constexpr std::string_view
+direction_name(Direction direction) noexcept;
+
 /// @brief The four edible item kinds placed by the seed.
 /// @note Enumerator spelling is protocol-visible through scry and the log.
 enum class ItemType : std::uint8_t {
@@ -203,6 +208,20 @@ private:
   std::bitset<cell_count> observed_{};
   std::array<std::size_t, 4> eaten_counts_{};
 };
+
+constexpr std::string_view direction_name(const Direction direction) noexcept {
+  switch (direction) {
+  case Direction::north:
+    return "north";
+  case Direction::south:
+    return "south";
+  case Direction::east:
+    return "east";
+  case Direction::west:
+    return "west";
+  }
+  return "unknown";
+}
 
 constexpr std::string_view item_name(const ItemType item) noexcept {
   switch (item) {

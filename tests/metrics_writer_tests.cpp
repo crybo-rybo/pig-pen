@@ -50,32 +50,20 @@ TEST_CASE("metrics log contains a reconcilable header tool turn and footer") {
   auto writer = std::move(*created);
   const auto path = writer->path();
 
-  const pigpen::agent::WorldEvent event{
+  const pigpen::agent::ToolActivity activity{
       .tick = 1,
       .turn = 1,
-      .tool = "eat",
-      .arguments = nlohmann::json::object(),
-      .result =
-          {
-              {"ok", true},
-              {"action_executed", true},
-              {"error_code", nullptr},
-              {"error", nullptr},
-              {"ate", "berry"},
-              {"reason", nullptr},
-              {"reward", 1},
-              {"score", 1},
-              {"turn_tool_budget",
-               {{"used", 1},
-                {"remaining", 3},
-                {"instruction", "3 world-tool calls remain in this turn."}}},
-          },
+      .kind = pigpen::agent::ToolKind::eat,
+      .outcome = pigpen::agent::ToolOutcome::succeeded,
+      .arguments_json = "{}",
+      .result_json =
+          R"({"action_executed":true,"ate":"berry","error":null,"error_code":null,"ok":true,"reason":null,"reward":1,"score":1,"turn_tool_budget":{"instruction":"3 world-tool calls remain in this turn.","remaining":3,"used":1}})",
       .before = {.x = 4, .y = 4},
       .after = {.x = 4, .y = 4},
-      .action_executed = true,
       .eaten = pigpen::world::ItemType::berry,
+      .score_after = 1,
   };
-  REQUIRE(writer->record_tool(event, 1).has_value());
+  REQUIRE(writer->record_tool(activity).has_value());
   REQUIRE(writer
               ->record_turn({
                   .turn = 1,
@@ -104,8 +92,10 @@ TEST_CASE("metrics log contains a reconcilable header tool turn and footer") {
   REQUIRE(records.front().at("scenario").at("max_world_tool_calls_per_turn") ==
           4);
   REQUIRE(records[1].at("type") == "tool");
+  REQUIRE(records[1].at("args") == nlohmann::json::object());
   REQUIRE(records[1].at("action_executed") == true);
-  REQUIRE(records[1].at("result") == event.result);
+  REQUIRE(records[1].at("result") ==
+          nlohmann::json::parse(activity.result_json));
   REQUIRE(records[2].at("type") == "turn");
   REQUIRE(records[2].at("tool_calls") == 1);
   REQUIRE(records[2].at("zero_tool_turn") == false);

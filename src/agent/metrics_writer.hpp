@@ -39,7 +39,7 @@ public:
 
   /// @brief Append one successfully decoded world-tool invocation.
   [[nodiscard]] std::expected<void, std::string>
-  record_tool(const WorldEvent &event, int score_after);
+  record_tool(const ToolActivity &activity);
   /// @brief Append one finished model turn.
   [[nodiscard]] std::expected<void, std::string>
   record_turn(const TurnRecord &record);
@@ -58,8 +58,8 @@ private:
   MetricsWriter(std::filesystem::path path, std::ofstream stream,
                 std::chrono::steady_clock::time_point started);
 
-  [[nodiscard]] std::expected<void, std::string>
-  write_line(const nlohmann::json &record, bool flush = false);
+  [[nodiscard]] std::expected<void, std::string> write_line(std::string record,
+                                                            bool flush = false);
   [[nodiscard]] std::expected<void, std::string>
   write_footer(std::string reason, std::uint32_t turns_used, std::string error,
                int final_score, bool complete);

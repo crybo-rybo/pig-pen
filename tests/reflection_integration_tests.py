@@ -610,6 +610,18 @@ def assert_valid_jsonl_log(
     )
 
 
+def assert_headless_tool_activity(stdout: str, response: dict[str, Any]) -> None:
+    canonical_result = json.dumps(response, separators=(",", ":"), sort_keys=True)
+    expected = (
+        'tool[turn=1,tick=1] move args={"direction":"east"} '
+        f"result={canonical_result} position=(5,5)->(6,5)"
+    )
+    check(
+        expected in stdout,
+        f"headless activity did not preserve Scry's canonical payloads: {stdout}",
+    )
+
+
 def assert_rejected_jsonl_log(records: list[dict[str, Any]], base_url: str) -> None:
     header = records[0]
     check(header.get("type") == "header", f"missing rejection header: {records!r}")
@@ -619,7 +631,7 @@ def assert_rejected_jsonl_log(records: list[dict[str, Any]], base_url: str) -> N
     tool_records = [record for record in records if record.get("type") == "tool"]
     check(
         not tool_records,
-        f"schema-rejected call reached Pig Pen's typed event layer: {tool_records!r}",
+        f"schema-rejected call reached Pig Pen's activity layer: {tool_records!r}",
     )
     check(
         all(
@@ -687,6 +699,7 @@ def main() -> int:
     )
     assert_reflected_tools(valid.requests[0])
     response = extract_tool_response(valid.requests[1])
+    assert_headless_tool_activity(valid.completed.stdout, response)
     assert_valid_jsonl_log(valid.records, response, valid.base_url)
     check(
         FINAL_TEXT in valid.completed.stdout,

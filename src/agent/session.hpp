@@ -69,8 +69,8 @@ public:
   [[nodiscard]] const Config &config() const noexcept;
   /// @brief The simulation; mutated only through registered tools.
   [[nodiscard]] const world::World &world() const noexcept;
-  /// @brief Append-only feed of successfully decoded tool invocations.
-  [[nodiscard]] const EventFeed &events() const noexcept;
+  /// @brief Append-only feed of successfully decoded tool activity.
+  [[nodiscard]] const ToolActivityFeed &tool_activities() const noexcept;
   /// @brief The episode state machine.
   [[nodiscard]] const EpisodeRunner &runner() const noexcept;
   /// @brief The episode state machine.

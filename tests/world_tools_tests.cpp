@@ -8,7 +8,6 @@
 
 #include "agent/world_tools.hpp"
 
-#include "agent/reflected_json.hpp"
 #include "agent/tool_contract.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -170,7 +169,9 @@ TEST_CASE("Per-turn budget returns a flat reflected failure without acting") {
   CHECK(rejected.response.turn_tool_budget.remaining == 0);
   CHECK(world.position() == initial);
 
-  const auto rejected_json = pigpen::agent::reflected_json(rejected.response);
+  const auto encoded = scry::reflection::encode(rejected.response);
+  REQUIRE(encoded.has_value());
+  const auto rejected_json = nlohmann::json::parse(encoded->text);
   CHECK(rejected_json.at("ok") == false);
   CHECK(rejected_json.at("action_executed") == false);
   CHECK(rejected_json.at("error_code") == "tool_budget_exhausted");
@@ -243,22 +244,26 @@ TEST_CASE(
   CHECK(hidden_world.score() == pigpen::world::item_reward(placement.item));
 }
 
-TEST_CASE("Reflection projects the flat typed response for observability") {
+TEST_CASE(
+    "Scry publicly encodes typed arguments and responses for observability") {
   World world{9};
   WorldTools tools{world};
   tools.begin_turn(1);
   const auto execution = tools.move({.direction = Direction::east});
-  const auto arguments = pigpen::agent::reflected_json(
+  const auto arguments = scry::reflection::encode(
       DirectionArguments{.direction = Direction::east});
-  const auto response = pigpen::agent::reflected_json(execution.response);
+  const auto response = scry::reflection::encode(execution.response);
 
-  CHECK(arguments == nlohmann::json{{"direction", "east"}});
-  CHECK(response.at("ok") == true);
-  CHECK(response.at("action_executed") == true);
-  CHECK(response.at("error_code").is_null());
-  CHECK(response.at("error").is_null());
-  CHECK(response.at("position") == nlohmann::json{{"x", 6}, {"y", 5}});
-  CHECK(response.at("reason").is_null());
-  CHECK_FALSE(response.contains("result"));
-  CHECK(response.at("turn_tool_budget").at("used") == 1);
+  REQUIRE(arguments.has_value());
+  REQUIRE(response.has_value());
+  CHECK(arguments->text == R"({"direction":"east"})");
+  const auto response_json = nlohmann::json::parse(response->text);
+  CHECK(response_json.at("ok") == true);
+  CHECK(response_json.at("action_executed") == true);
+  CHECK(response_json.at("error_code").is_null());
+  CHECK(response_json.at("error").is_null());
+  CHECK(response_json.at("position") == nlohmann::json{{"x", 6}, {"y", 5}});
+  CHECK(response_json.at("reason").is_null());
+  CHECK_FALSE(response_json.contains("result"));
+  CHECK(response_json.at("turn_tool_budget").at("used") == 1);
 }

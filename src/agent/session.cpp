@@ -5,7 +5,6 @@
 
 #include "agent/metrics_writer.hpp"
 #include "agent/prompt.hpp"
-#include "agent/reflected_json.hpp"
 #include "agent/scry_transport.hpp"
 #include "agent/world_tools.hpp"
 
@@ -53,6 +52,39 @@ namespace {
   });
 }
 
+/// @brief Project each typed tool response into the small application outcome
+/// model. Exact response details remain available in ToolActivity::result_json.
+[[nodiscard]] ToolOutcome tool_outcome(const MoveToolResponse &response) {
+  if (!response.action_executed) {
+    return ToolOutcome::budget_exhausted;
+  }
+  if (response.reason) {
+    switch (*response.reason) {
+    case world::MoveFailure::wall:
+      return ToolOutcome::blocked_by_wall;
+    }
+  }
+  return ToolOutcome::succeeded;
+}
+
+[[nodiscard]] ToolOutcome tool_outcome(const LookToolResponse &response) {
+  return response.action_executed ? ToolOutcome::succeeded
+                                  : ToolOutcome::budget_exhausted;
+}
+
+[[nodiscard]] ToolOutcome tool_outcome(const EatToolResponse &response) {
+  if (!response.action_executed) {
+    return ToolOutcome::budget_exhausted;
+  }
+  if (response.reason) {
+    switch (*response.reason) {
+    case world::EatFailure::nothing_here:
+      return ToolOutcome::nothing_to_eat;
+    }
+  }
+  return ToolOutcome::succeeded;
+}
+
 } // namespace
 
 class Session::Impl final {
@@ -87,11 +119,11 @@ public:
                       }
                     },
             },
-            [this] { return events.size(); }) {}
+            [this] { return activities.size(); }) {}
 
   Config config;
   std::shared_ptr<world::World> world;
-  EventFeed events{};
+  ToolActivityFeed activities{};
   std::unique_ptr<MetricsWriter> metrics;
   scry::Harness harness;
   scry::Conversation conversation;
@@ -163,13 +195,17 @@ Session::~Session() = default;
 std::expected<void, std::string> Session::register_tools() {
   const std::weak_ptr<Session> weak_session{shared_from_this()};
   const auto add = [this, weak_session]<typename Arguments, typename Invoke>(
-                       scry::reflection::ToolMetadata metadata, Invoke invoke) {
+                       const ToolKind kind, std::string description,
+                       Invoke invoke) {
     using Execution = std::invoke_result_t<Invoke &, WorldTools &, Arguments>;
     using Response = typename Execution::response_type;
-    auto name = metadata.name;
     return scry::reflection::add<Arguments>(
-        impl_->harness.tools(), std::move(metadata),
-        [weak_session, name = std::move(name), invoke = std::move(invoke)](
+        impl_->harness.tools(),
+        {
+            .name = std::string{tool_kind_name(kind)},
+            .description = std::move(description),
+        },
+        [weak_session, kind, invoke = std::move(invoke)](
             Arguments arguments) mutable -> scry::Result<Response> {
           const auto session = weak_session.lock();
           if (!session) {
@@ -180,26 +216,32 @@ std::expected<void, std::string> Session::register_tools() {
           }
           const auto snapshot = session->impl_->runner.snapshot();
           const auto turn = snapshot.turns_used + 1U;
-          auto arguments_json = reflected_json(arguments);
+          auto arguments_json = scry::reflection::encode(arguments);
+          if (!arguments_json) {
+            return std::unexpected(std::move(arguments_json.error()));
+          }
           session->impl_->tools.begin_turn(turn);
           auto execution =
               std::invoke(invoke, session->impl_->tools, std::move(arguments));
-          auto response_json = reflected_json(execution.response);
-          session->impl_->events.push_back(WorldEvent{
+          auto response_json = scry::reflection::encode(execution.response);
+          if (!response_json) {
+            return std::unexpected(std::move(response_json.error()));
+          }
+          session->impl_->activities.push_back(ToolActivity{
               .tick = session->impl_->next_tool_tick++,
               .turn = turn,
-              .tool = name,
-              .arguments = std::move(arguments_json),
-              .result = std::move(response_json),
+              .kind = kind,
+              .outcome = tool_outcome(execution.response),
+              .arguments_json = std::move(arguments_json->text),
+              .result_json = std::move(response_json->text),
               .before = execution.before,
               .after = execution.after,
               .direction = execution.direction,
-              .action_executed = execution.response.action_executed,
               .eaten = execution.eaten,
+              .score_after = session->impl_->world->score(),
           });
-          const auto &event = session->impl_->events.back();
-          if (auto recorded = session->impl_->metrics->record_tool(
-                  event, session->impl_->world->score());
+          const auto &activity = session->impl_->activities.back();
+          if (auto recorded = session->impl_->metrics->record_tool(activity);
               !recorded) {
             session->impl_->metrics_error = std::move(recorded.error());
             session->impl_->metrics_failure_pending = true;
@@ -209,28 +251,19 @@ std::expected<void, std::string> Session::register_tools() {
   };
 
   if (auto status = add.template operator()<DirectionArguments>(
-          {
-              .name = "move",
-              .description = "Move one cell north, south, east, or west.",
-          },
+          ToolKind::move, "Move one cell north, south, east, or west.",
           &WorldTools::move);
       !status) {
     return std::unexpected(status.error().message);
   }
   if (auto status = add.template operator()<DirectionArguments>(
-          {
-              .name = "look",
-              .description = "Scan every cell in one direction to the wall.",
-          },
+          ToolKind::look, "Scan every cell in one direction to the wall.",
           &WorldTools::look);
       !status) {
     return std::unexpected(status.error().message);
   }
   if (auto status = add.template operator()<EatArguments>(
-          {
-              .name = "eat",
-              .description = "Eat the item on the current cell, if present.",
-          },
+          ToolKind::eat, "Eat the item on the current cell, if present.",
           &WorldTools::eat);
       !status) {
     return std::unexpected(status.error().message);
@@ -275,11 +308,13 @@ void Session::clear_pending_user_inputs() {
 
 const Config &Session::config() const noexcept { return impl_->config; }
 const world::World &Session::world() const noexcept { return *impl_->world; }
-const EventFeed &Session::events() const noexcept { return impl_->events; }
+const ToolActivityFeed &Session::tool_activities() const noexcept {
+  return impl_->activities;
+}
 const EpisodeRunner &Session::runner() const noexcept { return impl_->runner; }
 EpisodeRunner &Session::runner() noexcept { return impl_->runner; }
 std::size_t Session::tool_call_count() const noexcept {
-  return impl_->events.size();
+  return impl_->activities.size();
 }
 
 const std::filesystem::path &Session::metrics_path() const noexcept {

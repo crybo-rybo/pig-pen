@@ -1,5 +1,5 @@
 /// @file world_animation_tests.cpp
-/// @brief Covers the event feed becoming an ordered visual timeline: burst
+/// @brief Covers the activity feed becoming an ordered visual timeline: burst
 /// moves play back sequentially, look/eat become transient effects, and
 /// budget-rejected calls never animate.
 ///
@@ -10,24 +10,22 @@
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
-#include <nlohmann/json.hpp>
 
 namespace {
 
-/// @brief Builds an executed eastward move event, varying only the fields the
-/// animation cares about (tick and the before/after positions).
-[[nodiscard]] pigpen::agent::WorldEvent
-move_event(const std::uint64_t tick, const pigpen::world::Position before,
-           const pigpen::world::Position after) {
+/// @brief Builds a successful eastward move, varying only the animation fields.
+[[nodiscard]] pigpen::agent::ToolActivity
+move_activity(const std::uint64_t tick, const pigpen::world::Position before,
+              const pigpen::world::Position after) {
   return {
       .tick = tick,
       .turn = 1,
-      .tool = "move",
-      .arguments = {{"direction", "east"}},
+      .kind = pigpen::agent::ToolKind::move,
+      .outcome = pigpen::agent::ToolOutcome::succeeded,
+      .arguments_json = R"({"direction":"east"})",
       .before = before,
       .after = after,
       .direction = pigpen::world::Direction::east,
-      .action_executed = true,
   };
 }
 
@@ -36,68 +34,67 @@ move_event(const std::uint64_t tick, const pigpen::world::Position before,
 TEST_CASE("burst moves animate sequentially instead of teleporting") {
   pigpen::ui::WorldAnimationState animation;
   animation.reset({.x = 5, .y = 5});
-  const pigpen::agent::EventFeed events{
-      move_event(1, {.x = 5, .y = 5}, {.x = 6, .y = 5}),
-      move_event(2, {.x = 6, .y = 5}, {.x = 7, .y = 5}),
+  const pigpen::agent::ToolActivityFeed activities{
+      move_activity(1, {.x = 5, .y = 5}, {.x = 6, .y = 5}),
+      move_activity(2, {.x = 6, .y = 5}, {.x = 7, .y = 5}),
   };
 
-  animation.update(events, {.x = 7, .y = 5}, 10.0);
+  animation.update(activities, {.x = 7, .y = 5}, 10.0);
   CHECK(animation.queued_action_count() == 2);
   CHECK(animation.blob_position().x == Catch::Approx(5.0F));
 
-  animation.update(events, {.x = 7, .y = 5}, 10.075);
+  animation.update(activities, {.x = 7, .y = 5}, 10.075);
   CHECK(animation.blob_position().x == Catch::Approx(5.5F));
 
-  animation.update(events, {.x = 7, .y = 5}, 10.150);
+  animation.update(activities, {.x = 7, .y = 5}, 10.150);
   CHECK(animation.queued_action_count() == 1);
   CHECK(animation.blob_position().x == Catch::Approx(6.0F));
 
-  animation.update(events, {.x = 7, .y = 5}, 10.225);
+  animation.update(activities, {.x = 7, .y = 5}, 10.225);
   CHECK(animation.blob_position().x == Catch::Approx(6.5F));
 
-  animation.update(events, {.x = 7, .y = 5}, 10.300);
+  animation.update(activities, {.x = 7, .y = 5}, 10.300);
   CHECK(animation.queued_action_count() == 0);
   CHECK(animation.blob_position().x == Catch::Approx(7.0F));
 }
 
-TEST_CASE("look and eat events become ordered transient effects") {
+TEST_CASE("look and eat activities become ordered transient effects") {
   pigpen::ui::WorldAnimationState animation;
   animation.reset({.x = 5, .y = 5});
-  const pigpen::agent::EventFeed events{
+  const pigpen::agent::ToolActivityFeed activities{
       {
           .tick = 1,
           .turn = 1,
-          .tool = "look",
-          .arguments = {{"direction", "north"}},
+          .kind = pigpen::agent::ToolKind::look,
+          .outcome = pigpen::agent::ToolOutcome::succeeded,
+          .arguments_json = R"({"direction":"north"})",
           .before = {.x = 5, .y = 5},
           .after = {.x = 5, .y = 5},
           .direction = pigpen::world::Direction::north,
-          .action_executed = true,
       },
       {
           .tick = 2,
           .turn = 1,
-          .tool = "eat",
-          .arguments = nlohmann::json::object(),
+          .kind = pigpen::agent::ToolKind::eat,
+          .outcome = pigpen::agent::ToolOutcome::succeeded,
           .before = {.x = 5, .y = 5},
           .after = {.x = 5, .y = 5},
-          .action_executed = true,
       },
   };
 
-  animation.update(events, {.x = 5, .y = 5}, 2.0);
+  animation.update(activities, {.x = 5, .y = 5}, 2.0);
   auto effect = animation.active_effect();
   REQUIRE(effect.has_value());
   CHECK(effect->kind == pigpen::ui::VisualEffectKind::look);
   REQUIRE(effect->direction.has_value());
   CHECK(*effect->direction == pigpen::world::Direction::north);
 
-  animation.update(events, {.x = 5, .y = 5}, 2.231);
+  animation.update(activities, {.x = 5, .y = 5}, 2.231);
   effect = animation.active_effect();
   REQUIRE(effect.has_value());
   CHECK(effect->kind == pigpen::ui::VisualEffectKind::eat);
 
-  animation.update(events, {.x = 5, .y = 5}, 2.461);
+  animation.update(activities, {.x = 5, .y = 5}, 2.461);
   CHECK_FALSE(animation.active_effect().has_value());
   CHECK(animation.queued_action_count() == 0);
 }
@@ -106,12 +103,12 @@ TEST_CASE("animation speed changes move duration") {
   pigpen::ui::WorldAnimationState animation;
   animation.reset({.x = 1, .y = 1});
   animation.set_speed(2.0F);
-  const pigpen::agent::EventFeed events{
-      move_event(1, {.x = 1, .y = 1}, {.x = 2, .y = 1}),
+  const pigpen::agent::ToolActivityFeed activities{
+      move_activity(1, {.x = 1, .y = 1}, {.x = 2, .y = 1}),
   };
 
-  animation.update(events, {.x = 2, .y = 1}, 3.0);
-  animation.update(events, {.x = 2, .y = 1}, 3.075);
+  animation.update(activities, {.x = 2, .y = 1}, 3.0);
+  animation.update(activities, {.x = 2, .y = 1}, 3.075);
   CHECK(animation.queued_action_count() == 0);
   CHECK(animation.blob_position().x == Catch::Approx(2.0F));
 }
@@ -119,18 +116,18 @@ TEST_CASE("animation speed changes move duration") {
 TEST_CASE("application-budget rejections do not animate as world actions") {
   pigpen::ui::WorldAnimationState animation;
   animation.reset({.x = 5, .y = 5});
-  const pigpen::agent::EventFeed events{{
+  const pigpen::agent::ToolActivityFeed activities{{
       .tick = 1,
       .turn = 1,
-      .tool = "look",
-      .arguments = {{"direction", "north"}},
+      .kind = pigpen::agent::ToolKind::look,
+      .outcome = pigpen::agent::ToolOutcome::budget_exhausted,
+      .arguments_json = R"({"direction":"north"})",
       .before = {.x = 5, .y = 5},
       .after = {.x = 5, .y = 5},
       .direction = pigpen::world::Direction::north,
-      .action_executed = false,
   }};
 
-  animation.update(events, {.x = 5, .y = 5}, 4.0);
+  animation.update(activities, {.x = 5, .y = 5}, 4.0);
   CHECK(animation.queued_action_count() == 0);
   CHECK_FALSE(animation.active_effect());
   CHECK(animation.blob_position().x == Catch::Approx(5.0F));

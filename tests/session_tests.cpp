@@ -82,7 +82,7 @@ TEST_CASE("session atomically owns a seeded world registered harness and "
     CHECK(session->config() == config);
     CHECK(session->world().seed() == 2026);
     CHECK(session->runner().snapshot().state == pigpen::agent::RunState::idle);
-    CHECK(session->events().empty());
+    CHECK(session->tool_activities().empty());
     CHECK(session->metrics_error().empty());
     log_path = session->metrics_path();
     CHECK(std::filesystem::exists(log_path));

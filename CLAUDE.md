@@ -88,7 +88,7 @@ integration is testable without a window or a model server
   `MetricsWriter`) and is the **reset unit**: there is no partial reset, you
   destroy and recreate the session (that's what the GUI Reset button does).
 - **`src/ui`** — `AppUi` owns the `shared_ptr<Session>`;
-  `WorldAnimationState` turns the event feed into timed steps with
+  `WorldAnimationState` turns the activity feed into timed steps with
   caller-supplied time, so it is tested without ImGui or a wall clock.
 - **`src/app`** — `main.cpp` (GLFW/ImGui frame loop) and `headless_main.cpp`
   (argv, signals, exit codes) contain nothing testable-by-unit.
