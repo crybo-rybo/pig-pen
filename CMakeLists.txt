@@ -89,7 +89,7 @@ else()
   FetchContent_Declare(
     scry
     GIT_REPOSITORY https://github.com/crybo-rybo/scry.git
-    GIT_TAG 5ea0474ff34b2d598851269e3bf9e0f60913a167
+    GIT_TAG 88ce45752eff2857b1586d77e70bdceb598e4b8d
     GIT_PROGRESS TRUE
     SYSTEM
     EXCLUDE_FROM_ALL
@@ -126,7 +126,6 @@ target_compile_features(pigpen_reflected_tools PUBLIC cxx_std_26)
 target_link_libraries(
   pigpen_reflected_tools
   PUBLIC
-    nlohmann_json::nlohmann_json
     pigpen_world
     scry::reflection
 )
@@ -149,8 +148,8 @@ target_link_libraries(
   pigpen_agent
   PUBLIC
     pigpen_world
-    nlohmann_json::nlohmann_json
   PRIVATE
+    nlohmann_json::nlohmann_json
     pigpen_reflected_tools
     scry::scry
 )
@@ -251,6 +250,7 @@ if(PIGPEN_BUILD_TESTS)
     pigpen_tests
     PRIVATE
       Catch2::Catch2WithMain
+      nlohmann_json::nlohmann_json
       pigpen_agent
   )
   pigpen_configure_target(pigpen_tests)
@@ -271,6 +271,7 @@ if(PIGPEN_BUILD_TESTS)
     pigpen_reflection_tests
     PRIVATE
       Catch2::Catch2WithMain
+      nlohmann_json::nlohmann_json
       pigpen_reflected_tools
   )
   pigpen_configure_target(pigpen_reflection_tests)

@@ -4,6 +4,8 @@
 
 #include "world/world.hpp"
 
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -148,7 +150,7 @@ MetricsWriter::create(const std::filesystem::path &log_directory,
            {"opaque_look", config.opaque_look},
        }},
   };
-  if (auto status = writer->write_line(header, true); !status) {
+  if (auto status = writer->write_line(header.dump(), true); !status) {
     return std::unexpected(std::move(status.error()));
   }
   return writer;
@@ -171,27 +173,34 @@ MetricsWriter::~MetricsWriter() {
 }
 
 std::expected<void, std::string>
-MetricsWriter::record_tool(const WorldEvent &event, const int score_after) {
+MetricsWriter::record_tool(const ToolActivity &activity) {
   if (finalized_) {
     return std::unexpected("cannot record a tool after the metrics footer");
   }
-  ++tool_counts_[event.tool];
-  last_score_ = score_after;
-  if (event.eaten) {
-    ++eaten_counts_[std::string{world::item_name(*event.eaten)}];
+  auto arguments =
+      nlohmann::json::parse(activity.arguments_json, nullptr, false);
+  auto result = nlohmann::json::parse(activity.result_json, nullptr, false);
+  if (arguments.is_discarded() || result.is_discarded()) {
+    return std::unexpected("scry produced invalid canonical tool JSON");
   }
-  return write_line({
+  ++tool_counts_[std::string{tool_kind_name(activity.kind)}];
+  last_score_ = activity.score_after;
+  if (activity.eaten) {
+    ++eaten_counts_[std::string{world::item_name(*activity.eaten)}];
+  }
+  return write_line(nlohmann::json{
       {"type", "tool"},
-      {"turn", event.turn},
-      {"tick", event.tick},
-      {"tool", event.tool},
-      {"args", event.arguments},
-      {"result", event.result},
-      {"before", position_json(event.before)},
-      {"after", position_json(event.after)},
-      {"action_executed", event.action_executed},
-      {"score_after", score_after},
-  });
+      {"turn", activity.turn},
+      {"tick", activity.tick},
+      {"tool", tool_kind_name(activity.kind)},
+      {"args", std::move(arguments)},
+      {"result", std::move(result)},
+      {"before", position_json(activity.before)},
+      {"after", position_json(activity.after)},
+      {"action_executed", activity.action_executed()},
+      {"score_after", activity.score_after},
+  }
+                        .dump());
 }
 
 std::expected<void, std::string>
@@ -201,7 +210,7 @@ MetricsWriter::record_turn(const TurnRecord &record) {
   }
   turns_recorded_ = std::max(turns_recorded_, record.turn);
   return write_line(
-      {
+      nlohmann::json{
           {"type", "turn"},
           {"turn", record.turn},
           {"status", turn_status_name(record.status)},
@@ -214,7 +223,8 @@ MetricsWriter::record_turn(const TurnRecord &record) {
           {"zero_tool_turn",
            record.status == TurnStatus::completed && record.tool_calls == 0U},
           {"latency_ms", record.latency.count()},
-      },
+      }
+          .dump(),
       true);
 }
 
@@ -224,9 +234,9 @@ MetricsWriter::finish(const EpisodeResult &result, const int final_score) {
                       result.turns_used, result.error, final_score, true);
 }
 
-std::expected<void, std::string>
-MetricsWriter::write_line(const nlohmann::json &record, const bool flush) {
-  stream_ << record.dump() << '\n';
+std::expected<void, std::string> MetricsWriter::write_line(std::string record,
+                                                           const bool flush) {
+  stream_ << record << '\n';
   if (flush) {
     stream_.flush();
   }
@@ -246,7 +256,7 @@ MetricsWriter::write_footer(std::string reason, const std::uint32_t turns_used,
   const auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
       std::chrono::steady_clock::now() - started_);
   auto status = write_line(
-      {
+      nlohmann::json{
           {"type", "footer"},
           {"complete", complete},
           {"finish_reason", std::move(reason)},
@@ -256,7 +266,8 @@ MetricsWriter::write_footer(std::string reason, const std::uint32_t turns_used,
           {"tool_call_counts", tool_counts_},
           {"turns_used", turns_used},
           {"duration_ms", duration.count()},
-      },
+      }
+          .dump(),
       true);
   if (status) {
     finalized_ = true;

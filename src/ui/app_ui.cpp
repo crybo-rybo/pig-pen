@@ -7,7 +7,6 @@
 
 #include <imgui.h>
 #include <imgui_internal.h>
-#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <array>
@@ -81,24 +80,26 @@ void set_text(std::array<char, Size> &destination,
   return value;
 }
 
-/// @brief Case-insensitive event-log filter over tick, turn, tool name, and
-/// the argument/result JSON.
-[[nodiscard]] bool matches_filter(const agent::WorldEvent &event,
+/// @brief Case-insensitive activity-log filter over tick, turn, tool name,
+/// outcome, and the exact argument/result JSON text.
+[[nodiscard]] bool matches_filter(const agent::ToolActivity &activity,
                                   const std::string_view filter) {
   if (filter.empty()) {
     return true;
   }
-  auto searchable = std::to_string(event.tick) + " " +
-                    std::to_string(event.turn) + " " + event.tool + " " +
-                    event.arguments.dump() + " " + event.result.dump();
+  auto searchable = std::to_string(activity.tick) + " " +
+                    std::to_string(activity.turn) + " " +
+                    std::string{agent::tool_kind_name(activity.kind)} + " " +
+                    std::string{agent::tool_outcome_name(activity.outcome)} +
+                    " " + activity.arguments_json + " " + activity.result_json;
   return lowercase(std::move(searchable))
              .find(lowercase(std::string{filter})) != std::string::npos;
 }
 
-/// @brief Dumps JSON truncated with an ellipsis so table cells stay short.
-[[nodiscard]] std::string compact(const nlohmann::json &value,
+/// @brief Truncates canonical JSON text with an ellipsis for compact cells.
+[[nodiscard]] std::string compact(const std::string_view value,
                                   const std::size_t maximum = 150U) {
-  auto text = value.dump();
+  auto text = std::string{value};
   if (text.size() > maximum) {
     text.resize(maximum - 3U);
     text += "...";
@@ -195,29 +196,16 @@ void draw_item(ImDrawList &draw_list, const world::ItemType item,
 
 /// @brief Human-readable transcript label for a decoded call, including the
 /// budget or world failure reason when the action changed nothing.
-[[nodiscard]] std::string decoded_call_label(const agent::WorldEvent &event) {
-  auto label = event.tool;
-  if (event.arguments.contains("direction") &&
-      event.arguments.at("direction").is_string()) {
-    label += " " + event.arguments.at("direction").get<std::string>();
+[[nodiscard]] std::string
+decoded_call_label(const agent::ToolActivity &activity) {
+  auto label = std::string{agent::tool_kind_name(activity.kind)};
+  if (activity.direction) {
+    label += " " + std::string{world::direction_name(*activity.direction)};
   }
-  const auto world_failure = event.result.contains("ok") &&
-                             event.result.at("ok").is_boolean() &&
-                             !event.result.at("ok").get<bool>();
-  if (!event.action_executed || world_failure) {
-    label += " (failed";
-    std::optional<std::string> reason;
-    if (!event.action_executed && event.result.contains("error_code") &&
-        event.result.at("error_code").is_string()) {
-      reason = event.result.at("error_code").get<std::string>();
-    } else if (world_failure && event.result.contains("reason") &&
-               event.result.at("reason").is_string()) {
-      reason = event.result.at("reason").get<std::string>();
-    }
-    if (reason) {
-      label += ": " + *reason;
-    }
-    label += ")";
+  if (!activity.succeeded()) {
+    label +=
+        " (failed: " + std::string{agent::tool_outcome_name(activity.outcome)} +
+        ")";
   }
   return label;
 }
@@ -265,7 +253,7 @@ void AppUi::pump(const double now_seconds) {
   }
   pump_stats_ = session_->pump();
   animation_.set_speed(animation_speed_);
-  animation_.update(session_->events(), session_->world().position(),
+  animation_.update(session_->tool_activities(), session_->world().position(),
                     now_seconds);
   if (!session_->metrics_error().empty()) {
     visible_error_ = "Metrics error: " + session_->metrics_error();
@@ -555,10 +543,11 @@ void AppUi::draw_world_panel() {
   ImGui::Text("Score %d  |  Blob (%d,%d)  |  Visual queue %zu",
               simulation.score(), simulation.position().x,
               simulation.position().y, animation_.queued_action_count());
-  if (session_->events().empty()) {
+  if (session_->tool_activities().empty()) {
     ImGui::TextDisabled("Last decoded call: none");
   } else {
-    const auto last_call = decoded_call_label(session_->events().back());
+    const auto last_call =
+        decoded_call_label(session_->tool_activities().back());
     ImGui::TextColored({0.95F, 0.78F, 0.32F, 1.0F}, "Last decoded call: %s",
                        last_call.c_str());
   }
@@ -579,7 +568,8 @@ void AppUi::draw_transcript_panel() {
   }
   ImGui::Checkbox("Auto-scroll", &transcript_auto_scroll_);
   ImGui::SameLine();
-  ImGui::TextDisabled("Decoded world-tool calls are sourced from world events");
+  ImGui::TextDisabled(
+      "Decoded world-tool calls are sourced from typed activity");
   ImGui::Separator();
 
   if (!session_) {
@@ -589,9 +579,9 @@ void AppUi::draw_transcript_panel() {
   }
 
   const auto &transcript = session_->runner().transcript();
-  const auto &events = session_->events();
+  const auto &activities = session_->tool_activities();
   const auto snapshot = session_->runner().snapshot();
-  auto fingerprint = transcript.size() * 131U + events.size();
+  auto fingerprint = transcript.size() * 131U + activities.size();
   if (!transcript.empty()) {
     fingerprint += transcript.back().text.size();
   }
@@ -609,15 +599,15 @@ void AppUi::draw_transcript_panel() {
       ImGui::TextColored({0.95F, 0.78F, 0.32F, 1.0F},
                          "Turn %u · Decoded world-tool calls", entry.turn);
       auto decoded_calls = 0U;
-      for (const auto &event : events) {
-        if (event.turn != entry.turn) {
+      for (const auto &activity : activities) {
+        if (activity.turn != entry.turn) {
           continue;
         }
         ++decoded_calls;
-        const auto arguments = compact(event.arguments, 72U);
-        const auto result = compact(event.result, 110U);
+        const auto arguments = compact(activity.arguments_json, 72U);
+        const auto result = compact(activity.result_json, 110U);
         ImGui::TextColored({0.95F, 0.78F, 0.32F, 1.0F}, "  %s",
-                           event.tool.c_str());
+                           agent::tool_kind_name(activity.kind).data());
         ImGui::SameLine();
         ImGui::TextDisabled("%s -> %s", arguments.c_str(), result.c_str());
       }
@@ -666,7 +656,7 @@ void AppUi::draw_event_log_panel() {
                            event_filter_.data(), event_filter_.size());
   ImGui::SameLine();
   ImGui::TextDisabled("%zu decoded calls",
-                      session_ ? session_->events().size() : 0U);
+                      session_ ? session_->tool_activities().size() : 0U);
 
   if (!session_) {
     ImGui::TextDisabled("No tool events yet.");
@@ -685,40 +675,35 @@ void AppUi::draw_event_log_panel() {
     ImGui::TableSetupColumn("Arguments");
     ImGui::TableSetupColumn("Result");
     ImGui::TableHeadersRow();
-    for (const auto &event : session_->events()) {
-      if (!matches_filter(event, trim_copy(event_filter_.data()))) {
+    for (const auto &activity : session_->tool_activities()) {
+      if (!matches_filter(activity, trim_copy(event_filter_.data()))) {
         continue;
       }
       ImGui::TableNextRow();
       ImGui::TableSetColumnIndex(0);
-      ImGui::Text("%llu", static_cast<unsigned long long>(event.tick));
+      ImGui::Text("%llu", static_cast<unsigned long long>(activity.tick));
       ImGui::TableSetColumnIndex(1);
-      ImGui::Text("%zu", event.turn);
+      ImGui::Text("%zu", activity.turn);
       ImGui::TableSetColumnIndex(2);
-      ImGui::TextColored({0.85F, 0.72F, 0.35F, 1.0F}, "%s", event.tool.c_str());
+      ImGui::TextColored({0.85F, 0.72F, 0.35F, 1.0F}, "%s",
+                         agent::tool_kind_name(activity.kind).data());
 
-      const auto arguments_full = event.arguments.dump();
-      const auto result_full = event.result.dump();
-      const auto arguments_short = compact(event.arguments);
-      const auto result_short = compact(event.result);
+      const auto arguments_short = compact(activity.arguments_json);
+      const auto result_short = compact(activity.result_json);
       ImGui::TableSetColumnIndex(3);
       ImGui::TextUnformatted(arguments_short.c_str());
       if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("%s", arguments_full.c_str());
+        ImGui::SetTooltip("%s", activity.arguments_json.c_str());
       }
       ImGui::TableSetColumnIndex(4);
-      const auto failed =
-          !event.action_executed ||
-          (event.result.contains("ok") && event.result.at("ok").is_boolean() &&
-           !event.result.at("ok").get<bool>());
-      if (failed) {
+      if (!activity.succeeded()) {
         ImGui::TextColored({1.0F, 0.58F, 0.35F, 1.0F}, "%s",
                            result_short.c_str());
       } else {
         ImGui::TextUnformatted(result_short.c_str());
       }
       if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("%s", result_full.c_str());
+        ImGui::SetTooltip("%s", activity.result_json.c_str());
       }
     }
     ImGui::EndTable();
@@ -866,14 +851,14 @@ void AppUi::draw_stats_panel() {
   std::size_t eat_attempts{};
   std::size_t successful_eats{};
   std::size_t failed_eats{};
-  for (const auto &event : session_->events()) {
-    if (event.tool == "move") {
+  for (const auto &activity : session_->tool_activities()) {
+    if (activity.kind == agent::ToolKind::move) {
       ++moves;
-    } else if (event.tool == "look") {
+    } else if (activity.kind == agent::ToolKind::look) {
       ++looks;
-    } else if (event.tool == "eat") {
+    } else if (activity.kind == agent::ToolKind::eat) {
       ++eat_attempts;
-      if (event.eaten) {
+      if (activity.eaten) {
         ++successful_eats;
       } else {
         ++failed_eats;

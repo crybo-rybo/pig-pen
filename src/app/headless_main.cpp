@@ -2,8 +2,8 @@
 /// @brief CLI entry point: run one bounded episode and exit.
 ///
 /// Everything here is argv parsing, SIGINT/SIGTERM handling, incremental
-/// printing of the transcript and event feed, and the exit-code policy from
-/// docs/running.md. Episode behavior itself lives in agent::Session.
+/// printing of the transcript and activity feed, and the exit-code policy
+/// from docs/running.md. Episode behavior itself lives in agent::Session.
 #include "agent/episode_runner.hpp"
 #include "agent/session.hpp"
 
@@ -69,12 +69,12 @@ struct Options {
   bool help{};
 };
 
-/// @brief How much of the transcript and event feed has been printed, so
+/// @brief How much of the transcript and activity feed has been printed, so
 /// each pump iteration emits only what is new.
 struct OutputCursor {
   std::vector<std::size_t> transcript_offsets{};
   std::vector<bool> transcript_announced{};
-  std::size_t events_printed{};
+  std::size_t activities_printed{};
 };
 
 void print_usage(std::ostream &output, const std::string_view program) {
@@ -384,14 +384,15 @@ void print_updates(const pigpen::agent::Session &session,
     cursor.transcript_offsets[index] = entry.text.size();
   }
 
-  const auto &events = session.events();
-  while (cursor.events_printed < events.size()) {
-    const auto &event = events[cursor.events_printed++];
-    std::cout << "tool[turn=" << event.turn << ",tick=" << event.tick << "] "
-              << event.tool << " args=" << event.arguments.dump()
-              << " result=" << event.result.dump() << " position=("
-              << event.before.x << ',' << event.before.y << ")->("
-              << event.after.x << ',' << event.after.y << ")\n";
+  const auto &activities = session.tool_activities();
+  while (cursor.activities_printed < activities.size()) {
+    const auto &activity = activities[cursor.activities_printed++];
+    std::cout << "tool[turn=" << activity.turn << ",tick=" << activity.tick
+              << "] " << pigpen::agent::tool_kind_name(activity.kind)
+              << " args=" << activity.arguments_json
+              << " result=" << activity.result_json << " position=("
+              << activity.before.x << ',' << activity.before.y << ")->("
+              << activity.after.x << ',' << activity.after.y << ")\n";
   }
   std::cout.flush();
 }

@@ -54,9 +54,9 @@ layer and therefore do not produce a `tool` record.
 the blob's position either side of the call — identical for `look`, `eat`, a
 wall-blocked `move`, and a call rejected by Pig Pen's action budget.
 `action_executed` distinguishes that budget rejection from an executed world
-operation. `result` is projected from the same reflected response object Scry
-encodes for the model, so a log made with `--opaque-look` shows `"something"`
-here too.
+operation. `args` and `result` come from Scry's public reflection encoder, the
+same canonical encoder used for registered tool results. A log made with
+`--opaque-look` therefore shows `"something"` here too.
 
 ## `turn`
 

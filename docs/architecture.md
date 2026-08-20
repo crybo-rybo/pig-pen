@@ -14,6 +14,7 @@ src/app/main.cpp              src/app/headless_main.cpp
                                   ├── ScryTurnTransport ──► scry::Harness ──► HTTP
                                   ├── WorldTools      typed actions and budgets
                                   ├── Scry reflection schemas and marshalling
+                                  ├── ToolActivity    typed semantics + exact payloads
                                   ├── MetricsWriter   JSONL
                                   └── world::World    the simulation
 ```
@@ -34,8 +35,7 @@ serialisation used for determinism tests. Details in [World and tools](world.md)
 | `prompt.cpp` | builds the system prompt and the per-turn nudge from a `Config` |
 | `tool_contract.hpp` | reflected argument and flat response declarations, including status and budget fields; these C++ types are the model-facing contract |
 | `world_tools.cpp` | typed world actions and the explicit per-turn action-budget lifecycle; it contains no JSON parsing or schema code |
-| `reflected_json.hpp` | P2996-based projection of supported values into nlohmann JSON for application observability only |
-| `events.hpp` | `WorldEvent` and the append-only `EventFeed` that the UI, animation, and logger all read |
+| `events.hpp` | `ToolActivity` and its append-only feed: typed application semantics plus exact canonical argument/result text from Scry |
 | `turn_transport.hpp` | `ITurnTransport`, the interface a "send one turn, get callbacks" implementation must satisfy |
 | `scry_transport.cpp` | the real implementation, over `scry::Harness` / `scry::Conversation` |
 | `episode_runner.cpp` | the state machine: `idle → playing ⇄ paused → finished`, turn budget, cooperative cancellation, transcript, and observers for turn/episode completion |
@@ -55,16 +55,18 @@ fixed response shapes, and budgets are tested without JSON or a registry.
 strictly decodes incoming arguments, invokes the typed handler on the pump
 thread, and encodes its typed response. Scoped enum identifiers are the JSON
 strings, so adding or renaming a direction changes schema, decode, and encode
-from the same declaration.
+from the same declaration. The handler also calls
+`scry::reflection::encode` on its typed arguments and response to retain the
+same canonical payloads for observability; Pig Pen has no reflection encoder
+of its own.
 
 Protocol failures belong to Scry: unknown tools and calls that cannot be
-decoded never enter `WorldTools`. Pig Pen's event feed therefore represents
-successfully decoded world-tool handler invocations. A handler invocation may
-still have `action_executed == false` when the four-call application budget is
-already exhausted.
-
-The planned follow-up that removes JSON from Pig Pen's event and UI layers is
-captured in [Tool activity refactor handoff](tool-activity-handoff.md).
+decoded never enter `WorldTools`. Pig Pen's activity feed therefore represents
+successfully decoded world-tool handler invocations. Each record exposes typed
+kind, outcome, transition, and truthful score fields for application behavior;
+its canonical JSON strings are opaque display/persistence data. A handler
+invocation may still have `action_executed == false` when the four-call
+application budget is already exhausted.
 
 ### `Session` is the reset unit
 
@@ -95,7 +97,7 @@ which is what lets the footer be written before exit.
 
 `AppUi` owns the `shared_ptr<Session>`, the control widgets, and the panel
 drawing. `WorldAnimationState` is the interesting piece: a turn can produce a
-burst of tool calls at once, so it converts the event feed into a queue of
+burst of tool calls at once, so it converts the activity feed into a queue of
 timed steps and plays them back one at a time, taking the current time as a
 parameter. That keeps it free of any ImGui or wall-clock dependency, which is
 why `tests/world_animation_tests.cpp` can test animation without a window —
@@ -106,7 +108,7 @@ and it is also compiled into the test binary directly for that reason.
 `main.cpp` is GLFW/OpenGL/ImGui setup and the frame loop, nothing else.
 `headless_main.cpp` is argument parsing, `SIGINT`/`SIGTERM` handling (the
 handler only writes a `volatile sig_atomic_t`), incremental printing of the
-transcript and event feed, and the exit-code policy described in
+transcript and activity feed, and the exit-code policy described in
 [Running](running.md#exit-codes).
 
 ## Build layout
@@ -116,7 +118,9 @@ probe. It builds `pigpen_world`, `pigpen_reflected_tools`, and `pigpen_agent`
 as focused static libraries, then the GUI, headless program, and test executable
 from explicit source lists. Reflection compiler requirements stay scoped to the
 agent/tool boundary instead of leaking into fetched dependencies or front-end
-translation units.
+translation units. nlohmann/json is private to `pigpen_agent`'s metrics
+implementation; application-facing headers, the UI, and both entry points use
+standard and Pig Pen-owned types only.
 Warnings (`-Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror`) apply
 through the `pigpen_project_options` interface target to pig-pen's own code
 only; fetched dependencies are added as `SYSTEM` with their tests and examples

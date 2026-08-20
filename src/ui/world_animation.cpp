@@ -1,5 +1,5 @@
 /// @file world_animation.cpp
-/// @brief Implements the event-feed-to-visual-timeline state machine.
+/// @brief Implements the activity-feed-to-visual-timeline state machine.
 #include "ui/world_animation.hpp"
 
 #include <algorithm>
@@ -16,10 +16,10 @@ namespace {
 } // namespace
 
 void WorldAnimationState::reset(const world::Position position,
-                                const std::size_t event_cursor) noexcept {
+                                const std::size_t activity_cursor) noexcept {
   pending_.clear();
   active_.reset();
-  event_cursor_ = event_cursor;
+  activity_cursor_ = activity_cursor;
   active_started_ = 0.0;
   last_update_ = 0.0;
   blob_ = {
@@ -33,22 +33,22 @@ void WorldAnimationState::set_speed(const float speed) noexcept {
   speed_ = std::clamp(speed, 0.1F, 8.0F);
 }
 
-void WorldAnimationState::update(const agent::EventFeed &events,
+void WorldAnimationState::update(const agent::ToolActivityFeed &activities,
                                  const world::Position world_position,
                                  const double now_seconds) {
   if (!initialized_) {
     reset(world_position);
   }
-  if (events.size() < event_cursor_) {
+  if (activities.size() < activity_cursor_) {
     // A smaller feed means the owning Session was replaced. The application
     // normally calls reset explicitly; this keeps the renderer safe if it did
     // not get that notification.
-    reset(world_position, events.size());
+    reset(world_position, activities.size());
   }
 
-  while (event_cursor_ < events.size()) {
-    enqueue(events[event_cursor_]);
-    ++event_cursor_;
+  while (activity_cursor_ < activities.size()) {
+    enqueue(activities[activity_cursor_]);
+    ++activity_cursor_;
   }
 
   last_update_ = now_seconds;
@@ -115,35 +115,35 @@ std::size_t WorldAnimationState::queued_action_count() const noexcept {
   return pending_.size() + (active_ ? 1U : 0U);
 }
 
-void WorldAnimationState::enqueue(const agent::WorldEvent &event) {
-  if (!event.action_executed) {
+void WorldAnimationState::enqueue(const agent::ToolActivity &activity) {
+  if (!activity.action_executed()) {
     return;
   }
-  if (event.tool == "move") {
-    if (!same_position(event.before, event.after)) {
+  if (activity.kind == agent::ToolKind::move) {
+    if (!same_position(activity.before, activity.after)) {
       pending_.push_back({
           .kind = StepKind::move,
-          .before = event.before,
-          .after = event.after,
-          .direction = event.direction,
+          .before = activity.before,
+          .after = activity.after,
+          .direction = activity.direction,
       });
     }
     return;
   }
-  if (event.tool == "look") {
+  if (activity.kind == agent::ToolKind::look) {
     pending_.push_back({
         .kind = StepKind::look,
-        .before = event.before,
-        .after = event.after,
-        .direction = event.direction,
+        .before = activity.before,
+        .after = activity.after,
+        .direction = activity.direction,
     });
     return;
   }
-  if (event.tool == "eat") {
+  if (activity.kind == agent::ToolKind::eat) {
     pending_.push_back({
         .kind = StepKind::eat,
-        .before = event.before,
-        .after = event.after,
+        .before = activity.before,
+        .after = activity.after,
         .direction = std::nullopt,
     });
   }
