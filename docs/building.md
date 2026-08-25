@@ -6,22 +6,40 @@
 |---|---|
 | CMake 3.25+ | presets use schema version 6 |
 | Ninja | the generator both presets select |
-| GCC 16+ on Linux | C++26 P2996/P3394 reflection; configured with `-std=c++26 -freflection` |
+| GCC 16+ | C++26 P2996/P3394 reflection; configured with `-std=c++26 -freflection` |
 | Python 3 | required when the test suite is enabled; drives public-boundary integration tests |
 | libcurl | scry's HTTP transport links against it |
-| OpenGL 3.3 | only needed for the GUI target |
-| GLFW platform libraries | X11 and/or Wayland development headers on Linux |
+| OpenGL 3.2+ | only needed for the GUI target; SDL3 creates the platform context |
 
 Everything else is pinned in `CMakeLists.txt` and fetched at configure time:
-[scry](https://github.com/crybo-rybo/scry), nlohmann/json, GLFW, Dear ImGui,
+[scry](https://github.com/crybo-rybo/scry), nlohmann/json, SDL3, Dear ImGui,
 and Catch2. The first configure clones them, so it needs network access and
 takes a few minutes; later configures reuse `build/<preset>/_deps`.
 
 On Arch:
 
 ```sh
-sudo pacman -S --needed gcc cmake ninja python curl mesa libx11 libxrandr libxinerama libxcursor libxi wayland
+sudo pacman -S --needed gcc cmake ninja python curl libgl mesa libx11 libxcursor libxext libxfixes libxi libxinerama libxkbcommon libxrandr libxrender wayland wayland-protocols
 ```
+
+## macOS
+
+Pig Pen uses two compilers on macOS. Homebrew GCC 16 compiles the C++26 code,
+while Apple Clang compiles SDL3's C and Objective-C platform implementation.
+CMake manages the target boundary; select the compilers on the first configure:
+
+```sh
+brew install gcc cmake ninja just
+CC=/usr/bin/cc CXX=g++-16 cmake --preset dev --fresh
+cmake --build --preset dev
+ctest --preset dev
+```
+
+SDL3 keeps Cocoa behind its C API, so Apple framework headers are not parsed by
+the GCC-compiled ImGui backend or application. The project still uses Apple's
+deprecated OpenGL implementation for rendering; the build suppresses that SDK
+deprecation diagnostic until the renderer is migrated separately. macOS is
+validated locally but is not currently exercised by hosted CI.
 
 ## Presets
 
@@ -62,7 +80,7 @@ preset named `--model`.
 
 | option | default | effect |
 |---|---|---|
-| `PIGPEN_BUILD_GUI` | `ON` | build `pig-pen`; turn off to skip GLFW, ImGui, and OpenGL entirely |
+| `PIGPEN_BUILD_GUI` | `ON` | build `pig-pen`; turn off to skip SDL3, ImGui, and OpenGL entirely |
 | `PIGPEN_BUILD_TESTS` | `ON` | build both Catch2 test binaries and register all CTest cases |
 | `PIGPEN_WARNINGS_AS_ERRORS` | `ON` | `-Werror` for pig-pen's own code only |
 | `PIGPEN_SCRY_SOURCE` | *(empty)* | path to a local scry checkout instead of the pinned revision |
@@ -100,9 +118,9 @@ variable (or deleting `build/dev/`) goes back to the pinned commit.
 Check network access and proxy settings; `GIT_PROGRESS` output shows in the
 configure log.
 
-**GLFW fails to find a display backend.** Install the X11/Wayland development
-headers listed above, delete `build/dev/`, and reconfigure so GLFW's feature
-detection reruns.
+**SDL3 cannot enable a Linux display backend.** Install the X11 and/or Wayland
+development headers listed above, delete `build/dev/`, and reconfigure so
+SDL3's feature detection reruns.
 
 **A dependency looks stale after changing `PIGPEN_SCRY_SOURCE` or a pinned tag.**
 `FetchContent` caches under `build/<preset>/_deps`. Remove that directory or the

@@ -28,11 +28,14 @@ Two front ends share the same world, prompt, tools, episode runner, and logger:
 
 ## Quick start
 
-You need CMake 3.25+, Ninja, GCC 16+ on Linux, Python 3 for tests, libcurl,
-OpenGL 3, and the platform development libraries GLFW needs. Pig Pen uses
+You need CMake 3.25+, Ninja, GCC 16+, Python 3 for tests, libcurl, and OpenGL
+3.2 or newer for the GUI. Pig Pen uses
 C++26 reflection as its main tool-definition and marshalling path; CMake enables
 `-std=c++26 -freflection` and rejects compilers without the required P2996 and
-P3394 support. Every C++ dependency is pinned and fetched by CMake.
+P3394 support. Every dependency is pinned and fetched by CMake. SDL3 provides
+the desktop window and input backend. macOS uses Homebrew GCC for C++ and Apple
+Clang for SDL3's C/Objective-C implementation; see
+[Building](docs/building.md#macos).
 
 Serve a model first. The default endpoint is Ollama on `127.0.0.1:11434`, but
 Pig Pen does not choose a model for you:

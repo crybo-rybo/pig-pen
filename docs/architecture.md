@@ -6,7 +6,7 @@ is testable without a window or a model server.
 
 ```
 src/app/main.cpp              src/app/headless_main.cpp
-        │  GLFW + ImGui loop          │  argv parsing, signals, stdout
+        │  SDL3 + ImGui loop          │  argv parsing, signals, stdout
         ▼                             ▼
    src/ui/  ─────────────►  agent::Session  ◄─────────────
    AppUi, WorldAnimation          │
@@ -105,7 +105,7 @@ and it is also compiled into the test binary directly for that reason.
 
 ## `src/app` — the entry points
 
-`main.cpp` is GLFW/OpenGL/ImGui setup and the frame loop, nothing else.
+`main.cpp` is SDL3/OpenGL/ImGui setup and the frame loop, nothing else.
 `headless_main.cpp` is argument parsing, `SIGINT`/`SIGTERM` handling (the
 handler only writes a `volatile sig_atomic_t`), incremental printing of the
 transcript and activity feed, and the exit-code policy described in
