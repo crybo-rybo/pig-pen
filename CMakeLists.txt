@@ -89,7 +89,7 @@ else()
   FetchContent_Declare(
     scry
     GIT_REPOSITORY https://github.com/crybo-rybo/scry.git
-    GIT_TAG 88ce45752eff2857b1586d77e70bdceb598e4b8d
+    GIT_TAG v0.2.0
     GIT_PROGRESS TRUE
     SYSTEM
     EXCLUDE_FROM_ALL
