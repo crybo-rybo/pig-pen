@@ -164,14 +164,18 @@ target_link_libraries(pig-pen-headless PRIVATE pigpen_agent)
 pigpen_configure_target(pig-pen-headless)
 
 if(PIGPEN_BUILD_GUI)
-  set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
-  set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-  set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-  set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
+  set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+  set(SDL_STATIC ON CACHE BOOL "" FORCE)
+  set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
+  set(SDL_TESTS OFF CACHE BOOL "" FORCE)
+  set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
+  set(SDL_INSTALL OFF CACHE BOOL "" FORCE)
+  set(SDL_UNINSTALL OFF CACHE BOOL "" FORCE)
   FetchContent_Declare(
-    glfw
-    GIT_REPOSITORY https://github.com/glfw/glfw.git
-    GIT_TAG a74efa0d5628b74adc0426af4c5710e287fa7c2c
+    SDL3
+    GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
+    # SDL 3.4.14. Pin the commit rather than a mutable branch.
+    GIT_TAG 147a8ee32dbf9ac02f3794964490687b6bbda1bc
     GIT_PROGRESS TRUE
     SYSTEM
     EXCLUDE_FROM_ALL
@@ -184,7 +188,7 @@ if(PIGPEN_BUILD_GUI)
     SYSTEM
     EXCLUDE_FROM_ALL
   )
-  FetchContent_MakeAvailable(glfw imgui)
+  FetchContent_MakeAvailable(SDL3 imgui)
   find_package(OpenGL REQUIRED)
 
   add_library(
@@ -193,7 +197,7 @@ if(PIGPEN_BUILD_GUI)
       "${imgui_SOURCE_DIR}/imgui_draw.cpp"
       "${imgui_SOURCE_DIR}/imgui_tables.cpp"
       "${imgui_SOURCE_DIR}/imgui_widgets.cpp"
-      "${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp"
+      "${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp"
       "${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp"
   )
   target_include_directories(
@@ -202,7 +206,11 @@ if(PIGPEN_BUILD_GUI)
       "${imgui_SOURCE_DIR}"
       "${imgui_SOURCE_DIR}/backends"
   )
-  target_link_libraries(pigpen_imgui PUBLIC glfw OpenGL::GL)
+  target_link_libraries(pigpen_imgui PUBLIC SDL3::SDL3 OpenGL::GL)
+  target_compile_definitions(
+    pigpen_imgui
+    PUBLIC $<$<PLATFORM_ID:Darwin>:GL_SILENCE_DEPRECATION>
+  )
   add_executable(
     pig-pen
       src/app/main.cpp

@@ -15,7 +15,7 @@ rules, log format) — consult them before re-deriving anything below.
 
 Requires GCC 16+ (`-std=c++26 -freflection`, P2996/P3394), CMake 3.25+, Ninja,
 Python 3, libcurl. Configure fails fast on any other compiler. First configure
-fetches all pinned C++ deps (scry, nlohmann/json, GLFW, ImGui, Catch2) and
+fetches all pinned dependencies (scry, nlohmann/json, SDL3, ImGui, Catch2) and
 needs network access.
 
 ```sh
@@ -63,7 +63,7 @@ rooted at `src/` (`"agent/config.hpp"`, never `"config.hpp"`); files are
 private members take a trailing underscore. No `using namespace` outside
 function or TU scope.
 
-Useful CMake options: `-DPIGPEN_BUILD_GUI=OFF` (headless-only, no GL/GLFW
+Useful CMake options: `-DPIGPEN_BUILD_GUI=OFF` (headless-only, no SDL3/GL
 toolchain), `-DPIGPEN_SCRY_SOURCE=../scry` (local scry checkout instead of the
 pinned revision; cached in `build/<preset>/_deps` — delete the build dir when
 switching back).
@@ -90,7 +90,7 @@ integration is testable without a window or a model server
 - **`src/ui`** — `AppUi` owns the `shared_ptr<Session>`;
   `WorldAnimationState` turns the activity feed into timed steps with
   caller-supplied time, so it is tested without ImGui or a wall clock.
-- **`src/app`** — `main.cpp` (GLFW/ImGui frame loop) and `headless_main.cpp`
+- **`src/app`** — `main.cpp` (SDL3/ImGui frame loop) and `headless_main.cpp`
   (argv, signals, exit codes) contain nothing testable-by-unit.
 
 Key invariants to preserve:

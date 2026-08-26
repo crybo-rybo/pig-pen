@@ -18,7 +18,7 @@ IncludeCategories:
   - Regex: '^"'
     Priority: 1
   # Fetched third-party dependencies.
-  - Regex: '^<(scry|nlohmann|imgui|GLFW|catch2)[/._>]'
+  - Regex: '^<(scry|nlohmann|imgui|SDL3|catch2)[/._>]'
     Priority: 2
   # C++ standard library.
   - Regex: '.*'
