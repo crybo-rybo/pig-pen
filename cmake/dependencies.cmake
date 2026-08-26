@@ -16,16 +16,9 @@ set(SCRY_BUILD_FUZZERS OFF CACHE BOOL "" FORCE)
 set(SCRY_BUILD_IMGUI_SHOWCASE OFF CACHE BOOL "" FORCE)
 set(SCRY_BUILD_LOCAL_MODEL_SMOKE OFF CACHE BOOL "" FORCE)
 
-if(PIGPEN_SCRY_SOURCE)
-  if(NOT EXISTS "${PIGPEN_SCRY_SOURCE}/CMakeLists.txt")
-    message(
-      FATAL_ERROR
-      "PIGPEN_SCRY_SOURCE does not contain CMakeLists.txt: "
-      "${PIGPEN_SCRY_SOURCE}"
-    )
-  endif()
-  set(FETCHCONTENT_SOURCE_DIR_SCRY "${PIGPEN_SCRY_SOURCE}")
-endif()
+# To build against a local scry checkout instead of the pinned revision, pass
+# CMake's built-in override:
+#   cmake --preset dev -DFETCHCONTENT_SOURCE_DIR_SCRY=/path/to/scry
 FetchContent_Declare(
   scry
   GIT_REPOSITORY https://github.com/crybo-rybo/scry.git

@@ -83,7 +83,6 @@ preset named `--model`.
 | `PIGPEN_BUILD_GUI` | `ON` | build `pig-pen`; turn off to skip SDL3, ImGui, and OpenGL entirely |
 | `PIGPEN_BUILD_TESTS` | `ON` | build both Catch2 test binaries and register all CTest cases |
 | `PIGPEN_WARNINGS_AS_ERRORS` | `ON` | `-Werror` for pig-pen's own code only |
-| `PIGPEN_SCRY_SOURCE` | *(empty)* | path to a local scry checkout instead of the pinned revision |
 
 Pig Pen is intentionally a reflection-first C++26 application. Configuration
 rejects non-GNU compilers and GCC versions older than 16. Scry performs an
@@ -103,14 +102,16 @@ cmake --build --preset dev --target pig-pen-headless
 
 ## Working against a local scry
 
+FetchContent's built-in override points any dependency at a local checkout, so
+no Pig Pen-specific option is needed:
+
 ```sh
-cmake --preset dev -DPIGPEN_SCRY_SOURCE=../scry
+cmake --preset dev -DFETCHCONTENT_SOURCE_DIR_SCRY=../scry
 ```
 
-The path is resolved relative to the source directory and must contain a
-`CMakeLists.txt`. The checkout must provide its reflection component and pass
-Scry's GCC 16 capability probe; otherwise configure fails. Clearing the cache
-variable (or deleting `build/dev/`) goes back to the pinned commit.
+The checkout must provide its reflection component and pass Scry's GCC 16
+capability probe; otherwise configure fails. Deleting `build/dev/` goes back to
+the pinned commit.
 
 ## Troubleshooting
 
@@ -122,7 +123,8 @@ configure log.
 development headers listed above, delete `build/dev/`, and reconfigure so
 SDL3's feature detection reruns.
 
-**A dependency looks stale after changing `PIGPEN_SCRY_SOURCE` or a pinned tag.**
+**A dependency looks stale after using a local-source override or changing a
+pinned tag.**
 `FetchContent` caches under `build/<preset>/_deps`. Remove that directory or the
 whole build directory and reconfigure.
 

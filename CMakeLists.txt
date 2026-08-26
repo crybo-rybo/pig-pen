@@ -18,13 +18,6 @@ endif()
 option(PIGPEN_BUILD_GUI "Build the Dear ImGui application" ON)
 option(PIGPEN_BUILD_TESTS "Build pig-pen's test suite" ON)
 option(PIGPEN_WARNINGS_AS_ERRORS "Treat warnings in pig-pen code as errors" ON)
-set(
-  PIGPEN_SCRY_SOURCE
-  ""
-  CACHE PATH
-  "Optional path to a local scry checkout (the pinned revision is fetched when empty)"
-)
-
 include(cmake/dependencies.cmake)
 
 # Everything Pig Pen's own targets need: the language level, the src/-rooted
