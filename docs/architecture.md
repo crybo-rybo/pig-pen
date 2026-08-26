@@ -114,15 +114,18 @@ transcript and activity feed, and the exit-code policy described in
 ## Build layout
 
 `CMakeLists.txt` requires GCC 16+, C++26, and Scry's reflection capability
-probe. It builds `pigpen_world`, `pigpen_reflected_tools`, and `pigpen_agent`
-as focused static libraries, then the GUI, headless program, and test executable
-from explicit source lists. Reflection compiler requirements stay scoped to the
-agent/tool boundary instead of leaking into fetched dependencies or front-end
-translation units. nlohmann/json is private to `pigpen_agent`'s metrics
-implementation; application-facing headers, the UI, and both entry points use
-standard and Pig Pen-owned types only.
+probe; it describes Pig Pen's own targets only, with all third-party fetching
+and upstream option pinning in `cmake/dependencies.cmake` and the test suite in
+`cmake/testing.cmake`. It builds `pigpen_world`, `pigpen_reflected_tools`,
+`pigpen_agent`, and `pigpen_ui` as focused static libraries, then the GUI,
+headless program, and test executables from explicit source lists. Reflection
+compiler requirements stay scoped to the agent/tool boundary instead of leaking
+into fetched dependencies or front-end translation units.
+nlohmann/json is private to `pigpen_agent`'s metrics implementation;
+application-facing headers, the UI, and both entry points use standard and Pig
+Pen-owned types only.
 Warnings (`-Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror`) apply
-through the `pigpen_project_options` interface target to pig-pen's own code
-only; fetched dependencies are added as `SYSTEM` with their tests and examples
-turned off.
+through the `pigpen_defaults` interface target to pig-pen's own code only;
+fetched dependencies are added as `SYSTEM` with their tests and examples turned
+off.
 See [Building](building.md).
