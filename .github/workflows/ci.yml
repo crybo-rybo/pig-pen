@@ -1,0 +1,81 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Only run the latest CI for a ref; superseded runs are cancelled to keep
+# feedback fast on active branches.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Full build (GUI + headless) and test suite for both presets. Configure
+  # fetches all pinned dependencies, so this also guards the dependency pins.
+  build-and-test:
+    name: build & test (${{ matrix.preset }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: [dev, release]
+    env:
+      CC: gcc-16
+      CXX: g++-16
+    steps:
+      - uses: actions/checkout@v5
+
+      # Pig Pen requires GCC 16+ with C++26 reflection; runner images ship at
+      # most GCC 15, so install from the toolchain PPA.
+      - name: Install GCC 16
+        run: |
+          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends g++-16
+
+      - name: Show toolchain versions
+        run: |
+          gcc-16 --version | head -n1
+          cmake --version | head -n1
+          ninja --version
+          python3 --version
+
+      - name: Configure (${{ matrix.preset }})
+        run: cmake --preset ${{ matrix.preset }}
+
+      - name: Build (${{ matrix.preset }})
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Test (${{ matrix.preset }})
+        run: ctest --preset ${{ matrix.preset }} --output-on-failure
+
+  # The headless-only configuration exercises a different CMake path (no SDL3,
+  # no OpenGL, no ImGui) than the full builds above; make sure it still
+  # configures, builds pig-pen-headless with its tests, and passes them.
+  build-and-test-headless:
+    name: build & test (headless only)
+    runs-on: ubuntu-latest
+    env:
+      CC: gcc-16
+      CXX: g++-16
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install GCC 16
+        run: |
+          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends g++-16
+
+      - name: Configure
+        run: cmake --preset dev -DPIGPEN_BUILD_GUI=OFF
+
+      - name: Build
+        # All non-GUI targets: the libraries, pig-pen-headless, and both
+        # Catch2 test binaries that catch_discover_tests registered.
+        run: cmake --build --preset dev
+
+      - name: Test
+        run: ctest --preset dev --output-on-failure
