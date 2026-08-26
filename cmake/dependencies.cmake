@@ -16,8 +16,55 @@ set(SCRY_BUILD_FUZZERS OFF CACHE BOOL "" FORCE)
 set(SCRY_BUILD_IMGUI_SHOWCASE OFF CACHE BOOL "" FORCE)
 set(SCRY_BUILD_LOCAL_MODEL_SMOKE OFF CACHE BOOL "" FORCE)
 
+# Keep the previously documented project option as a compatibility alias. It
+# resolves relative paths against the project source, unlike FetchContent's
+# scope-dependent relative-path handling.
+if(PIGPEN_SCRY_SOURCE)
+  get_filename_component(
+    PIGPEN_SCRY_SOURCE_ABSOLUTE
+    "${PIGPEN_SCRY_SOURCE}"
+    ABSOLUTE
+    BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}"
+  )
+  if(NOT EXISTS "${PIGPEN_SCRY_SOURCE_ABSOLUTE}/CMakeLists.txt")
+    message(
+      FATAL_ERROR
+      "PIGPEN_SCRY_SOURCE does not contain CMakeLists.txt: "
+      "${PIGPEN_SCRY_SOURCE_ABSOLUTE}"
+    )
+  endif()
+
+  if(FETCHCONTENT_SOURCE_DIR_SCRY)
+    get_filename_component(
+      FETCHCONTENT_SOURCE_DIR_SCRY_ABSOLUTE
+      "${FETCHCONTENT_SOURCE_DIR_SCRY}"
+      ABSOLUTE
+      BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+    if(NOT PIGPEN_SCRY_SOURCE_ABSOLUTE STREQUAL
+       FETCHCONTENT_SOURCE_DIR_SCRY_ABSOLUTE)
+      message(
+        FATAL_ERROR
+        "PIGPEN_SCRY_SOURCE and FETCHCONTENT_SOURCE_DIR_SCRY select different checkouts"
+      )
+    endif()
+  endif()
+
+  message(
+    DEPRECATION
+    "PIGPEN_SCRY_SOURCE is deprecated; use FETCHCONTENT_SOURCE_DIR_SCRY"
+  )
+  set(
+    FETCHCONTENT_SOURCE_DIR_SCRY
+    "${PIGPEN_SCRY_SOURCE_ABSOLUTE}"
+    CACHE PATH
+    "Use a local scry checkout instead of fetching the pinned revision"
+    FORCE
+  )
+endif()
+
 # To build against a local scry checkout instead of the pinned revision, pass
-# CMake's built-in override:
+# CMake's built-in override with an absolute path:
 #   cmake --preset dev -DFETCHCONTENT_SOURCE_DIR_SCRY=/path/to/scry
 FetchContent_Declare(
   scry

@@ -64,9 +64,10 @@ private members take a trailing underscore. No `using namespace` outside
 function or TU scope.
 
 Useful CMake options: `-DPIGPEN_BUILD_GUI=OFF` (headless-only, no SDL3/GL
-toolchain), `-DFETCHCONTENT_SOURCE_DIR_SCRY=../scry` (CMake's built-in override,
-for building against a local scry checkout instead of the pinned revision;
-cached in `build/<preset>/_deps` — delete the build dir when switching back).
+toolchain), `-DFETCHCONTENT_SOURCE_DIR_SCRY=/absolute/path/to/scry` (CMake's
+built-in override for building against a local scry checkout instead of the
+pinned revision; stored in the preset's CMake cache — delete the build dir when
+switching back).
 
 Manual end-to-end check against a real model (the suite never does this):
 `./build/dev/pig-pen-headless --model NAME --turns 2 --seed 42` — exit 0 means
