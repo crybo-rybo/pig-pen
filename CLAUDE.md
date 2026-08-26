@@ -24,6 +24,7 @@ just test                  # build, then ctest --preset dev
 just build release         # the other preset
 just run dev --model NAME  # build + launch GUI
 just run-headless dev --model NAME --turns 4 --seed 42
+just ci                    # everything GitHub runs on a PR: fmt-check + lint + dev/release/headless builds & tests
 ```
 
 Gotcha: `run`/`run-headless` take the preset as the **first** positional
