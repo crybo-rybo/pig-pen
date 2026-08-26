@@ -55,6 +55,8 @@ jobs:
             libxkbcommon-dev \
             libxrandr-dev \
             libxrender-dev \
+            libxss-dev \
+            libxtst-dev \
             libwayland-dev \
             wayland-protocols
 

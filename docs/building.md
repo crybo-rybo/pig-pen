@@ -20,7 +20,7 @@ few minutes; later configures reuse `build/<preset>/_deps`.
 On Arch:
 
 ```sh
-sudo pacman -S --needed gcc cmake ninja python curl libgl mesa libx11 libxcursor libxext libxfixes libxi libxinerama libxkbcommon libxrandr libxrender wayland wayland-protocols
+sudo pacman -S --needed gcc cmake ninja python curl libgl mesa libx11 libxcursor libxext libxfixes libxi libxinerama libxkbcommon libxrandr libxrender libxss libxtst wayland wayland-protocols
 ```
 
 On Ubuntu 24.04 (and GitHub Actions). GCC 16 is not in the default 24.04
@@ -34,7 +34,8 @@ sudo apt-get install -y --no-install-recommends \
   libcurl4-openssl-dev libgl1-mesa-dev \
   libx11-dev libxcursor-dev libxext-dev libxfixes-dev \
   libxi-dev libxinerama-dev libxkbcommon-dev libxrandr-dev \
-  libxrender-dev libwayland-dev wayland-protocols
+  libxrender-dev libxss-dev libxtst-dev \
+  libwayland-dev wayland-protocols
 ```
 
 ## macOS
