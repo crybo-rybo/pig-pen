@@ -11,10 +11,11 @@
 | libcurl | scry's HTTP transport links against it |
 | OpenGL 3.2+ | only needed for the GUI target; SDL3 creates the platform context |
 
-Everything else is pinned in `CMakeLists.txt` and fetched at configure time:
-[scry](https://github.com/crybo-rybo/scry), nlohmann/json, SDL3, Dear ImGui,
-and Catch2. The first configure clones them, so it needs network access and
-takes a few minutes; later configures reuse `build/<preset>/_deps`.
+Everything else is pinned and fetched at configure time from
+`cmake/dependencies.cmake` or `cmake/testing.cmake`:
+[scry](https://github.com/crybo-rybo/scry), nlohmann/json, SDL3, Dear ImGui, and
+Catch2. The first configure clones them, so it needs network access and takes a
+few minutes; later configures reuse `build/<preset>/_deps`.
 
 On Arch:
 
@@ -83,7 +84,7 @@ preset named `--model`.
 | `PIGPEN_BUILD_GUI` | `ON` | build `pig-pen`; turn off to skip SDL3, ImGui, and OpenGL entirely |
 | `PIGPEN_BUILD_TESTS` | `ON` | build both Catch2 test binaries and register all CTest cases |
 | `PIGPEN_WARNINGS_AS_ERRORS` | `ON` | `-Werror` for pig-pen's own code only |
-| `PIGPEN_SCRY_SOURCE` | *(empty)* | path to a local scry checkout instead of the pinned revision |
+| `PIGPEN_SCRY_SOURCE` | *(empty)* | deprecated compatibility alias for a local scry checkout |
 
 Pig Pen is intentionally a reflection-first C++26 application. Configuration
 rejects non-GNU compilers and GCC versions older than 16. Scry performs an
@@ -103,14 +104,19 @@ cmake --build --preset dev --target pig-pen-headless
 
 ## Working against a local scry
 
+FetchContent's built-in override points any dependency at a local checkout, so
+no Pig Pen-specific option is needed:
+
 ```sh
-cmake --preset dev -DPIGPEN_SCRY_SOURCE=../scry
+cmake --preset dev \
+  -DFETCHCONTENT_SOURCE_DIR_SCRY=/absolute/path/to/scry
 ```
 
-The path is resolved relative to the source directory and must contain a
-`CMakeLists.txt`. The checkout must provide its reflection component and pass
-Scry's GCC 16 capability probe; otherwise configure fails. Clearing the cache
-variable (or deleting `build/dev/`) goes back to the pinned commit.
+Use an absolute path; CMake warns that relative `FETCHCONTENT_SOURCE_DIR_*`
+values depend on the calling scope. The checkout must provide its reflection
+component and pass Scry's GCC 16 capability probe; otherwise configure fails.
+The old `PIGPEN_SCRY_SOURCE` option remains accepted with a deprecation warning
+for compatibility. Deleting `build/dev/` goes back to the pinned commit.
 
 ## Troubleshooting
 
@@ -122,7 +128,8 @@ configure log.
 development headers listed above, delete `build/dev/`, and reconfigure so
 SDL3's feature detection reruns.
 
-**A dependency looks stale after changing `PIGPEN_SCRY_SOURCE` or a pinned tag.**
+**A dependency looks stale after using a local-source override or changing a
+pinned tag.**
 `FetchContent` caches under `build/<preset>/_deps`. Remove that directory or the
 whole build directory and reconfigure.
 

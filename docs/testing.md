@@ -40,7 +40,7 @@ covering:
 | `tests/world_animation_tests.cpp` | the typed activity feed becoming an ordered visual timeline, with caller-supplied time |
 | `tests/gui_options_tests.cpp` | GUI startup parsing for model and endpoint arguments, including both value syntaxes and invalid input |
 
-**CLI tests** registered directly in `CMakeLists.txt`:
+**CLI tests** registered in `cmake/testing.cmake`:
 
 - `pigpen_reflection_integration` — a loopback OpenAI-compatible server verifies
   the provider-visible reflected schemas, strict typed decode, encoded response
