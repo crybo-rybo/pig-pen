@@ -2,6 +2,7 @@
 
 ```sh
 just test              # build the dev preset, then run ctest
+just ci                # format + lint + dev/release/headless — what GitHub runs on a PR
 ```
 
 or, without `just`:

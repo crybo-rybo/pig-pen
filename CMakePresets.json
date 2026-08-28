@@ -35,6 +35,16 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release"
       }
+    },
+    {
+      "name": "headless",
+      "displayName": "Headless only",
+      "description": "Debug build with tests and no SDL3/ImGui/OpenGL",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "PIGPEN_BUILD_GUI": false
+      }
     }
   ],
   "buildPresets": [
@@ -45,6 +55,10 @@
     {
       "name": "release",
       "configurePreset": "release"
+    },
+    {
+      "name": "headless",
+      "configurePreset": "headless"
     }
   ],
   "testPresets": [
@@ -58,6 +72,13 @@
     {
       "name": "release",
       "configurePreset": "release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "headless",
+      "configurePreset": "headless",
       "output": {
         "outputOnFailure": true
       }

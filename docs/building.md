@@ -5,7 +5,7 @@
 | requirement | notes |
 |---|---|
 | CMake 3.25+ | presets use schema version 6 |
-| Ninja | the generator both presets select |
+| Ninja | the generator the presets select |
 | GCC 16+ | C++26 P2996/P3394 reflection; configured with `-std=c++26 -freflection` |
 | Python 3 | required when the test suite is enabled; drives public-boundary integration tests |
 | libcurl | scry's HTTP transport links against it |
@@ -20,7 +20,22 @@ few minutes; later configures reuse `build/<preset>/_deps`.
 On Arch:
 
 ```sh
-sudo pacman -S --needed gcc cmake ninja python curl libgl mesa libx11 libxcursor libxext libxfixes libxi libxinerama libxkbcommon libxrandr libxrender wayland wayland-protocols
+sudo pacman -S --needed gcc cmake ninja python curl libgl mesa libx11 libxcursor libxext libxfixes libxi libxinerama libxkbcommon libxrandr libxrender libxss libxtst wayland wayland-protocols
+```
+
+On Ubuntu 24.04 (and GitHub Actions). GCC 16 is not in the default 24.04
+repos; add the toolchain PPA first:
+
+```sh
+sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+sudo apt-get update
+sudo apt-get install -y --no-install-recommends \
+  g++-16 ninja-build cmake pkg-config python3 \
+  libcurl4-openssl-dev libgl1-mesa-dev \
+  libx11-dev libxcursor-dev libxext-dev libxfixes-dev \
+  libxi-dev libxinerama-dev libxkbcommon-dev libxrandr-dev \
+  libxrender-dev libxss-dev libxtst-dev \
+  libwayland-dev wayland-protocols
 ```
 
 ## macOS
@@ -49,12 +64,13 @@ cmake --preset dev            # Debug, GUI + tests, warnings as errors
 cmake --build --preset dev
 ```
 
-`release` is the same configuration with `CMAKE_BUILD_TYPE=Release`. Both write
-to `build/<preset>/` and export `compile_commands.json`.
+`release` is the same configuration with `CMAKE_BUILD_TYPE=Release`. `headless`
+is Debug with `PIGPEN_BUILD_GUI=OFF` (no SDL3, ImGui, or OpenGL). Each writes
+to `build/<preset>/` and exports `compile_commands.json`.
 
 Binaries land in `build/<preset>/`:
 
-- `pig-pen` — the ImGui application
+- `pig-pen` — the ImGui application (not built by the `headless` preset)
 - `pig-pen-headless` — the CLI
 - `pigpen_tests` — the Catch2 test binary
 - `pigpen_reflection_tests` — the reflection-isolated Catch2 test binary
@@ -71,10 +87,11 @@ just build release
 just test                      # build, then ctest --preset dev
 just run dev --model YOUR_MODEL  # build, launch, and auto-start the GUI
 just run-headless dev --model YOUR_MODEL --turns 4 --seed 42
+just ci                       # format + lint + dev/release/headless builds & tests (what GitHub runs)
 ```
 
-Note the explicit `dev` in the last line — `run` and `run-headless` take the
-preset first, so `just run-headless --model YOUR_MODEL` would be read as a
+Note the explicit `dev` in the `run` / `run-headless` lines — those recipes take
+the preset first, so `just run-headless --model YOUR_MODEL` would be read as a
 preset named `--model`.
 
 ## CMake options
@@ -98,8 +115,8 @@ and keep their own warning settings.
 A headless-only build (no GUI toolchain needed):
 
 ```sh
-cmake --preset dev -DPIGPEN_BUILD_GUI=OFF
-cmake --build --preset dev --target pig-pen-headless
+cmake --preset headless
+cmake --build --preset headless
 ```
 
 ## Working against a local scry
