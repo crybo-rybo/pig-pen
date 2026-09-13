@@ -1,0 +1,29 @@
+{
+  "headless_usage": [
+    "Usage: {} --model NAME [options]\n",
+    "\n",
+    "Run a bounded pig-pen episode against an OpenAI-compatible model server.\n",
+    "\n",
+    "Options:\n",
+    "  --base-url URL            Model endpoint (default: http://127.0.0.1:11434/v1)\n",
+    "  --model NAME              Exact model identifier sent to the server (required)\n",
+    "  --seed INTEGER            Deterministic world seed (default: 0)\n",
+    "  --turns INTEGER           Episode turn budget, 1..10000 (default: 20)\n",
+    "  --max-tool-rounds INTEGER Tool rounds per turn, 1..64 (default: 8)\n",
+    "  --temperature NUMBER     Sampling temperature, 0.0..2.0 (default: 0.0)\n",
+    "  --log-dir PATH            JSONL output directory (default: logs)\n",
+    "  --timeout-seconds INTEGER Overall episode timeout, 1..86400 (default: 300)\n",
+    "  --hidden-values           Omit item values from the system prompt\n",
+    "  --no-reward-feedback      Hide numeric reward and score from eat results\n",
+    "  --opaque-look             Report occupied cells as 'something'\n",
+    "  --prompt-variant NAME     Label recorded in the metrics header\n",
+    "  --input TEXT              Human guidance queued for the first turn\n",
+    "  --help                    Show this help and exit\n",
+    "\n",
+    "Values may also use --option=value. PIGPEN_API_KEY supplies an optional API key.\n",
+    "\n",
+    "Exit codes: 0 success, 1 runtime error, 2 invalid options, 3 timeout,\n",
+    "            4 metrics error, 5 no decoded world-tool calls, 130 SIGINT,\n",
+    "            143 SIGTERM. Signals request graceful cancellation and log finalization.\n"
+  ]
+}

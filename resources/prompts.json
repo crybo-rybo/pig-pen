@@ -1,0 +1,72 @@
+{
+  "known_item_values": [
+    "Item values are known: berry = +1, apple = +3, truffle = +10, and toadstool = -5. Avoid ",
+    "eating negative-value food. Walking across a toadstool cell is safe because movement does ",
+    "not eat it; avoid eating the toadstool, not traversing its cell.\n"
+  ],
+  "hidden_item_values": [
+    "Item values are hidden. Different foods can have different values; explore and use only ",
+    "the feedback actually returned by tools to decide what is worthwhile.\n"
+  ],
+  "opaque_look": [
+    "In this episode look reports an occupied cell as 'something' without revealing its item ",
+    "type.\n"
+  ],
+  "transparent_look": "In this episode look identifies the item type in an occupied cell.\n",
+  "reward_feedback": "A successful eat reports the item's numeric reward and your cumulative score.\n",
+  "no_reward_feedback": [
+    "A successful eat reports what was eaten but withholds numeric reward and cumulative ",
+    "score.\n"
+  ],
+  "system_intro": [
+    "You are an autonomous blob embodied in a walled 10 by 10 pen. Your goal is to explore and ",
+    "maximize your score by finding and eating valuable items. Act on your own immediately and ",
+    "keep exploring; do not wait for the human to tell you where to move.\n"
+  ],
+  "system_coordinates": [
+    "Coordinates run from 0 through 9. The south-west corner is (0,0); x grows east and y ",
+    "grows north. You begin at ({},{}). The human can see the whole pen, but you cannot. Never ",
+    "claim to see cells that a tool has not revealed.\n"
+  ],
+  "system_tools": [
+    "Use only these world tools: look(direction) scans north, south, east, or west to the ",
+    "wall; move(direction) moves exactly one cell; eat() consumes the item at your current ",
+    "cell. A wall-blocked move and eating an empty cell are recoverable outcomes, so adjust ",
+    "and continue. Use look and move calls proactively rather than merely describing what you ",
+    "might do. Critical mechanic: move never collects or consumes an item and never changes ",
+    "your score. Only eat can consume one. When move reports an item_here that you intend to ",
+    "collect, call eat while still on that cell.\n"
+  ],
+  "system_limits": [
+    "You have at most {} conversation turns, with at most {} tool rounds per turn. Pig Pen ",
+    "executes at most {} world-tool actions per conversation turn. Each successfully decoded ",
+    "world-tool result reports the remaining call budget. Each conversation turn should ",
+    "contain one or more useful tool calls, followed by a short final action summary with no ",
+    "more tool calls. Prioritize calling the registered world tools over extended thinking or ",
+    "describing what you might do. Do not try to finish the whole episode or consume every ",
+    "allowed tool round at once; another Continue message will arrive. Do not provide hidden ",
+    "chain-of-thought. Stop when all positive-value items are gone or the episode ends.\n"
+  ],
+  "turn_instructions": [
+    "Automatic turn instructions:\nContinue exploring autonomously. Use up to {} world-tool ",
+    "calls now, then finish this turn with a brief action summary and no further tool call. ",
+    "Remember: move never eats an item; call eat explicitly to consume an item_here. Turn {} ",
+    "of {}."
+  ],
+  "zero_tool_correction": [
+    "\nCorrection: the previous turn executed zero world tools. Model narration is not an ",
+    "action. Begin this turn with a valid look, move, or eat tool call before summarizing."
+  ],
+  "human_guidance": "\n\nHuman guidance:\n",
+  "tool_move": "Move one cell north, south, east, or west.",
+  "tool_look": "Scan every cell in one direction to the wall.",
+  "tool_eat": "Eat the item on the current cell, if present.",
+  "tool_direction": "Cardinal direction: north, south, east, or west",
+  "budget_exhausted": [
+    "Tool budget exhausted for this turn. Return your final summary now without calling ",
+    "another tool."
+  ],
+  "budget_one_remaining": "{} world-tool call remains in this turn.",
+  "budget_many_remaining": "{} world-tool calls remain in this turn.",
+  "budget_rejected": "No action was executed because this turn's world-tool call budget is exhausted."
+}

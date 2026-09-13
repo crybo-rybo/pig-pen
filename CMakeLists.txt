@@ -101,6 +101,31 @@ target_link_libraries(
 )
 pigpen_target(pigpen_agent PUBLIC)
 
+# A build-time exporter uses the same compiled prompt catalog and reflected
+# tool bindings as Session. The JSON is a reference artifact, not runtime input.
+add_executable(pigpen-resource-manifest src/app/resource_manifest_main.cpp)
+target_link_libraries(
+  pigpen-resource-manifest
+  PRIVATE pigpen_agent pigpen_reflected_tools nlohmann_json::nlohmann_json
+)
+target_compile_definitions(
+  pigpen-resource-manifest
+  PRIVATE
+    PIGPEN_VERSION="${PROJECT_VERSION}"
+    PIGPEN_BUILD_CONFIGURATION="$<CONFIG>"
+)
+pigpen_target(pigpen-resource-manifest)
+set(PIGPEN_RESOURCE_MANIFEST "${CMAKE_CURRENT_BINARY_DIR}/resources/build-manifest.json")
+add_custom_command(
+  OUTPUT "${PIGPEN_RESOURCE_MANIFEST}"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/resources"
+  COMMAND pigpen-resource-manifest "${PIGPEN_RESOURCE_MANIFEST}"
+  DEPENDS pigpen-resource-manifest
+  COMMENT "Exporting compiled prompts and reflected tool schemas"
+  VERBATIM
+)
+add_custom_target(pigpen_resources ALL DEPENDS "${PIGPEN_RESOURCE_MANIFEST}")
+
 # UI logic shared by the GUI application and the test suite (kept ImGui-free so
 # tests build without SDL/OpenGL).
 if(PIGPEN_BUILD_GUI OR PIGPEN_BUILD_TESTS)
@@ -112,6 +137,7 @@ endif()
 add_executable(pig-pen-headless src/app/headless_main.cpp)
 target_link_libraries(pig-pen-headless PRIVATE pigpen_agent)
 pigpen_target(pig-pen-headless)
+add_dependencies(pig-pen-headless pigpen_resources)
 
 if(PIGPEN_BUILD_GUI)
   find_package(OpenGL REQUIRED)
@@ -140,6 +166,7 @@ if(PIGPEN_BUILD_GUI)
   add_executable(pig-pen src/app/main.cpp src/ui/app_ui.cpp)
   target_link_libraries(pig-pen PRIVATE pigpen_agent pigpen_imgui pigpen_ui)
   pigpen_target(pig-pen)
+  add_dependencies(pig-pen pigpen_resources)
 endif()
 
 if(PIGPEN_BUILD_TESTS)

@@ -72,6 +72,8 @@ Binaries land in `build/<preset>/`:
 
 - `pig-pen` — the ImGui application (not built by the `headless` preset)
 - `pig-pen-headless` — the CLI
+- `pigpen-resource-manifest` — exports compiled text and reflected tool schemas
+- `resources/build-manifest.json` — automatically generated build reference
 - `pigpen_tests` — the Catch2 test binary
 - `pigpen_reflection_tests` — the reflection-isolated Catch2 test binary
 
@@ -118,6 +120,9 @@ A headless-only build (no GUI toolchain needed):
 cmake --preset headless
 cmake --build --preset headless
 ```
+
+See [Prompts and compiled resource reference](prompts.md) for editing the JSON
+catalogs and inspecting the automatically generated manifest.
 
 ## Working against a local scry
 

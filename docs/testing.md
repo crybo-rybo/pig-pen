@@ -34,6 +34,7 @@ covering:
 |---|---|
 | `tests/world_tests.cpp` | grid constants, seeded placement, movement and wall failures, `look` rays, eating and scoring, positive-item exhaustion, and seed determinism via `World::dump()` |
 | `tests/world_tools_tests.cpp` | compile-time reflected schemas, flat typed responses, the explicit turn/budget lifecycle, Scry's public observability encoder, and the `opaque_look` / `reward_feedback` toggles |
+| `tests/text_catalog_tests.cpp` | compile-time JSON text decoding, Unicode/escapes, malformed catalogs, and agreement with nlohmann/json |
 | `tests/prompt_tests.cpp` | config defaults and that each prompt flag says what it claims — including that the hidden-values prompt never leaks the reward table |
 | `tests/episode_runner_tests.cpp` | the turn loop against a scripted transport: budget exhaustion, pause/resume, stop cancelling an in-flight turn, objective completion, terminal errors, and queued human input |
 | `tests/metrics_writer_tests.cpp` | header/tool/turn/footer reconciliation, the incomplete footer on destruction, and footer finality |
@@ -46,7 +47,8 @@ covering:
 - `pigpen_reflection_integration` — a loopback OpenAI-compatible server verifies
   the provider-visible reflected schemas, strict typed decode, encoded response
   shape, typed activity payload, and JSONL record through the real Scry/Curl
-  path
+  path, and agreement between the generated build manifest and provider-visible
+  tool schemas/descriptions and system prompt
 - `pigpen_headless_help` — `--help` exits 0
 - `pigpen_headless_requires_model` — omitting `--model` must fail
 - `pigpen_headless_rejects_invalid_bounds` — `--max-tool-rounds 65` must fail

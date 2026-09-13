@@ -2,6 +2,9 @@
 /// @brief WorldTools implementation; the contract is in the header.
 #include "agent/world_tools.hpp"
 
+#include "agent/prompt_text.hpp"
+
+#include <format>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -155,12 +158,10 @@ TurnToolBudget WorldTools::make_budget(const std::size_t used) {
       .used = used,
       .remaining = remaining,
       .instruction =
-          remaining == 0
-              ? "Tool budget exhausted for this turn. Return your final "
-                "summary now without calling another tool."
-              : std::to_string(remaining) +
-                    (remaining == 1 ? " world-tool call remains in this turn."
-                                    : " world-tool calls remain in this turn."),
+          remaining == 0 ? std::string{prompt_text::budget_exhausted}
+          : remaining == 1
+              ? std::format(prompt_text::budget_one_remaining, remaining)
+              : std::format(prompt_text::budget_many_remaining, remaining),
   };
 }
 
