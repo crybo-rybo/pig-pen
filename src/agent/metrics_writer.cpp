@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cerrno>
 #include <chrono>
 #include <ctime>
 #include <iomanip>
@@ -68,19 +69,35 @@ iso_timestamp(const std::chrono::system_clock::time_point now) {
   return result.str();
 }
 
-/// @brief Build <timestamp>-<model>-<seed>.jsonl, appending -N until the
-/// name is unused so concurrent episodes never share a log.
-[[nodiscard]] std::filesystem::path
-unique_log_path(const std::filesystem::path &directory, const Config &config,
-                const std::chrono::system_clock::time_point now) {
+struct CreatedLog {
+  std::filesystem::path path;
+  std::ofstream stream;
+};
+
+/// @brief Atomically create <timestamp>-<model>-<seed>.jsonl, appending -N
+/// after collisions so concurrent episodes never share or replace a log.
+[[nodiscard]] std::expected<CreatedLog, std::string>
+create_unique_log(const std::filesystem::path &directory, const Config &config,
+                  const std::chrono::system_clock::time_point now) {
   const auto stem = timestamp(now) + '-' +
                     sanitized_filename_component(config.model) + '-' +
                     std::to_string(config.seed);
-  auto candidate = directory / (stem + ".jsonl");
-  for (std::size_t suffix = 1; std::filesystem::exists(candidate); ++suffix) {
-    candidate = directory / (stem + '-' + std::to_string(suffix) + ".jsonl");
+  for (std::size_t suffix = 0;; ++suffix) {
+    const auto filename = suffix == 0
+                              ? stem + ".jsonl"
+                              : stem + '-' + std::to_string(suffix) + ".jsonl";
+    auto candidate = directory / filename;
+
+    errno = 0;
+    std::ofstream stream{candidate, std::ios::out | std::ios::noreplace};
+    if (stream) {
+      return CreatedLog{std::move(candidate), std::move(stream)};
+    }
+    if (errno != EEXIST) {
+      return std::unexpected("could not open metrics log: " +
+                             candidate.string());
+    }
   }
-  return candidate;
 }
 
 /// @brief Project a grid position into the log's {"x", "y"} shape.
@@ -115,14 +132,14 @@ MetricsWriter::create(const std::filesystem::path &log_directory,
   }
 
   const auto wall_started = std::chrono::system_clock::now();
-  auto path = unique_log_path(log_directory, config, wall_started);
-  std::ofstream stream{path, std::ios::out | std::ios::trunc};
-  if (!stream) {
-    return std::unexpected("could not open metrics log: " + path.string());
+  auto created_log = create_unique_log(log_directory, config, wall_started);
+  if (!created_log) {
+    return std::unexpected(std::move(created_log.error()));
   }
 
   auto writer = std::unique_ptr<MetricsWriter>{new MetricsWriter{
-      std::move(path), std::move(stream), std::chrono::steady_clock::now()}};
+      std::move(created_log->path), std::move(created_log->stream),
+      std::chrono::steady_clock::now()}};
   const nlohmann::json header = {
       {"type", "header"},
       {"model", config.model},

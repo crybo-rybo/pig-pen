@@ -27,8 +27,8 @@ and fails before compilation if that surface is unavailable.
 `ctest` picks up two kinds of test.
 
 **Catch2 cases** from `pigpen_tests` and the reflection-isolated
-`pigpen_reflection_tests`, registered individually via `catch_discover_tests`,
-covering:
+`pigpen_reflection_tests`, plus `pigpen_gui_tests` when the GUI is enabled,
+registered individually via `catch_discover_tests`, covering:
 
 | file | covers |
 |---|---|
@@ -37,10 +37,13 @@ covering:
 | `tests/text_catalog_tests.cpp` | compile-time JSON text decoding, Unicode/escapes, malformed catalogs, and agreement with nlohmann/json |
 | `tests/prompt_tests.cpp` | config defaults and that each prompt flag says what it claims — including that the hidden-values prompt never leaks the reward table |
 | `tests/episode_runner_tests.cpp` | the turn loop against a scripted transport: budget exhaustion, pause/resume, stop cancelling an in-flight turn, objective completion, terminal errors, and queued human input |
-| `tests/metrics_writer_tests.cpp` | header/tool/turn/footer reconciliation, the incomplete footer on destruction, and footer finality |
+| `tests/metrics_writer_tests.cpp` | header/tool/turn/footer reconciliation, incomplete footers, footer finality, concurrent exclusive creation, and file-open failures |
 | `tests/session_tests.cpp` | config rejection and that a session owns a seeded world plus a registered tool harness atomically |
 | `tests/world_animation_tests.cpp` | the typed activity feed becoming an ordered visual timeline, with caller-supplied time |
 | `tests/gui_options_tests.cpp` | GUI startup parsing for model and endpoint arguments, including both value syntaxes and invalid input |
+| `tests/headless_options_tests.cpp` | headless argument syntax, numeric boundaries, help behavior, and shared configuration validation |
+| `tests/activity_history_tests.cpp` | incremental turn ranges, statistics, filtering, and session replacement |
+| `tests/app_ui_layout_tests.cpp` | saved docked and undocked layouts survive a fresh ImGui context; runs without a display or renderer |
 
 **CLI tests** registered in `cmake/testing.cmake`:
 
@@ -50,10 +53,9 @@ covering:
   path, and agreement between the generated build manifest and provider-visible
   tool schemas/descriptions and system prompt
 - `pigpen_headless_help` — `--help` exits 0
-- `pigpen_headless_requires_model` — omitting `--model` must fail
-- `pigpen_headless_rejects_invalid_bounds` — `--max-tool-rounds 65` must fail
-- `pigpen_headless_rejects_invalid_temperature` — non-finite sampling values
-  must fail
+- `pigpen_headless_cli` — missing-model, invalid-bound, and non-finite-temperature
+  cases must exit 2 with the expected diagnostic; validation cases supply an
+  otherwise valid model so an unrelated failure cannot satisfy the test
 - `pigpen_headless_graceful_sigint` / `_sigterm` — `tests/headless_signal_tests.py`
   starts a stub socket server on a loopback port, points the CLI at it, sends
   an exact tagged model identifier, verifies that identifier in the HTTP

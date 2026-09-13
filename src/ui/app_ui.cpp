@@ -71,42 +71,6 @@ void set_text(std::array<char, Size> &destination,
   return std::string{first, last};
 }
 
-[[nodiscard]] std::string lowercase(std::string value) {
-  std::transform(value.begin(), value.end(), value.begin(),
-                 [](const char character) {
-                   return static_cast<char>(
-                       std::tolower(static_cast<unsigned char>(character)));
-                 });
-  return value;
-}
-
-/// @brief Case-insensitive activity-log filter over tick, turn, tool name,
-/// outcome, and the exact argument/result JSON text.
-[[nodiscard]] bool matches_filter(const agent::ToolActivity &activity,
-                                  const std::string_view filter) {
-  if (filter.empty()) {
-    return true;
-  }
-  auto searchable = std::to_string(activity.tick) + " " +
-                    std::to_string(activity.turn) + " " +
-                    std::string{agent::tool_kind_name(activity.kind)} + " " +
-                    std::string{agent::tool_outcome_name(activity.outcome)} +
-                    " " + activity.arguments_json + " " + activity.result_json;
-  return lowercase(std::move(searchable))
-             .find(lowercase(std::string{filter})) != std::string::npos;
-}
-
-/// @brief Truncates canonical JSON text with an ellipsis for compact cells.
-[[nodiscard]] std::string compact(const std::string_view value,
-                                  const std::size_t maximum = 150U) {
-  auto text = std::string{value};
-  if (text.size() > maximum) {
-    text.resize(maximum - 3U);
-    text += "...";
-  }
-  return text;
-}
-
 [[nodiscard]] ImU32 item_color(const world::ItemType item,
                                const int alpha = 255) noexcept {
   switch (item) {
@@ -261,11 +225,25 @@ void AppUi::pump(const double now_seconds) {
 }
 
 void AppUi::draw(const double /*now_seconds*/) {
+  constexpr std::array panel_names{"World",    "Transcript", "Event Log",
+                                   "Controls", "Stats",      "Guidance"};
+  auto has_saved_layout = false;
+  if (!dock_layout_initialized_) {
+    has_saved_layout = std::any_of(
+        panel_names.begin(), panel_names.end(), [](const char *panel_name) {
+          return ImGui::FindWindowSettingsByID(ImHashStr(panel_name)) !=
+                 nullptr;
+        });
+  }
   const auto dockspace = ImGui::DockSpaceOverViewport(
       0, ImGui::GetMainViewport(), ImGuiDockNodeFlags_None);
-  if (!default_layout_built_) {
+  if (!dock_layout_initialized_ && !has_saved_layout) {
     build_default_dock_layout(dockspace);
-    default_layout_built_ = true;
+  }
+  dock_layout_initialized_ = true;
+
+  if (session_) {
+    activity_history_.synchronize(session_->tool_activities());
   }
 
   draw_world_panel();
@@ -281,12 +259,15 @@ agent::Config AppUi::config_from_controls() const {
       .base_url = trim_copy(base_url_.data()),
       .model = trim_copy(model_.data()),
       .seed = seed_,
-      .turn_budget =
-          static_cast<std::size_t>(std::clamp(turn_budget_, 1, 10'000)),
-      .max_tool_rounds =
-          static_cast<std::uint32_t>(std::clamp(max_tool_rounds_, 1, 64)),
+      .turn_budget = static_cast<std::size_t>(
+          std::clamp(turn_budget_, static_cast<int>(agent::min_turn_budget),
+                     static_cast<int>(agent::max_turn_budget))),
+      .max_tool_rounds = static_cast<std::uint32_t>(
+          std::clamp(max_tool_rounds_, static_cast<int>(agent::min_tool_rounds),
+                     static_cast<int>(agent::max_tool_rounds))),
       .max_output_tokens = max_output_tokens_,
-      .temperature = std::clamp(temperature_, 0.0, 2.0),
+      .temperature = std::clamp(temperature_, agent::min_temperature,
+                                agent::max_temperature),
       .known_item_values = known_item_values_,
       .reward_feedback = reward_feedback_,
       .opaque_look = opaque_look_,
@@ -310,8 +291,15 @@ bool AppUi::recreate_session(const bool auto_play) {
   }
   session_ = std::move(*created);
   animation_.reset(session_->world().position());
+  activity_history_.reset();
   pump_stats_ = {};
-  transcript_fingerprint_ = 0U;
+  transcript_entry_heights_.clear();
+  transcript_text_lengths_.clear();
+  transcript_activity_counts_.clear();
+  transcript_font_ = nullptr;
+  transcript_layout_width_ = 0.0F;
+  transcript_line_height_ = 0.0F;
+  transcript_fingerprint_ = {};
   visible_error_.clear();
   status_message_ = "Created session for " + session_->config().model +
                     " (seed " + std::to_string(session_->config().seed) + ").";
@@ -581,10 +569,9 @@ void AppUi::draw_transcript_panel() {
   const auto &transcript = session_->runner().transcript();
   const auto &activities = session_->tool_activities();
   const auto snapshot = session_->runner().snapshot();
-  auto fingerprint = transcript.size() * 131U + activities.size();
-  if (!transcript.empty()) {
-    fingerprint += transcript.back().text.size();
-  }
+  const std::array fingerprint{
+      transcript.size(), activities.size(),
+      transcript.empty() ? 0U : transcript.back().text.size()};
   const auto should_scroll = fingerprint != transcript_fingerprint_;
   transcript_fingerprint_ = fingerprint;
 
@@ -592,26 +579,65 @@ void AppUi::draw_transcript_panel() {
   if (transcript.empty()) {
     ImGui::TextDisabled("The first automatic turn will appear here.");
   }
+  const auto content_width = ImGui::GetContentRegionAvail().x;
+  transcript_entry_heights_.resize(transcript.size(), 0.0F);
+  transcript_text_lengths_.resize(transcript.size(), 0U);
+  transcript_activity_counts_.resize(transcript.size(), 0U);
+  const auto line_height = ImGui::GetTextLineHeightWithSpacing();
+  if (std::abs(content_width - transcript_layout_width_) > 1.0F ||
+      std::abs(line_height - transcript_line_height_) > 0.1F ||
+      transcript_font_ != ImGui::GetFont()) {
+    std::fill(transcript_entry_heights_.begin(),
+              transcript_entry_heights_.end(), 0.0F);
+    transcript_font_ = ImGui::GetFont();
+    transcript_layout_width_ = content_width;
+    transcript_line_height_ = line_height;
+  }
+
   for (std::size_t index = 0; index < transcript.size(); ++index) {
     const auto &entry = transcript[index];
+    auto activity_range = std::optional<ActivityRange>{};
+    auto activity_count = std::size_t{};
+    if (entry.role == agent::TranscriptRole::assistant) {
+      activity_range = activity_history_.range_for_turn(entry.turn);
+      activity_count =
+          activity_range ? activity_range->end - activity_range->begin : 0U;
+    }
+    if (transcript_text_lengths_[index] != entry.text.size() ||
+        transcript_activity_counts_[index] != activity_count) {
+      transcript_entry_heights_[index] = 0.0F;
+      transcript_text_lengths_[index] = entry.text.size();
+      transcript_activity_counts_[index] = activity_count;
+    }
+
+    const auto cached_height = transcript_entry_heights_[index];
+    if (cached_height > 0.0F &&
+        !ImGui::IsRectVisible({content_width, cached_height})) {
+      ImGui::Dummy({0.0F, std::max(0.0F, cached_height -
+                                             ImGui::GetStyle().ItemSpacing.y)});
+      continue;
+    }
+
+    const auto entry_start_y = ImGui::GetCursorPosY();
     ImGui::PushID(static_cast<int>(index));
     if (entry.role == agent::TranscriptRole::assistant) {
       ImGui::TextColored({0.95F, 0.78F, 0.32F, 1.0F},
                          "Turn %u · Decoded world-tool calls", entry.turn);
-      auto decoded_calls = 0U;
-      for (const auto &activity : activities) {
-        if (activity.turn != entry.turn) {
-          continue;
+      if (activity_range) {
+        for (auto activity_index = activity_range->begin;
+             activity_index < activity_range->end; ++activity_index) {
+          const auto &activity = activities[activity_index];
+          const auto &presentation =
+              activity_history_.presentation(activity_index);
+          ImGui::TextColored({0.95F, 0.78F, 0.32F, 1.0F}, "  %s",
+                             agent::tool_kind_name(activity.kind).data());
+          ImGui::SameLine();
+          ImGui::TextDisabled("%s -> %s",
+                              presentation.transcript_arguments.c_str(),
+                              presentation.transcript_result.c_str());
         }
-        ++decoded_calls;
-        const auto arguments = compact(activity.arguments_json, 72U);
-        const auto result = compact(activity.result_json, 110U);
-        ImGui::TextColored({0.95F, 0.78F, 0.32F, 1.0F}, "  %s",
-                           agent::tool_kind_name(activity.kind).data());
-        ImGui::SameLine();
-        ImGui::TextDisabled("%s -> %s", arguments.c_str(), result.c_str());
       }
-      if (decoded_calls == 0U) {
+      if (activity_count == 0U) {
         const auto active_turn = snapshot.turns_used + 1U;
         if (snapshot.turn_in_flight && entry.turn == active_turn) {
           ImGui::TextDisabled("  No decoded world-tool calls yet");
@@ -637,6 +663,8 @@ void AppUi::draw_transcript_panel() {
     }
     ImGui::Separator();
     ImGui::PopID();
+    transcript_entry_heights_[index] =
+        std::max(line_height, ImGui::GetCursorPosY() - entry_start_y);
   }
   if (should_scroll && transcript_auto_scroll_) {
     ImGui::SetScrollHereY(1.0F);
@@ -652,8 +680,14 @@ void AppUi::draw_event_log_panel() {
   }
   ImGui::SetNextItemWidth(
       std::max(120.0F, ImGui::GetContentRegionAvail().x - 115.0F));
-  ImGui::InputTextWithHint("##event-filter", "Filter tool, args, result...",
-                           event_filter_.data(), event_filter_.size());
+  if (ImGui::InputTextWithHint("##event-filter", "Filter tool, args, result...",
+                               event_filter_.data(), event_filter_.size())) {
+    static const auto empty_activities = agent::ToolActivityFeed{};
+    const auto &activities =
+        session_ ? session_->tool_activities() : empty_activities;
+    static_cast<void>(
+        activity_history_.set_filter(event_filter_.data(), activities));
+  }
   ImGui::SameLine();
   ImGui::TextDisabled("%zu decoded calls",
                       session_ ? session_->tool_activities().size() : 0U);
@@ -675,35 +709,44 @@ void AppUi::draw_event_log_panel() {
     ImGui::TableSetupColumn("Arguments");
     ImGui::TableSetupColumn("Result");
     ImGui::TableHeadersRow();
-    for (const auto &activity : session_->tool_activities()) {
-      if (!matches_filter(activity, trim_copy(event_filter_.data()))) {
-        continue;
-      }
-      ImGui::TableNextRow();
-      ImGui::TableSetColumnIndex(0);
-      ImGui::Text("%llu", static_cast<unsigned long long>(activity.tick));
-      ImGui::TableSetColumnIndex(1);
-      ImGui::Text("%zu", activity.turn);
-      ImGui::TableSetColumnIndex(2);
-      ImGui::TextColored({0.85F, 0.72F, 0.35F, 1.0F}, "%s",
-                         agent::tool_kind_name(activity.kind).data());
+    const auto &filtered = activity_history_.filtered_indices();
+    const auto row_count = static_cast<int>(
+        std::min(filtered.size(),
+                 static_cast<std::size_t>(std::numeric_limits<int>::max())));
+    const auto row_height =
+        ImGui::GetTextLineHeight() + 2.0F * ImGui::GetStyle().CellPadding.y;
+    ImGuiListClipper clipper;
+    clipper.Begin(row_count, row_height);
+    while (clipper.Step()) {
+      for (auto row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row) {
+        const auto activity_index = filtered[static_cast<std::size_t>(row)];
+        const auto &activity = session_->tool_activities()[activity_index];
+        const auto &presentation =
+            activity_history_.presentation(activity_index);
+        ImGui::TableNextRow(ImGuiTableRowFlags_None, row_height);
+        ImGui::TableSetColumnIndex(0);
+        ImGui::Text("%llu", static_cast<unsigned long long>(activity.tick));
+        ImGui::TableSetColumnIndex(1);
+        ImGui::Text("%zu", activity.turn);
+        ImGui::TableSetColumnIndex(2);
+        ImGui::TextColored({0.85F, 0.72F, 0.35F, 1.0F}, "%s",
+                           agent::tool_kind_name(activity.kind).data());
 
-      const auto arguments_short = compact(activity.arguments_json);
-      const auto result_short = compact(activity.result_json);
-      ImGui::TableSetColumnIndex(3);
-      ImGui::TextUnformatted(arguments_short.c_str());
-      if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("%s", activity.arguments_json.c_str());
-      }
-      ImGui::TableSetColumnIndex(4);
-      if (!activity.succeeded()) {
-        ImGui::TextColored({1.0F, 0.58F, 0.35F, 1.0F}, "%s",
-                           result_short.c_str());
-      } else {
-        ImGui::TextUnformatted(result_short.c_str());
-      }
-      if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("%s", activity.result_json.c_str());
+        ImGui::TableSetColumnIndex(3);
+        ImGui::TextUnformatted(presentation.short_arguments.c_str());
+        if (ImGui::IsItemHovered()) {
+          ImGui::SetTooltip("%s", activity.arguments_json.c_str());
+        }
+        ImGui::TableSetColumnIndex(4);
+        if (!activity.succeeded()) {
+          ImGui::TextColored({1.0F, 0.58F, 0.35F, 1.0F}, "%s",
+                             presentation.short_result.c_str());
+        } else {
+          ImGui::TextUnformatted(presentation.short_result.c_str());
+        }
+        if (ImGui::IsItemHovered()) {
+          ImGui::SetTooltip("%s", activity.result_json.c_str());
+        }
       }
     }
     ImGui::EndTable();
@@ -745,11 +788,19 @@ void AppUi::draw_controls_panel() {
     static_cast<void>(recreate_session(true));
   }
   ImGui::InputInt("Turn budget", &turn_budget_);
+  turn_budget_ =
+      std::clamp(turn_budget_, static_cast<int>(agent::min_turn_budget),
+                 static_cast<int>(agent::max_turn_budget));
   ImGui::InputInt("Tool rounds / turn", &max_tool_rounds_);
+  max_tool_rounds_ =
+      std::clamp(max_tool_rounds_, static_cast<int>(agent::min_tool_rounds),
+                 static_cast<int>(agent::max_tool_rounds));
   ImGui::InputDouble("Temperature", &temperature_, 0.1, 0.5, "%.2f");
-  temperature_ = std::clamp(temperature_, 0.0, 2.0);
+  temperature_ =
+      std::clamp(temperature_, agent::min_temperature, agent::max_temperature);
   if (ImGui::IsItemHovered()) {
-    ImGui::SetTooltip("Sampling control from 0.0 to 2.0; applies on Reset.");
+    ImGui::SetTooltip("Sampling control from %.1f to %.1f; applies on Reset.",
+                      agent::min_temperature, agent::max_temperature);
   }
   ImGui::SliderFloat("Animation speed", &animation_speed_, 0.25F, 4.0F,
                      "%.2fx");
@@ -846,25 +897,7 @@ void AppUi::draw_stats_panel() {
                 snapshot.turn_in_flight ? " (model turn active)" : "");
   }
 
-  std::size_t moves{};
-  std::size_t looks{};
-  std::size_t eat_attempts{};
-  std::size_t successful_eats{};
-  std::size_t failed_eats{};
-  for (const auto &activity : session_->tool_activities()) {
-    if (activity.kind == agent::ToolKind::move) {
-      ++moves;
-    } else if (activity.kind == agent::ToolKind::look) {
-      ++looks;
-    } else if (activity.kind == agent::ToolKind::eat) {
-      ++eat_attempts;
-      if (activity.eaten) {
-        ++successful_eats;
-      } else {
-        ++failed_eats;
-      }
-    }
-  }
+  const auto &counts = activity_history_.counts();
 
   if (ImGui::BeginTable("stats-table", 4,
                         ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
@@ -880,9 +913,9 @@ void AppUi::draw_stats_panel() {
         world::ItemType::toadstool,
     };
     const std::array<std::pair<const char *, std::size_t>, 4> tools{
-        std::pair{"move", moves},
-        std::pair{"look", looks},
-        std::pair{"eat attempts", eat_attempts},
+        std::pair{"move", counts.moves},
+        std::pair{"look", counts.looks},
+        std::pair{"eat attempts", counts.eat_attempts},
         std::pair{"decoded calls", session_->tool_call_count()},
     };
     for (std::size_t index = 0; index < item_types.size(); ++index) {
@@ -901,12 +934,13 @@ void AppUi::draw_stats_panel() {
     ImGui::EndTable();
   }
 
-  ImGui::Text("Eat attempts %zu", eat_attempts);
+  ImGui::Text("Eat attempts %zu", counts.eat_attempts);
   ImGui::SameLine();
   ImGui::TextColored({0.46F, 0.92F, 0.62F, 1.0F}, "| successful %zu",
-                     successful_eats);
+                     counts.successful_eats);
   ImGui::SameLine();
-  ImGui::TextColored({1.0F, 0.52F, 0.32F, 1.0F}, "| failed %zu", failed_eats);
+  ImGui::TextColored({1.0F, 0.52F, 0.32F, 1.0F}, "| failed %zu",
+                     counts.failed_eats);
 
   ImGui::TextDisabled(
       "Callbacks %zu | transport queued %zu | visuals queued %zu",

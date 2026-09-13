@@ -8,8 +8,9 @@ logs/<timestamp>-<model>-<seed>.jsonl
 
 for example `logs/20260807-064512-538-acme_pig-model_Q4_K_M-42.jsonl`. The timestamp is
 local time down to the millisecond, and characters that are awkward in
-filenames are replaced with `_`. If the name somehow collides, a `-1`, `-2`, …
-suffix is appended; an existing log is never overwritten. Use `--log-dir` to
+filenames are replaced with `_`. Files are created exclusively, so concurrent
+sessions cannot overwrite one another's logs. A name collision retries with a
+`-1`, `-2`, … suffix. Use `--log-dir` to
 write somewhere other than `logs/`.
 
 A file always has exactly one `header` line first and one `footer` line last,

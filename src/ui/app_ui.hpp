@@ -7,6 +7,7 @@
 
 #include "agent/config.hpp"
 #include "agent/session.hpp"
+#include "ui/activity_history.hpp"
 #include "ui/world_animation.hpp"
 
 #include <array>
@@ -15,6 +16,7 @@
 #include <memory>
 #include <random>
 #include <string>
+#include <vector>
 
 namespace pigpen::ui {
 
@@ -59,6 +61,7 @@ private:
 
   std::shared_ptr<agent::Session> session_{};
   WorldAnimationState animation_{};
+  ActivityHistory activity_history_{};
   agent::PumpStats pump_stats_{};
 
   std::array<char, 384> base_url_{};
@@ -80,8 +83,14 @@ private:
   std::mt19937_64 reroll_rng_{};
   std::string status_message_{};
   std::string visible_error_{};
-  std::size_t transcript_fingerprint_{};
-  bool default_layout_built_{false};
+  std::vector<float> transcript_entry_heights_{};
+  std::vector<std::size_t> transcript_text_lengths_{};
+  std::vector<std::size_t> transcript_activity_counts_{};
+  const void *transcript_font_{};
+  float transcript_layout_width_{};
+  float transcript_line_height_{};
+  std::array<std::size_t, 3> transcript_fingerprint_{};
+  bool dock_layout_initialized_{false};
 };
 
 } // namespace pigpen::ui

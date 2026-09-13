@@ -158,13 +158,13 @@ int main(const int argc, char **argv) {
       if (done) {
         break;
       }
+
+      const auto current_time = current_time_seconds();
+      application.pump(current_time);
       if ((SDL_GetWindowFlags(window) & SDL_WINDOW_MINIMIZED) != 0U) {
         SDL_Delay(10);
         continue;
       }
-
-      const auto current_time = current_time_seconds();
-      application.pump(current_time);
 
       ImGui_ImplOpenGL3_NewFrame();
       ImGui_ImplSDL3_NewFrame();

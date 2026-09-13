@@ -13,7 +13,6 @@
 #include <scry/scry.hpp>
 
 #include <chrono>
-#include <cmath>
 #include <cstdlib>
 #include <functional>
 #include <memory>
@@ -92,16 +91,15 @@ class Session::Impl final {
 public:
   Impl(Config initial_config, std::unique_ptr<MetricsWriter> initial_metrics,
        scry::Harness initial_harness, scry::Conversation initial_conversation)
-      : config(std::move(initial_config)),
-        world(std::make_shared<world::World>(this->config.seed)),
+      : config(std::move(initial_config)), world(this->config.seed),
         metrics(std::move(initial_metrics)),
         harness(std::move(initial_harness)),
         conversation(std::move(initial_conversation)),
-        tools(*world, this->config),
+        tools(world, this->config),
         transport(this->harness, this->conversation),
         runner(
             transport, static_cast<std::uint32_t>(this->config.turn_budget),
-            [this] { return world->all_positive_items_eaten(); },
+            [this] { return world.all_positive_items_eaten(); },
             {
                 .on_turn_finished =
                     [this](const TurnRecord &record) {
@@ -114,7 +112,7 @@ public:
                 .on_episode_finished =
                     [this](const EpisodeResult &result) {
                       if (auto status =
-                              this->metrics->finish(result, world->score());
+                              this->metrics->finish(result, world.score());
                           !status) {
                         metrics_error = std::move(status.error());
                       }
@@ -123,7 +121,7 @@ public:
             [this] { return activities.size(); }) {}
 
   Config config;
-  std::shared_ptr<world::World> world;
+  world::World world;
   ToolActivityFeed activities{};
   std::unique_ptr<MetricsWriter> metrics;
   scry::Harness harness;
@@ -139,30 +137,8 @@ public:
 std::expected<std::shared_ptr<Session>, std::string>
 Session::create(Config config, std::filesystem::path log_directory,
                 std::string prompt_variant) {
-  if (config.base_url.empty()) {
-    return std::unexpected("base URL cannot be empty");
-  }
-  if (config.model.empty()) {
-    return std::unexpected("model cannot be empty");
-  }
-  if (config.turn_budget == 0) {
-    return std::unexpected("turn budget must be greater than zero");
-  }
-  if (config.turn_budget > 10'000) {
-    return std::unexpected("turn budget must not exceed 10000");
-  }
-  if (config.max_tool_rounds == 0) {
-    return std::unexpected("maximum tool rounds must be greater than zero");
-  }
-  if (config.max_tool_rounds > 64) {
-    return std::unexpected("maximum tool rounds must not exceed 64");
-  }
-  if (config.max_output_tokens == 0) {
-    return std::unexpected("maximum output tokens must be greater than zero");
-  }
-  if (!std::isfinite(config.temperature) || config.temperature < 0.0 ||
-      config.temperature > 2.0) {
-    return std::unexpected("temperature must be finite and in the range 0..2");
+  if (const auto error = validate_config(config)) {
+    return std::unexpected(std::string{config_validation_message(*error)});
   }
 
   auto harness = create_harness(config);
@@ -239,7 +215,7 @@ std::expected<void, std::string> Session::register_tools() {
               .after = execution.after,
               .direction = execution.direction,
               .eaten = execution.eaten,
-              .score_after = session->impl_->world->score(),
+              .score_after = session->impl_->world.score(),
           });
           const auto &activity = session->impl_->activities.back();
           if (auto recorded = session->impl_->metrics->record_tool(activity);
@@ -302,7 +278,7 @@ void Session::clear_pending_user_inputs() {
 }
 
 const Config &Session::config() const noexcept { return impl_->config; }
-const world::World &Session::world() const noexcept { return *impl_->world; }
+const world::World &Session::world() const noexcept { return impl_->world; }
 const ToolActivityFeed &Session::tool_activities() const noexcept {
   return impl_->activities;
 }

@@ -76,6 +76,7 @@ Binaries land in `build/<preset>/`:
 - `resources/build-manifest.json` — automatically generated build reference
 - `pigpen_tests` — the Catch2 test binary
 - `pigpen_reflection_tests` — the reflection-isolated Catch2 test binary
+- `pigpen_gui_tests` — display-free ImGui layout tests (GUI builds only)
 
 ## justfile recipes
 
@@ -101,7 +102,7 @@ preset named `--model`.
 | option | default | effect |
 |---|---|---|
 | `PIGPEN_BUILD_GUI` | `ON` | build `pig-pen`; turn off to skip SDL3, ImGui, and OpenGL entirely |
-| `PIGPEN_BUILD_TESTS` | `ON` | build both Catch2 test binaries and register all CTest cases |
+| `PIGPEN_BUILD_TESTS` | `ON` | build the applicable Catch2 test binaries and register all CTest cases |
 | `PIGPEN_WARNINGS_AS_ERRORS` | `ON` | `-Werror` for pig-pen's own code only |
 | `PIGPEN_SCRY_SOURCE` | *(empty)* | deprecated compatibility alias for a local scry checkout |
 

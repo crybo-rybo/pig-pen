@@ -93,7 +93,8 @@ integration is testable without a window or a model server
   `WorldAnimationState` turns the activity feed into timed steps with
   caller-supplied time, so it is tested without ImGui or a wall clock.
 - **`src/app`** — `main.cpp` (SDL3/ImGui frame loop) and `headless_main.cpp`
-  (argv, signals, exit codes) contain nothing testable-by-unit.
+  (signals, output, exit codes) drive the front ends. `headless_options.cpp`
+  parses arguments through a unit-tested, resource-free interface.
 
 Key invariants to preserve:
 

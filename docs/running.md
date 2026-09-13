@@ -114,6 +114,9 @@ window opens without an episode and waits for manual model selection. Panels
 are dockable; the layout is remembered in `imgui.ini` next to the working
 directory.
 
+Minimizing the window skips rendering while the episode continues running.
+Use **Pause** to pause between model turns.
+
 **World** — the whole 10×10 pen, drawn with `(0,0)` at the south-west corner.
 Cells the model has never observed are tinted dark; observed cells get a teal
 outline. Items are drawn as coloured glyphs, the blob is the teal dot, and

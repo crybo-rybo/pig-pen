@@ -1,10 +1,10 @@
-# Pig Pen's test suite: two Catch2 binaries (kept separate so the -freflection
-# translation units stay isolated), CLI smoke tests against the headless
-# binary, and the Python-driven integration tests. Needs no model server or
-# network.
+# Pig Pen's test suite: isolated ordinary/reflection Catch2 binaries, an
+# optional ImGui layout binary, and Python-driven CLI/integration tests.
+# Needs no display, model server, or external network.
 
 include(CTest)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
+find_package(Threads REQUIRED)
 
 set(CATCH_BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(CATCH_INSTALL_DOCS OFF CACHE BOOL "" FORCE)
@@ -21,8 +21,10 @@ FetchContent_MakeAvailable(Catch2)
 
 add_executable(
   pigpen_tests
+    tests/activity_history_tests.cpp
     tests/episode_runner_tests.cpp
     tests/gui_options_tests.cpp
+    tests/headless_options_tests.cpp
     tests/metrics_writer_tests.cpp
     tests/prompt_tests.cpp
     tests/session_tests.cpp
@@ -35,7 +37,9 @@ target_link_libraries(
   PRIVATE
     Catch2::Catch2WithMain
     nlohmann_json::nlohmann_json
+    Threads::Threads
     pigpen_agent
+    pigpen_cli
     pigpen_ui
 )
 pigpen_target(pigpen_tests)
@@ -55,17 +59,32 @@ target_link_libraries(
 pigpen_target(pigpen_reflection_tests)
 catch_discover_tests(pigpen_reflection_tests)
 
-# Headless CLI behaviour. `--help` exits 0; everything registered through this
-# helper must exit non-zero.
-add_test(NAME pigpen_headless_help COMMAND pig-pen-headless --help)
+if(PIGPEN_BUILD_GUI)
+  # Exercise saved ImGui layouts without a display or renderer backend.
+  add_executable(
+    pigpen_gui_tests
+      tests/app_ui_layout_tests.cpp
+      src/ui/app_ui.cpp
+  )
+  target_link_libraries(
+    pigpen_gui_tests
+    PRIVATE Catch2::Catch2WithMain pigpen_agent pigpen_imgui pigpen_ui
+  )
+  pigpen_target(pigpen_gui_tests)
+  catch_discover_tests(pigpen_gui_tests)
+endif()
 
-function(pigpen_failing_headless_test name)
-  add_test(NAME pigpen_headless_${name} COMMAND pig-pen-headless ${ARGN})
-  set_tests_properties(pigpen_headless_${name} PROPERTIES WILL_FAIL TRUE)
-endfunction()
-pigpen_failing_headless_test(requires_model)
-pigpen_failing_headless_test(rejects_invalid_bounds --max-tool-rounds 65)
-pigpen_failing_headless_test(rejects_invalid_temperature --temperature nan)
+# Headless CLI behaviour: assert the exit code and diagnostic, so unrelated
+# startup failures cannot satisfy argument-validation tests.
+add_test(NAME pigpen_headless_help COMMAND pig-pen-headless --help)
+add_test(
+  NAME pigpen_headless_cli
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/headless_cli_tests.py"
+    "$<TARGET_FILE:pig-pen-headless>"
+)
+set_tests_properties(pigpen_headless_cli PROPERTIES TIMEOUT 30)
 
 add_test(
   NAME pigpen_reflection_integration

@@ -134,8 +134,11 @@ if(PIGPEN_BUILD_GUI OR PIGPEN_BUILD_TESTS)
   pigpen_target(pigpen_ui PUBLIC)
 endif()
 
+add_library(pigpen_cli STATIC src/app/headless_options.cpp)
+pigpen_target(pigpen_cli PUBLIC)
+
 add_executable(pig-pen-headless src/app/headless_main.cpp)
-target_link_libraries(pig-pen-headless PRIVATE pigpen_agent)
+target_link_libraries(pig-pen-headless PRIVATE pigpen_agent pigpen_cli)
 pigpen_target(pig-pen-headless)
 add_dependencies(pig-pen-headless pigpen_resources)
 

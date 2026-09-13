@@ -6,25 +6,18 @@
 /// from docs/running.md. Episode behavior itself lives in agent::Session.
 #include "agent/episode_runner.hpp"
 #include "agent/session.hpp"
+#include "app/headless_options.hpp"
 #include "text/catalog.hpp"
 
-#include <charconv>
 #include <chrono>
-#include <cmath>
 #include <csignal>
-#include <cstdint>
-#include <expected>
-#include <filesystem>
 #include <format>
 #include <iomanip>
 #include <iostream>
-#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
-#include <type_traits>
-#include <utility>
 #include <vector>
 
 namespace {
@@ -61,16 +54,6 @@ extern "C" void request_termination(const int signal_number) noexcept {
   return static_cast<int>(requested_termination_signal);
 }
 
-/// @brief The full parsed command line.
-struct Options {
-  pigpen::agent::Config config{};
-  std::filesystem::path log_directory{"logs"};
-  std::chrono::seconds timeout{300};
-  std::string prompt_variant{"default"};
-  std::optional<std::string> user_input{};
-  bool help{};
-};
-
 /// @brief How much of the transcript and activity feed has been printed, so
 /// each pump iteration emits only what is new.
 struct OutputCursor {
@@ -85,219 +68,6 @@ void print_usage(std::ostream &output, const std::string_view program) {
   };
   static constexpr auto catalog = pigpen::text::make_catalog<source>();
   output << std::format(catalog.get("headless_usage"), program);
-}
-
-/// @brief Parses a sampling temperature, rejecting non-finite values and
-/// anything outside 0.0..2.0.
-[[nodiscard]] std::expected<double, std::string>
-parse_temperature(const std::string_view value) {
-  double parsed{};
-  const auto [end, error] =
-      std::from_chars(value.data(), value.data() + value.size(), parsed,
-                      std::chars_format::general);
-  if (value.empty() || error != std::errc{} ||
-      end != value.data() + value.size() || !std::isfinite(parsed) ||
-      parsed < 0.0 || parsed > 2.0) {
-    return std::unexpected(
-        "--temperature must be a finite number in the range 0.0..2.0");
-  }
-  return parsed;
-}
-
-/// @brief Parses a full-string unsigned decimal for @p option, capped at
-/// @p maximum; leading signs are rejected rather than wrapped.
-template <typename Integer>
-[[nodiscard]] std::expected<Integer, std::string>
-parse_unsigned(const std::string_view value, const std::string_view option,
-               const std::uint64_t maximum) {
-  static_assert(std::is_integral_v<Integer> && std::is_unsigned_v<Integer>);
-  if (value.empty() || value.front() == '-' || value.front() == '+') {
-    return std::unexpected(std::string{option} +
-                           " requires an unsigned decimal integer");
-  }
-
-  std::uint64_t parsed{};
-  const auto [end, error] =
-      std::from_chars(value.data(), value.data() + value.size(), parsed);
-  if (error != std::errc{} || end != value.data() + value.size() ||
-      parsed > maximum ||
-      parsed >
-          static_cast<std::uint64_t>(std::numeric_limits<Integer>::max())) {
-    return std::unexpected(std::string{option} + " must be in the range 0.." +
-                           std::to_string(maximum));
-  }
-  return static_cast<Integer>(parsed);
-}
-
-/// @brief Parses the whole command line, accepting `--option value` and
-/// `--option=value`; validation errors exit 2 in main().
-/// @note `--help` short-circuits validation so it works with no other flags.
-[[nodiscard]] std::expected<Options, std::string> parse_options(const int argc,
-                                                                char **argv) {
-  Options options;
-  for (int index = 1; index < argc; ++index) {
-    const std::string_view argument{argv[index]};
-    if (!argument.starts_with("--")) {
-      return std::unexpected("unexpected positional argument: " +
-                             std::string{argument});
-    }
-
-    const auto equals = argument.find('=');
-    const auto name = argument.substr(0, equals);
-    const auto inline_value = equals == std::string_view::npos
-                                  ? std::optional<std::string_view>{}
-                                  : std::optional{argument.substr(equals + 1)};
-    const auto value = [&]() -> std::expected<std::string_view, std::string> {
-      if (inline_value) {
-        if (inline_value->empty()) {
-          return std::unexpected(std::string{name} + " requires a value");
-        }
-        return *inline_value;
-      }
-      if (index + 1 >= argc) {
-        return std::unexpected(std::string{name} + " requires a value");
-      }
-      const std::string_view next{argv[index + 1]};
-      if (next.starts_with("--")) {
-        return std::unexpected(std::string{name} + " requires a value");
-      }
-      ++index;
-      return next;
-    };
-    const auto reject_inline_value = [&]() -> std::expected<void, std::string> {
-      if (inline_value) {
-        return std::unexpected(std::string{name} + " does not take a value");
-      }
-      return {};
-    };
-
-    if (name == "--help") {
-      if (auto valid = reject_inline_value(); !valid) {
-        return std::unexpected(std::move(valid.error()));
-      }
-      options.help = true;
-    } else if (name == "--hidden-values") {
-      if (auto valid = reject_inline_value(); !valid) {
-        return std::unexpected(std::move(valid.error()));
-      }
-      options.config.known_item_values = false;
-    } else if (name == "--no-reward-feedback") {
-      if (auto valid = reject_inline_value(); !valid) {
-        return std::unexpected(std::move(valid.error()));
-      }
-      options.config.reward_feedback = false;
-    } else if (name == "--opaque-look") {
-      if (auto valid = reject_inline_value(); !valid) {
-        return std::unexpected(std::move(valid.error()));
-      }
-      options.config.opaque_look = true;
-    } else if (name == "--base-url") {
-      auto parsed = value();
-      if (!parsed) {
-        return std::unexpected(std::move(parsed.error()));
-      }
-      options.config.base_url = *parsed;
-    } else if (name == "--model") {
-      auto parsed = value();
-      if (!parsed) {
-        return std::unexpected(std::move(parsed.error()));
-      }
-      options.config.model = *parsed;
-    } else if (name == "--log-dir") {
-      auto parsed = value();
-      if (!parsed) {
-        return std::unexpected(std::move(parsed.error()));
-      }
-      options.log_directory = *parsed;
-    } else if (name == "--prompt-variant") {
-      auto parsed = value();
-      if (!parsed) {
-        return std::unexpected(std::move(parsed.error()));
-      }
-      options.prompt_variant = *parsed;
-    } else if (name == "--input") {
-      auto parsed = value();
-      if (!parsed) {
-        return std::unexpected(std::move(parsed.error()));
-      }
-      options.user_input = std::string{*parsed};
-    } else if (name == "--seed") {
-      auto parsed = value();
-      if (!parsed) {
-        return std::unexpected(std::move(parsed.error()));
-      }
-      auto number = parse_unsigned<std::uint64_t>(
-          *parsed, name, std::numeric_limits<std::uint64_t>::max());
-      if (!number) {
-        return std::unexpected(std::move(number.error()));
-      }
-      options.config.seed = *number;
-    } else if (name == "--turns") {
-      auto parsed = value();
-      if (!parsed) {
-        return std::unexpected(std::move(parsed.error()));
-      }
-      auto number = parse_unsigned<std::size_t>(*parsed, name, 10'000);
-      if (!number || *number == 0) {
-        return std::unexpected(number ? "--turns must be in the range 1..10000"
-                                      : std::move(number.error()));
-      }
-      options.config.turn_budget = *number;
-    } else if (name == "--max-tool-rounds") {
-      auto parsed = value();
-      if (!parsed) {
-        return std::unexpected(std::move(parsed.error()));
-      }
-      auto number = parse_unsigned<std::uint32_t>(*parsed, name, 64);
-      if (!number || *number == 0) {
-        return std::unexpected(
-            number ? "--max-tool-rounds must be in the range 1..64"
-                   : std::move(number.error()));
-      }
-      options.config.max_tool_rounds = *number;
-    } else if (name == "--temperature") {
-      auto parsed = value();
-      if (!parsed) {
-        return std::unexpected(std::move(parsed.error()));
-      }
-      auto temperature = parse_temperature(*parsed);
-      if (!temperature) {
-        return std::unexpected(std::move(temperature.error()));
-      }
-      options.config.temperature = *temperature;
-    } else if (name == "--timeout-seconds") {
-      auto parsed = value();
-      if (!parsed) {
-        return std::unexpected(std::move(parsed.error()));
-      }
-      auto number = parse_unsigned<std::uint32_t>(*parsed, name, 86'400);
-      if (!number || *number == 0) {
-        return std::unexpected(
-            number ? "--timeout-seconds must be in the range 1..86400"
-                   : std::move(number.error()));
-      }
-      options.timeout = std::chrono::seconds{*number};
-    } else {
-      return std::unexpected("unknown option: " + std::string{name});
-    }
-  }
-
-  if (options.help) {
-    return options;
-  }
-  if (options.config.base_url.empty()) {
-    return std::unexpected("--base-url cannot be empty");
-  }
-  if (options.config.model.empty()) {
-    return std::unexpected("--model is required");
-  }
-  if (options.log_directory.empty()) {
-    return std::unexpected("--log-dir cannot be empty");
-  }
-  if (options.prompt_variant.empty()) {
-    return std::unexpected("--prompt-variant cannot be empty");
-  }
-  return options;
 }
 
 [[nodiscard]] std::string_view
@@ -371,7 +141,7 @@ void print_updates(const pigpen::agent::Session &session,
 /// @brief Creates the session, pumps it until the episode finishes — honoring
 /// signals and the wall-clock timeout via cooperative cancellation so the
 /// JSONL footer is still written — and maps the outcome to an exit code.
-[[nodiscard]] int run(const Options &options) {
+[[nodiscard]] int run(const pigpen::app::HeadlessOptions &options) {
   auto created = pigpen::agent::Session::create(
       options.config, options.log_directory, options.prompt_variant);
   if (!created) {
@@ -507,7 +277,12 @@ int main(const int argc, char **argv) {
     std::cerr << "runtime error: could not install SIGINT/SIGTERM handlers\n";
     return runtime_error_exit;
   }
-  auto options = parse_options(argc, argv);
+  std::vector<std::string_view> arguments;
+  arguments.reserve(argc > 1 ? static_cast<std::size_t>(argc - 1) : 0U);
+  for (int index = 1; index < argc; ++index) {
+    arguments.emplace_back(argv[index]);
+  }
+  auto options = pigpen::app::parse_headless_options(arguments);
   if (!options) {
     std::cerr << "option error: " << options.error() << "\n\n";
     print_usage(std::cerr, argc > 0 ? argv[0] : "pig-pen-headless");

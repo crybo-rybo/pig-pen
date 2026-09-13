@@ -31,7 +31,7 @@ serialisation used for determinism tests. Details in [World and tools](world.md)
 
 | unit | responsibility |
 |---|---|
-| `config.hpp` | `Config`: endpoint, model, seed, budgets, and the three model-visibility flags shared by both front ends |
+| `config.hpp` | `Config`, shared runtime bounds, and resource-free validation for both front ends |
 | `prompt.cpp` | builds the system prompt and the per-turn nudge from a `Config` |
 | `tool_contract.hpp` | reflected argument and flat response declarations, including status and budget fields; these C++ types are the model-facing contract |
 | `world_tools.cpp` | typed world actions and the explicit per-turn action-budget lifecycle; it contains no JSON parsing or schema code |
@@ -70,7 +70,7 @@ application budget is already exhausted.
 
 ### `Session` is the reset unit
 
-A `Session` owns the world, the conversation, the scry harness with its
+A `Session` owns the world as a value, the conversation, the scry harness with its
 registered tools, the runner, and the metrics writer. There is no partial
 reset: to start over, you destroy the session and create a new one, which is
 exactly what the GUI's **Reset** button does. That is why connection and
@@ -87,7 +87,7 @@ freed state.
 callbacks, then ticks the runner. Both front ends call it from their own loop —
 the GUI once per frame, the CLI in a tight loop that sleeps 1 ms when there is
 nothing to do. No background threads, no blocking waits, and the same code path
-in both.
+in both. The GUI keeps pumping while minimized, even though rendering is skipped.
 
 Cancellation is cooperative for the same reason: `stop()` asks the transport to
 cancel and the episode is not finished until the terminal callback comes back,
@@ -113,12 +113,18 @@ parameter. That keeps it free of any ImGui or wall-clock dependency, which is
 why `tests/world_animation_tests.cpp` can test animation without a window —
 `pigpen_ui` compiles it once and is shared by the GUI and the test binary.
 
+`ActivityHistory` indexes the append-only tool feed by turn and updates counts,
+filter matches, and compact display text only as needed. The event table clips
+fixed-height rows; the transcript caches measured entry heights so wrapped
+narration can be skipped when offscreen without assuming a fixed row height.
+
 ## `src/app` — the entry points
 
 `main.cpp` is SDL3/OpenGL/ImGui setup and the frame loop, nothing else.
-`headless_main.cpp` is argument parsing, `SIGINT`/`SIGTERM` handling (the
-handler only writes a `volatile sig_atomic_t`), incremental printing of the
-transcript and activity feed, and the exit-code policy described in
+`headless_options.cpp` parses command-line arguments without starting a session;
+its span-based interface is tested directly. `headless_main.cpp` handles
+`SIGINT`/`SIGTERM` (the handler only writes a `volatile sig_atomic_t`), incremental
+printing of the transcript and activity feed, and the exit-code policy described in
 [Running](running.md#exit-codes).
 
 ## Build layout
@@ -127,8 +133,8 @@ transcript and activity feed, and the exit-code policy described in
 probe; it describes Pig Pen's own targets only, with runtime dependency fetching
 and upstream option pinning in `cmake/dependencies.cmake` and the test-only
 Catch2 dependency plus the suite in `cmake/testing.cmake`. It builds
-`pigpen_world`, `pigpen_reflected_tools`, `pigpen_agent`, and, when needed,
-`pigpen_ui` as focused static libraries, then the GUI, headless program, and test
+`pigpen_world`, `pigpen_reflected_tools`, `pigpen_agent`, `pigpen_cli`, and, when
+needed, `pigpen_ui` as focused static libraries, then the GUI, headless program, and test
 executables from explicit source lists. Reflection compiler requirements stay
 scoped to the agent/tool boundary instead of leaking into fetched dependencies
 or front-end translation units.
