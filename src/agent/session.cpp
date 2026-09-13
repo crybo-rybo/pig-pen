@@ -30,10 +30,10 @@ namespace {
   return value == nullptr ? std::string{} : std::string{value};
 }
 
-/// @brief Build the scry harness from a validated Config, with
+/// @brief Translate a Pig Pen config into the scry provider config, with
 /// PIGPEN_API_KEY from the environment as the credential.
-[[nodiscard]] scry::Result<scry::Harness> create_harness(const Config &config) {
-  return scry::Harness::create({
+[[nodiscard]] scry::Config provider_config(const Config &config) {
+  return {
       .base_url = config.base_url,
       .api_key = environment("PIGPEN_API_KEY"),
       .model = config.model,
@@ -49,7 +49,7 @@ namespace {
       .limits = {},
       .max_tool_rounds = config.max_tool_rounds,
       .tls_verify_peer = true,
-  });
+  };
 }
 
 /// @brief Project each typed tool response into the small application outcome
@@ -164,14 +164,21 @@ Session::create(Config config, std::filesystem::path log_directory,
     return std::unexpected("temperature must be finite and in the range 0..2");
   }
 
-  auto harness = create_harness(config);
-  if (!harness) {
-    return std::unexpected(harness.error().message);
+  // Let scry reject a bad provider config before anything with a side effect
+  // happens: validate() runs create()'s checks without starting a worker, and
+  // the metrics log below is only opened once the whole config is known good.
+  const auto provider = provider_config(config);
+  if (auto valid = scry::Harness::validate(provider); !valid) {
+    return std::unexpected(valid.error().message);
   }
   auto conversation = scry::Conversation::create(
       {.system_prompt = build_system_prompt(config)});
   if (!conversation) {
     return std::unexpected(conversation.error().message);
+  }
+  auto harness = scry::Harness::create(provider);
+  if (!harness) {
+    return std::unexpected(harness.error().message);
   }
   auto metrics =
       MetricsWriter::create(log_directory, config, std::move(prompt_variant));

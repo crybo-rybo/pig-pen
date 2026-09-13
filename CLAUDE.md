@@ -13,7 +13,7 @@ rules, log format) — consult them before re-deriving anything below.
 
 ## Build & test
 
-Requires GCC 16+ (`-std=c++26 -freflection`, P2996/P3394), CMake 3.25+, Ninja,
+Requires GCC 16+ (`-std=c++26 -freflection`, P2996/P3394), CMake 3.28+, Ninja,
 Python 3, libcurl. Configure fails fast on any other compiler. First configure
 fetches all pinned dependencies (scry, nlohmann/json, SDL3, ImGui, Catch2) and
 needs network access.
@@ -54,8 +54,8 @@ just lint        # ruff check on the Python tests
 
 clang-format is pinned to 22.1.8 (CI installs exactly that; use the same
 major locally). `.clang-tidy` is advisory only — clang cannot parse the
-`-freflection` TUs, so it runs against `src/world`, `src/ui`, and the
-non-reflection agent files via `clang-tidy -p build/dev <file>`.
+`-freflection` TUs, and since scry v0.3.0 every `pigpen_agent` TU is one, so
+it runs against `src/world` and `src/ui` via `clang-tidy -p build/dev <file>`.
 
 Conventions the formatter can't enforce: project includes are quoted and
 rooted at `src/` (`"agent/config.hpp"`, never `"config.hpp"`); files are
@@ -102,9 +102,11 @@ Key invariants to preserve:
   Schemas from them at compile time and does all decode/encode. Adding or
   renaming an enum value changes schema, decode, and encode from the one
   declaration. `WorldTools` never touches JSON; protocol failures (unknown
-  tool, undecodable args) belong to scry and never reach it. Reflection
-  compiler requirements are scoped to the `pigpen_reflected_tools` /
-  `pigpen_agent` libraries — don't leak them into deps or front-end TUs.
+  tool, undecodable args) belong to scry and never reach it. `scry::scry`
+  carries `-freflection` publicly, so every `pigpen_reflected_tools` and
+  `pigpen_agent` TU compiles with it; `pigpen_agent` links scry privately,
+  which keeps the requirement out of `pigpen_world`, `pigpen_ui`, and the
+  front-end TUs — keep it that way.
 - **Nothing blocks, no background threads.** Both front ends drive
   `Session::pump()` from their own loop (GUI per frame, CLI in a sleep-1ms
   loop). Cancellation is cooperative: an episode isn't finished until the

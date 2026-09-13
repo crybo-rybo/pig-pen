@@ -7,19 +7,20 @@
 
 #include <scry/scry.hpp>
 
-#include <memory>
+#include <optional>
 
 namespace pigpen::agent {
 
 /// @brief Sends one model turn at a time through a scry harness.
 ///
 /// Callbacks are delivered from Harness::update() on the pump thread, never
-/// concurrently. Shared state is held through a weak_ptr so a callback that
-/// outlives the transport returns without touching freed memory.
+/// concurrently. The scry::Turn handle is the whole state: it reports whether
+/// a turn is still live, and destruction cancels and disconnects it so no
+/// callback can outlive this transport.
 class ScryTurnTransport final : public ITurnTransport {
 public:
   ScryTurnTransport(scry::Harness &harness, scry::Conversation &conversation);
-  /// @brief Cancels any turn still in flight.
+  /// @brief Cancels any turn still in flight and stops its delivery.
   ~ScryTurnTransport() override;
 
   ScryTurnTransport(const ScryTurnTransport &) = delete;
@@ -36,11 +37,9 @@ public:
   [[nodiscard]] bool cancel() noexcept override;
 
 private:
-  struct State;
-
   scry::Harness &harness_;
   scry::Conversation &conversation_;
-  std::shared_ptr<State> state_;
+  std::optional<scry::Turn> turn_{};
 };
 
 } // namespace pigpen::agent

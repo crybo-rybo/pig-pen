@@ -6,15 +6,14 @@ include(FetchContent)
 
 # --- scry ---------------------------------------------------------------------
 
+# Scry v0.3.0 is one target (scry::scry) built by one compiler, so the only
+# options left to pin are the ones that would add work to this build.
 set(SCRY_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(SCRY_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(SCRY_ENABLE_FORMAT_CHECK OFF CACHE BOOL "" FORCE)
 set(SCRY_ENABLE_CLANG_TIDY OFF CACHE BOOL "" FORCE)
 set(SCRY_WARNINGS_AS_ERRORS OFF CACHE BOOL "" FORCE)
-set(SCRY_ENABLE_REFLECTION ON CACHE BOOL "" FORCE)
 set(SCRY_BUILD_FUZZERS OFF CACHE BOOL "" FORCE)
-set(SCRY_BUILD_IMGUI_SHOWCASE OFF CACHE BOOL "" FORCE)
-set(SCRY_BUILD_LOCAL_MODEL_SMOKE OFF CACHE BOOL "" FORCE)
 
 # Keep the previously documented project option as a compatibility alias. It
 # resolves relative paths against the project source, unlike FetchContent's
@@ -69,7 +68,7 @@ endif()
 FetchContent_Declare(
   scry
   GIT_REPOSITORY https://github.com/crybo-rybo/scry.git
-  GIT_TAG v0.2.0
+  GIT_TAG v0.3.0
   GIT_PROGRESS TRUE
   SYSTEM
   EXCLUDE_FROM_ALL
@@ -90,8 +89,8 @@ FetchContent_Declare(
 
 FetchContent_MakeAvailable(scry nlohmann_json)
 
-if(NOT TARGET scry::reflection)
-  message(FATAL_ERROR "The selected Scry source does not provide scry::reflection")
+if(NOT TARGET scry::scry)
+  message(FATAL_ERROR "The selected Scry source does not provide scry::scry")
 endif()
 
 # --- SDL3 + Dear ImGui (GUI only) ---------------------------------------------
