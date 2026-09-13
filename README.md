@@ -74,6 +74,7 @@ Every episode appends a
 
 - [Building](docs/building.md) — presets, CMake options, dependencies
 - [Running](docs/running.md) — CLI flags, exit codes, the GUI panels
+- [Prompts and build manifest](docs/prompts.md) — edit JSON text and inspect compiled tool schemas
 - [Testing](docs/testing.md) — the suite runs without a model or a network
 - [World and tools](docs/world.md) — grid rules, tool schemas, result JSON
 - [Logs](docs/logs.md) — the JSONL record format and `jq` recipes

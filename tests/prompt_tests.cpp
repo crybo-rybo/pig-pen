@@ -129,3 +129,11 @@ TEST_CASE("Turn prompts sustain exploration and carry optional human input") {
   CHECK(contains(corrective, "Model narration is not an action"));
   CHECK(contains(corrective, "Begin this turn with a valid"));
 }
+
+TEST_CASE("Human guidance remains literal after automatic prompt formatting") {
+  const std::string guidance = "Try {0}, then {} and {{north}}.\nUnicode: 🐷";
+  const auto prompt = pigpen::agent::build_turn_prompt(10, 12, guidance, true);
+  CHECK(prompt.ends_with("Human guidance:\n" + guidance));
+  CHECK(contains(prompt, "Turn 10 of 12."));
+  CHECK(contains(prompt, "previous turn executed zero world tools"));
+}

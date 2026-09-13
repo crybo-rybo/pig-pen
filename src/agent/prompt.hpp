@@ -1,8 +1,8 @@
 /// @file prompt.hpp
 /// @brief Builders for the system prompt and the per-turn automatic nudge.
 ///
-/// Prompt text is derived from Config alone, so what the model is told is
-/// fully determined by the recorded episode settings.
+/// Prompt wording lives in resources/prompts.json and is embedded at compile
+/// time. Config selects the visibility variants and episode limits.
 #pragma once
 
 #include "agent/config.hpp"

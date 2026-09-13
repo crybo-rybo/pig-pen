@@ -26,6 +26,7 @@ add_executable(
     tests/metrics_writer_tests.cpp
     tests/prompt_tests.cpp
     tests/session_tests.cpp
+    tests/text_catalog_tests.cpp
     tests/world_animation_tests.cpp
     tests/world_tests.cpp
 )
@@ -72,6 +73,7 @@ add_test(
     "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/reflection_integration_tests.py"
     "$<TARGET_FILE:pig-pen-headless>"
+    "${PIGPEN_RESOURCE_MANIFEST}"
 )
 set_tests_properties(pigpen_reflection_integration PROPERTIES TIMEOUT 45)
 

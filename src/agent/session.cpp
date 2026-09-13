@@ -6,6 +6,7 @@
 #include "agent/metrics_writer.hpp"
 #include "agent/prompt.hpp"
 #include "agent/scry_transport.hpp"
+#include "agent/tool_definitions.hpp"
 #include "agent/world_tools.hpp"
 
 #include <scry/reflection.hpp>
@@ -195,7 +196,7 @@ Session::~Session() = default;
 std::expected<void, std::string> Session::register_tools() {
   const std::weak_ptr<Session> weak_session{shared_from_this()};
   const auto add = [this, weak_session]<typename Arguments, typename Invoke>(
-                       const ToolKind kind, std::string description,
+                       const ToolKind kind, std::string_view description,
                        Invoke invoke) {
     using Execution = std::invoke_result_t<Invoke &, WorldTools &, Arguments>;
     using Response = typename Execution::response_type;
@@ -203,7 +204,7 @@ std::expected<void, std::string> Session::register_tools() {
         impl_->harness.tools(),
         {
             .name = std::string{tool_kind_name(kind)},
-            .description = std::move(description),
+            .description = std::string{description},
         },
         [weak_session, kind, invoke = std::move(invoke)](
             Arguments arguments) mutable -> scry::Result<Response> {
@@ -250,25 +251,19 @@ std::expected<void, std::string> Session::register_tools() {
         });
   };
 
-  if (auto status = add.template operator()<DirectionArguments>(
-          ToolKind::move, "Move one cell north, south, east, or west.",
-          &WorldTools::move);
-      !status) {
-    return std::unexpected(status.error().message);
-  }
-  if (auto status = add.template operator()<DirectionArguments>(
-          ToolKind::look, "Scan every cell in one direction to the wall.",
-          &WorldTools::look);
-      !status) {
-    return std::unexpected(status.error().message);
-  }
-  if (auto status = add.template operator()<EatArguments>(
-          ToolKind::eat, "Eat the item on the current cell, if present.",
-          &WorldTools::eat);
-      !status) {
-    return std::unexpected(status.error().message);
-  }
-  return {};
+  std::expected<void, std::string> result;
+  for_each_tool_definition(
+      [&]<typename Arguments>(const ToolKind kind,
+                              const std::string_view description, auto invoke) {
+        if (result) {
+          if (auto status =
+                  add.template operator()<Arguments>(kind, description, invoke);
+              !status) {
+            result = std::unexpected(status.error().message);
+          }
+        }
+      });
+  return result;
 }
 
 PumpStats Session::pump() {

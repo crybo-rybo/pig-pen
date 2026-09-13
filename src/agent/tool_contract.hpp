@@ -7,6 +7,7 @@
 /// decode, and encode from this one place.
 #pragma once
 
+#include "agent/prompt_text.hpp"
 #include "world/world.hpp"
 
 #include <scry/reflection.hpp>
@@ -18,12 +19,21 @@
 
 namespace pigpen::agent {
 
+namespace detail {
+inline constexpr auto direction_description = [] consteval {
+  char text[prompt_text::tool_direction.size() + 1]{};
+  for (std::size_t i = 0; i < prompt_text::tool_direction.size(); ++i) {
+    text[i] = prompt_text::tool_direction[i];
+  }
+  return scry::reflection::description{text};
+}();
+} // namespace detail
+
 /// @brief Shared reflected input for tools that act along a cardinal
 /// direction.
 struct DirectionArguments {
   // clang-format off: keep the P3394 annotation visually separate from its type.
-  [[=scry::reflection::description{
-      "Cardinal direction: north, south, east, or west"}]]
+  [[=detail::direction_description]]
   world::Direction direction;
   // clang-format on
 };

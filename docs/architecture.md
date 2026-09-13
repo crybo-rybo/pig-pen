@@ -93,6 +93,16 @@ Cancellation is cooperative for the same reason: `stop()` asks the transport to
 cancel and the episode is not finished until the terminal callback comes back,
 which is what lets the footer be written before exit.
 
+### Embedded text and resource manifest
+
+`resources/prompts.json` and `resources/cli.json` are embedded with C++26
+`#embed` and decoded into fixed arrays during constant evaluation by
+`src/text/catalog.hpp`. Prompt builders select the compiled fragments and
+format runtime values. `tool_definitions.hpp` is the shared list of typed
+bindings used by Session and the build-time manifest exporter. The exporter
+writes compiled text, examples, and reflected schemas to
+`build/<preset>/resources/build-manifest.json`; see [Prompts](prompts.md).
+
 ## `src/ui` — the ImGui layer
 
 `AppUi` owns the `shared_ptr<Session>`, the control widgets, and the panel
@@ -122,7 +132,8 @@ Catch2 dependency plus the suite in `cmake/testing.cmake`. It builds
 executables from explicit source lists. Reflection compiler requirements stay
 scoped to the agent/tool boundary instead of leaking into fetched dependencies
 or front-end translation units.
-nlohmann/json is private to `pigpen_agent`'s metrics implementation;
+nlohmann/json is private to `pigpen_agent`'s metrics implementation and the
+standalone resource exporter;
 application-facing headers, the UI, and both entry points use standard and Pig
 Pen-owned types only.
 Warnings (`-Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror`) apply

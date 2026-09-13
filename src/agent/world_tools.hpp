@@ -6,6 +6,7 @@
 #pragma once
 
 #include "agent/config.hpp"
+#include "agent/prompt_text.hpp"
 #include "agent/tool_contract.hpp"
 #include "world/world.hpp"
 
@@ -74,9 +75,7 @@ private:
     response.ok = false;
     response.action_executed = false;
     response.error_code = ToolFailureCode::tool_budget_exhausted;
-    response.error =
-        "No action was executed because this turn's world-tool call budget "
-        "is exhausted.";
+    response.error = prompt_text::budget_rejected;
     response.turn_tool_budget = std::move(budget);
     return response;
   }

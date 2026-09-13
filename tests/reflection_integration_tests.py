@@ -430,6 +430,46 @@ def assert_reflected_tools(request: ProviderRequest) -> None:
         )
 
 
+def assert_build_manifest(manifest: dict[str, Any], request: ProviderRequest) -> None:
+    check(manifest["format_version"] == 1, "unknown build manifest format")
+    compiled = {tool["name"]: tool for tool in manifest["tools"]}
+    sent = {
+        tool["function"]["name"]: tool["function"] for tool in request.body["tools"]
+    }
+    check(compiled.keys() == sent.keys(), "manifest tool bindings differ from runtime")
+    for name, tool in compiled.items():
+        check(
+            tool["description"] == sent[name]["description"],
+            f"{name} description drift",
+        )
+        check(tool["input_schema"] == sent[name]["parameters"], f"{name} schema drift")
+        check(
+            tool["result_schema"]["type"] == "object", f"{name} result schema missing"
+        )
+    templates = manifest["prompt_templates"]
+    expected_system = (
+        templates["system_intro"]
+        + templates["system_coordinates"].format(5, 5)
+        + templates["system_tools"]
+        + templates["known_item_values"]
+        + templates["transparent_look"]
+        + templates["reward_feedback"]
+        + templates["system_limits"].format(1, 2, 4)
+    )
+    messages = request.body["messages"]
+    check(
+        next(message["content"] for message in messages if message["role"] == "system")
+        == expected_system,
+        "manifest prompt templates differ from runtime",
+    )
+    check(len(manifest["system_prompt_examples"]) == 8, "missing visibility variants")
+    for example in manifest["system_prompt_examples"]:
+        if not example["config"]["known_item_values"]:
+            check(
+                "berry =" not in example["text"], "hidden-values example leaks rewards"
+            )
+
+
 def extract_tool_response(request: ProviderRequest) -> dict[str, Any]:
     check(
         request.path == "/v1/chat/completions",
@@ -674,8 +714,10 @@ def assert_rejected_jsonl_log(records: list[dict[str, Any]], base_url: str) -> N
 
 
 def main() -> int:
-    if len(sys.argv) != 2:
-        raise RuntimeError("usage: reflection_integration_test.py PIGPEN_HEADLESS")
+    if len(sys.argv) != 3:
+        raise RuntimeError(
+            "usage: reflection_integration_test.py PIGPEN_HEADLESS BUILD_MANIFEST"
+        )
 
     executable = pathlib.Path(sys.argv[1]).resolve()
     check(executable.is_file(), f"headless executable does not exist: {executable}")
@@ -698,6 +740,8 @@ def main() -> int:
         f"expected two valid provider requests, got {len(valid.requests)}",
     )
     assert_reflected_tools(valid.requests[0])
+    manifest = json.loads(pathlib.Path(sys.argv[2]).read_text())
+    assert_build_manifest(manifest, valid.requests[0])
     response = extract_tool_response(valid.requests[1])
     assert_headless_tool_activity(valid.completed.stdout, response)
     assert_valid_jsonl_log(valid.records, response, valid.base_url)
