@@ -4,7 +4,7 @@
 
 | requirement | notes |
 |---|---|
-| CMake 3.25+ | presets use schema version 6 |
+| CMake 3.28+ | scry's own minimum; presets use schema version 6 |
 | Ninja | the generator the presets select |
 | GCC 16+ | C++26 P2996/P3394 reflection; configured with `-std=c++26 -freflection` |
 | Python 3 | required when the test suite is enabled; drives public-boundary integration tests |
@@ -130,8 +130,8 @@ cmake --preset dev \
 ```
 
 Use an absolute path; CMake warns that relative `FETCHCONTENT_SOURCE_DIR_*`
-values depend on the calling scope. The checkout must provide its reflection
-component and pass Scry's GCC 16 capability probe; otherwise configure fails.
+values depend on the calling scope. The checkout must provide the `scry::scry`
+target and pass Scry's GCC 16 capability probe; otherwise configure fails.
 The old `PIGPEN_SCRY_SOURCE` option remains accepted with a deprecation warning
 for compatibility. Deleting `build/dev/` goes back to the pinned commit.
 

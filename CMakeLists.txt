@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.25)
+cmake_minimum_required(VERSION 3.28)
 
 project(
   pig-pen
@@ -7,13 +7,19 @@ project(
   LANGUAGES CXX
 )
 
-# C++26 reflection is Pig Pen's model-facing type system, not an optional
-# enhancement. Scry's supported P2996/P3394 implementation currently requires
-# GCC 16 or newer and its explicit -freflection gate.
+# C++26 reflection is Pig Pen's model-facing type system, and Scry's public API
+# uses it too: linking scry::scry carries -freflection. Scry's supported
+# P2996/P3394 implementation currently requires GCC 16 or newer.
 if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR
    CMAKE_CXX_COMPILER_VERSION VERSION_LESS 16)
   message(FATAL_ERROR "Pig Pen requires GCC 16 or newer with C++26 reflection")
 endif()
+
+# Pig Pen uses no C++ modules. From CMake 3.28 the default is to scan every
+# C++20-and-later source for module dependencies, which adds a scan compile per
+# translation unit and puts GCC into module mode; Scry disables it for the same
+# reason.
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
 option(PIGPEN_BUILD_GUI "Build the Dear ImGui application" ON)
 option(PIGPEN_BUILD_TESTS "Build pig-pen's test suite" ON)
@@ -80,7 +86,7 @@ add_library(pigpen_world STATIC src/world/world.cpp)
 pigpen_target(pigpen_world PUBLIC)
 
 add_library(pigpen_reflected_tools STATIC src/agent/world_tools.cpp)
-target_link_libraries(pigpen_reflected_tools PUBLIC pigpen_world scry::reflection)
+target_link_libraries(pigpen_reflected_tools PUBLIC pigpen_world scry::scry)
 pigpen_target(pigpen_reflected_tools PUBLIC)
 
 add_library(pigpen_agent STATIC

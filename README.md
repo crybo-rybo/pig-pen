@@ -28,7 +28,7 @@ Two front ends share the same world, prompt, tools, episode runner, and logger:
 
 ## Quick start
 
-You need CMake 3.25+, Ninja, GCC 16+, Python 3 for tests, libcurl, and OpenGL
+You need CMake 3.28+, Ninja, GCC 16+, Python 3 for tests, libcurl, and OpenGL
 3.2 or newer for the GUI. Pig Pen uses
 C++26 reflection as its main tool-definition and marshalling path; CMake enables
 `-std=c++26 -freflection` and rejects compilers without the required P2996 and

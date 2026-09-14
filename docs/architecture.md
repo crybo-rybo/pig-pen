@@ -119,9 +119,11 @@ and upstream option pinning in `cmake/dependencies.cmake` and the test-only
 Catch2 dependency plus the suite in `cmake/testing.cmake`. It builds
 `pigpen_world`, `pigpen_reflected_tools`, `pigpen_agent`, and, when needed,
 `pigpen_ui` as focused static libraries, then the GUI, headless program, and test
-executables from explicit source lists. Reflection compiler requirements stay
-scoped to the agent/tool boundary instead of leaking into fetched dependencies
-or front-end translation units.
+executables from explicit source lists. Linking `scry::scry` carries
+`-freflection` publicly, so every `pigpen_reflected_tools` and `pigpen_agent`
+translation unit compiles with it; Scry is a private dependency of
+`pigpen_agent`, which keeps that requirement off `pigpen_world`, `pigpen_ui`,
+and both entry points.
 nlohmann/json is private to `pigpen_agent`'s metrics implementation;
 application-facing headers, the UI, and both entry points use standard and Pig
 Pen-owned types only.

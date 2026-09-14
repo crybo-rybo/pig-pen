@@ -1,8 +1,8 @@
 ---
 # Advisory, run locally: clang cannot parse the -freflection translation
-# units (P2996 is GCC-only today), so point clang-tidy at the TUs it can
-# compile — src/world, src/ui, and the non-reflection agent files — using
-# the exported compile_commands.json:
+# units (P2996 is GCC-only today), and scry::scry carries -freflection into
+# every agent TU, so point clang-tidy at the TUs it can compile — src/world
+# and src/ui — using the exported compile_commands.json:
 #
 #   clang-tidy -p build/dev src/world/world.cpp
 #
