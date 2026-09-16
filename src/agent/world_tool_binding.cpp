@@ -84,6 +84,21 @@ scry::Result<scry::ToolRegistry> WorldToolBinding::registry() {
   return registry;
 }
 
+std::optional<scry::ToolRejection>
+WorldToolBinding::admit(const bool logging_failed) const {
+  if (logging_failed) {
+    return scry::ToolRejection{
+        .model_message = "World tools are unavailable because the episode log "
+                         "failed. Summarize the actions already taken."};
+  }
+  if (world_.all_positive_items_eaten()) {
+    return scry::ToolRejection{
+        .model_message = "All positive-value items have been eaten. Summarize "
+                         "the completed episode without more tools."};
+  }
+  return std::nullopt;
+}
+
 void WorldToolBinding::observe(const scry::ToolCall &call) {
   if (!pending_ || pending_->scry_turn_id != call.turn_id.value ||
       pending_->call_id != call.id) {
@@ -92,10 +107,10 @@ void WorldToolBinding::observe(const scry::ToolCall &call) {
   pending_->arguments_json = call.arguments.text;
   pending_->result_json = call.result.text;
   pending_->result_dispatched = true;
-  finish_turn();
+  flush_pending_activity();
 }
 
-void WorldToolBinding::finish_turn() {
+void WorldToolBinding::flush_pending_activity() {
   if (!pending_) {
     return;
   }

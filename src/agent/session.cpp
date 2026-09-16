@@ -11,11 +11,10 @@
 #include <scry/scry.hpp>
 
 #include <chrono>
-#include <cmath>
 #include <cstdlib>
 #include <memory>
 #include <optional>
-#include <string_view>
+#include <string>
 #include <utility>
 
 namespace pigpen::agent {
@@ -43,23 +42,11 @@ public:
             this->harness, this->conversation,
             {.on_tool_request = [this](const scry::ToolRequest &)
                  -> std::optional<scry::ToolRejection> {
-               if (!metrics_error.empty()) {
-                 return scry::ToolRejection{
-                     .model_message =
-                         "World tools are unavailable because the episode log "
-                         "failed. Summarize the actions already taken."};
-               }
-               if (world->all_positive_items_eaten()) {
-                 return scry::ToolRejection{
-                     .model_message =
-                         "All positive-value items have been eaten. Summarize "
-                         "the completed episode without more tools."};
-               }
-               return std::nullopt;
+               return tools->admit(!metrics_error.empty());
              },
              .on_tool_call =
                  [this](const scry::ToolCall &call) { tools->observe(call); },
-             .on_turn_finished = [this] { tools->finish_turn(); }}),
+             .on_turn_finished = [this] { tools->flush_pending_activity(); }}),
         runner(
             transport, static_cast<std::uint32_t>(this->config.turn_budget),
             [this] { return world->all_positive_items_eaten(); },
@@ -110,32 +97,15 @@ public:
 std::expected<std::shared_ptr<Session>, std::string>
 Session::create(Config config, std::filesystem::path log_directory,
                 std::string prompt_variant) {
-  if (config.base_url.empty()) {
-    return std::unexpected("base URL cannot be empty");
-  }
-  if (config.model.empty()) {
-    return std::unexpected("model cannot be empty");
-  }
   if (config.turn_budget == 0) {
     return std::unexpected("turn budget must be greater than zero");
   }
   if (config.turn_budget > 10'000) {
     return std::unexpected("turn budget must not exceed 10000");
   }
-  if (config.max_tool_rounds == 0) {
-    return std::unexpected("maximum tool rounds must be greater than zero");
-  }
   if (config.max_tool_rounds > 64) {
     return std::unexpected("maximum tool rounds must not exceed 64");
   }
-  if (config.max_output_tokens == 0) {
-    return std::unexpected("maximum output tokens must be greater than zero");
-  }
-  if (!std::isfinite(config.temperature) || config.temperature < 0.0 ||
-      config.temperature > 2.0) {
-    return std::unexpected("temperature must be finite and in the range 0..2");
-  }
-
   // Let scry reject a bad provider config before anything with a side effect
   // happens: validate() runs create()'s checks without starting a worker, and
   // the metrics log below is only opened once the whole config is known good.
@@ -171,22 +141,20 @@ Session::create(Config config, std::filesystem::path log_directory,
 
 Session::Session(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
 
-Session::~Session() { impl_->tools->finish_turn(); }
+Session::~Session() {
+  // The activity sink uses the runner and metrics writer. Flush while both
+  // are alive; member teardown cancels and disconnects the transport next.
+  impl_->tools->flush_pending_activity();
+}
 
 PumpStats Session::pump() {
   const auto stats = impl_->harness.update({
       .time_budget = std::chrono::milliseconds{2},
       .max_callbacks = 32,
   });
-  // Admission refuses subsequent actions as soon as logging fails. Keep
-  // pumping until the turn commits its existing results before ending the
-  // episode.
-  if (!impl_->metrics_error.empty() &&
-      !impl_->runner.snapshot().turn_in_flight) {
-    static_cast<void>(impl_->runner.fail(impl_->metrics_error));
-  } else {
-    impl_->runner.tick();
-  }
+  // Turn completion is the single place that ends an episode on logging
+  // failure, after admission has refused further actions and results commit.
+  impl_->runner.tick();
   return {
       .callbacks_delivered = stats.callbacks_delivered,
       .events_remaining = stats.events_remaining,
@@ -215,7 +183,6 @@ const ToolActivityFeed &Session::tool_activities() const noexcept {
   return impl_->activities;
 }
 const EpisodeRunner &Session::runner() const noexcept { return impl_->runner; }
-EpisodeRunner &Session::runner() noexcept { return impl_->runner; }
 std::size_t Session::tool_call_count() const noexcept {
   return impl_->activities.size();
 }

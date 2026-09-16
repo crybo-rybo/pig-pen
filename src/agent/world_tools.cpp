@@ -7,8 +7,9 @@
 
 namespace pigpen::agent {
 
-WorldTools::WorldTools(world::World &world, Config config)
-    : world_(world), config_(std::move(config)) {}
+WorldTools::WorldTools(world::World &world, const Config &config)
+    : world_(world), opaque_look_(config.opaque_look),
+      reward_feedback_(config.reward_feedback) {}
 
 ToolExecution<MoveToolResponse>
 WorldTools::move(const DirectionArguments arguments) {
@@ -39,8 +40,8 @@ WorldTools::look(const DirectionArguments arguments) {
   for (const auto &cell : looked.cells) {
     std::optional<std::string> item;
     if (cell.item) {
-      item = config_.opaque_look ? std::string{"something"}
-                                 : std::string{world::item_name(*cell.item)};
+      item = opaque_look_ ? std::string{"something"}
+                          : std::string{world::item_name(*cell.item)};
     }
     cells.push_back({
         .distance = cell.distance,
@@ -72,7 +73,7 @@ WorldTools::eat(const EatArguments /*arguments*/) {
       .ate = eaten.ate,
       .reason = eaten.failure,
   };
-  if (eaten.ok && config_.reward_feedback) {
+  if (eaten.ok && reward_feedback_) {
     response.reward = eaten.reward;
     response.score = eaten.score;
   }

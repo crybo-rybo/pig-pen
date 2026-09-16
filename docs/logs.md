@@ -48,7 +48,7 @@ layer and therefore do not produce a `tool` record.
  "scry_turn_id":1,"call_id":"call_2","round":1,"index":1,
  "args":{"direction":"south"},
  "result":{"cells":[{"distance":1,"item":"berry"}],"direction":"south","ok":true,"wall_at_distance":6},
- "before":{"x":5,"y":5},"after":{"x":5,"y":5},"action_executed":true,"score_after":0}
+ "before":{"x":5,"y":5},"after":{"x":5,"y":5},"action_executed":true,"result_dispatched":true,"score_after":0}
 ```
 
 `tick` is a monotonic counter across the whole episode. `before`/`after` are

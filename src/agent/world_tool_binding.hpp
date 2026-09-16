@@ -24,9 +24,14 @@ public:
   WorldToolBinding &operator=(const WorldToolBinding &) = delete;
 
   [[nodiscard]] scry::Result<scry::ToolRegistry> registry();
+  /// Refuse further world actions after a log failure or objective completion.
+  [[nodiscard]] std::optional<scry::ToolRejection>
+  admit(bool logging_failed) const;
   void observe(const scry::ToolCall &call);
-  /// Retain a world side effect if Scry terminated before posting its result.
-  void finish_turn();
+  /// Publish any retained world side effect once. Call on turn completion
+  /// and before destroying the session's activity sink; normal dispatch
+  /// already flushes through observe().
+  void flush_pending_activity();
 
   /// Called only for decoded, admitted world actions.
   std::function<void(ToolActivity)> on_activity{};

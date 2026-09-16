@@ -32,7 +32,10 @@ namespace {
 TEST_CASE("session rejects unsafe or incomplete runtime configuration") {
   const auto directory = session_test_directory();
   pigpen::agent::Config config;
+  config.model = "registry.example/pig-model:Q4_K_M";
 
+  config.base_url = "localhost:11434/v1";
+  CHECK_FALSE(pigpen::agent::Session::create(config, directory));
   config.base_url.clear();
   CHECK_FALSE(pigpen::agent::Session::create(config, directory));
   config.base_url = "http://127.0.0.1:11434/v1";
@@ -42,6 +45,8 @@ TEST_CASE("session rejects unsafe or incomplete runtime configuration") {
   config.model = "registry.example/pig-model:Q4_K_M";
 
   config.turn_budget = 0;
+  CHECK_FALSE(pigpen::agent::Session::create(config, directory));
+  config.turn_budget = 10'001;
   CHECK_FALSE(pigpen::agent::Session::create(config, directory));
   config.turn_budget = 20;
 

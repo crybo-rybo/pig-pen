@@ -192,17 +192,11 @@ void EpisodeRunner::start_turn() {
       guidance_index ? std::string_view{state_->guidance[*guidance_index].text}
                      : std::string_view{};
   auto message = build_turn_prompt(turn, state_->turn_budget, human_input,
-                                   state_->recover_zero_tool_turn);
-  auto automatic_message = build_turn_prompt(turn, state_->turn_budget, {},
-                                             state_->recover_zero_tool_turn);
-  if (state_->unexecuted_tool_calls != 0U) {
-    const auto notice = "\nThe previous turn reached its tool-round limit. " +
-                        std::to_string(state_->unexecuted_tool_calls) +
-                        " requested tool calls were not executed. Choose your "
-                        "next action from the tool results actually received.";
-    message += notice;
-    automatic_message += notice;
-  }
+                                   state_->recover_zero_tool_turn,
+                                   state_->unexecuted_tool_calls);
+  const auto automatic_message = build_turn_prompt(
+      turn, state_->turn_budget, {}, state_->recover_zero_tool_turn,
+      state_->unexecuted_tool_calls);
 
   state_->active_user_message = message;
   const auto transcript_start = state_->transcript.size();
@@ -316,6 +310,9 @@ void EpisodeRunner::process_pending_outcome() {
   };
   if (observers_.on_turn_finished) {
     observers_.on_turn_finished(record);
+  }
+  if (state_->run_state == RunState::finished) {
+    return;
   }
 
   if (outcome.status == TurnStatus::error) {

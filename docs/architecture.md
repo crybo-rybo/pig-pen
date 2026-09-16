@@ -32,10 +32,10 @@ serialisation used for determinism tests. Details in [World and tools](world.md)
 | unit | responsibility |
 |---|---|
 | `config.hpp` | `Config`: endpoint, model, seed, budgets, and the three model-visibility flags shared by both front ends |
-| `prompt.cpp` | builds the system prompt and the per-turn nudge from a `Config` |
+| `prompt.cpp` | builds the system prompt from `Config` and per-turn instructions from feedback and optional human guidance |
 | `tool_contract.hpp` | reflected argument and flat response declarations, including world outcome fields; these C++ types are the model-facing contract |
 | `world_tools.cpp` | typed world actions and scenario visibility; it contains no JSON parsing, budgets, or schema code |
-| `world_tool_binding.cpp` | standalone reflected registry and correlation of typed transitions with Scry dispatch observations |
+| `world_tool_binding.cpp` | standalone reflected registry, world-action admission policy, and correlation of typed transitions with Scry dispatch observations |
 | `events.hpp` | `ToolActivity` and its append-only feed: typed application semantics plus exact canonical argument/result text from Scry |
 | `turn_transport.hpp` | `ITurnTransport`, the interface a "send one turn, get callbacks" implementation must satisfy |
 | `scry_transport.cpp` | the real implementation, over `scry::Harness` / `scry::Conversation` |
@@ -92,8 +92,11 @@ scenario edits show "Pending settings apply on Reset" instead of mutating a
 live episode.
 
 The session owns the bindings and world at stable addresses. They outlive the
-harness that adopts their registry. Transport destruction cancels and disconnects
-the active turn before any referenced state is destroyed.
+harness that adopts their registry. Destruction flushes pending world activity
+while the runner and log are alive, then cancels and disconnects the transport.
+Clients inspect the runner through a const view and control it through `Session`.
+Scry validates provider configuration before a log is opened; Pig Pen adds only
+its episode-budget and tool-round upper bounds.
 
 ### Everything is pumped, nothing blocks
 

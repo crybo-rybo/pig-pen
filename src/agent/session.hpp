@@ -34,8 +34,8 @@ struct PumpStats {
 /// outlive it; turn delivery is disconnected before any state is destroyed.
 class Session final {
 public:
-  /// @brief Validate @p config, open the metrics log, build the scry
-  /// harness and conversation, and register the world tools.
+  /// @brief Validate @p config and compose the world, registered harness,
+  /// conversation, and already-open metrics log.
   /// @return The session, or a human-readable rejection message.
   [[nodiscard]] static std::expected<std::shared_ptr<Session>, std::string>
   create(Config config, std::filesystem::path log_directory = "logs",
@@ -72,8 +72,6 @@ public:
   [[nodiscard]] const ToolActivityFeed &tool_activities() const noexcept;
   /// @brief The episode state machine.
   [[nodiscard]] const EpisodeRunner &runner() const noexcept;
-  /// @brief The episode state machine.
-  [[nodiscard]] EpisodeRunner &runner() noexcept;
   /// @brief Number of successfully decoded world-tool invocations so far.
   [[nodiscard]] std::size_t tool_call_count() const noexcept;
   /// @brief Path of this session's JSONL metrics log.

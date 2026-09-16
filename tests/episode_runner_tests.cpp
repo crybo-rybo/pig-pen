@@ -194,6 +194,36 @@ TEST_CASE(
         pigpen::agent::TranscriptRole::error);
 }
 
+TEST_CASE("logging failure at turn completion prevents another turn") {
+  FakeTransport transport;
+  std::size_t finished_episodes{};
+  pigpen::agent::EpisodeRunner runner{
+      transport,
+      4,
+      [] { return false; },
+      {.on_turn_finished =
+           [&runner](const auto &) {
+             REQUIRE(runner.fail("metrics sink failed"));
+           },
+       .on_episode_finished =
+           [&finished_episodes](const auto &) { ++finished_episodes; }}};
+  REQUIRE(runner.play());
+  runner.tick();
+  SECTION("successful provider turn") { transport.complete(); }
+  SECTION("failed provider turn") {
+    transport.complete({.status = pigpen::agent::TurnStatus::error,
+                        .error = "provider failed"});
+  }
+  runner.tick();
+  CHECK(transport.send_count == 1);
+  CHECK(transport.cancel_count == 0);
+  CHECK(runner.snapshot().turns_used == 1);
+  CHECK(runner.snapshot().finish_reason == pigpen::agent::FinishReason::error);
+  CHECK(runner.snapshot().error == "metrics sink failed");
+  CHECK(runner.transcript().back().text == "metrics sink failed");
+  CHECK(finished_episodes == 1);
+}
+
 TEST_CASE("immediate transport admission failure terminates the episode") {
   FakeTransport transport;
   transport.send_error = "busy";

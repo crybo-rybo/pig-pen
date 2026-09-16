@@ -33,7 +33,7 @@ template <typename Response> struct ToolExecution {
 /// enforces the per-turn limit before invoking any of these actions.
 class WorldTools final {
 public:
-  explicit WorldTools(world::World &world, Config config = {});
+  explicit WorldTools(world::World &world, const Config &config = {});
 
   /// @brief Step one cell in a direction.
   [[nodiscard]] ToolExecution<MoveToolResponse>
@@ -50,7 +50,8 @@ public:
 
 private:
   world::World &world_;
-  Config config_;
+  bool opaque_look_;
+  bool reward_feedback_;
 };
 
 } // namespace pigpen::agent

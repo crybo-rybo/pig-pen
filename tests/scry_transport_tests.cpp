@@ -47,10 +47,11 @@ scry::Conversation make_conversation() {
 }
 
 template <typename Predicate>
-void pump_until(scry::Harness &harness, Predicate done) {
+void pump_until(scry::Harness &harness, Predicate done,
+                scry::UpdateOptions options = {}) {
   const auto deadline = std::chrono::steady_clock::now() + 5s;
   while (!done() && std::chrono::steady_clock::now() < deadline) {
-    harness.update();
+    harness.update(options);
     std::this_thread::sleep_for(1ms);
   }
   REQUIRE(done());
@@ -65,19 +66,15 @@ struct ScriptedWorld {
         transport(harness, conversation,
                   {.on_tool_request = [this](const scry::ToolRequest &)
                        -> std::optional<scry::ToolRejection> {
-                     if (!tools_enabled) {
-                       return scry::ToolRejection{
-                           .model_message =
-                               "The episode is complete; summarize."};
-                     }
-                     return std::nullopt;
+                     return binding.admit(logging_failed);
                    },
                    .on_tool_call =
                        [this](const scry::ToolCall &call) {
                          binding.observe(call);
                          calls.push_back(call);
                        },
-                   .on_turn_finished = [this] { binding.finish_turn(); }}) {
+                   .on_turn_finished =
+                       [this] { binding.flush_pending_activity(); }}) {
     binding.on_activity = [this](pigpen::agent::ToolActivity activity) {
       activities.push_back(std::move(activity));
     };
@@ -107,7 +104,7 @@ struct ScriptedWorld {
   std::vector<pigpen::agent::ToolActivity> activities;
   std::vector<scry::ToolCall> calls;
   std::optional<pigpen::agent::TurnOutcome> outcome;
-  bool tools_enabled{true};
+  bool logging_failed{false};
 };
 
 } // namespace
@@ -248,12 +245,12 @@ TEST_CASE(
   CHECK(request.find("dropped-") == std::string::npos);
 }
 
-TEST_CASE(
-    "admission can stop a batch after an action without discarding history") {
+TEST_CASE("logging failure stops a batch after an action without discarding "
+          "history") {
   ScriptedWorld run;
   run.binding.on_activity = [&run](pigpen::agent::ToolActivity activity) {
     run.activities.push_back(std::move(activity));
-    run.tools_enabled = false;
+    run.logging_failed = true;
   };
   run.enqueue(openai_tool_stream({
       {.id = "last-action",
@@ -272,11 +269,66 @@ TEST_CASE(
   REQUIRE(run.activities.size() == 1);
   REQUIRE(run.calls.size() == 2);
   CHECK(run.calls[1].is_error);
-  CHECK(run.calls[1].result.text.find("episode is complete") !=
+  CHECK(run.calls[1].result.text.find("episode log failed") !=
         std::string::npos);
   auto history = run.conversation.to_json();
   REQUIRE(history);
   CHECK(history->text.find("last-action") != std::string::npos);
+  CHECK(history->text.find("refused") != std::string::npos);
+}
+
+TEST_CASE("eating the final positive item refuses later actions in the batch") {
+  ScriptedWorld run;
+  std::vector<pigpen::world::Position> positive_cells;
+  for (const auto &placement : run.world.items()) {
+    if (pigpen::world::item_reward(placement.item) > 0) {
+      positive_cells.push_back(placement.position);
+    }
+  }
+  REQUIRE_FALSE(positive_cells.empty());
+  using pigpen::world::Direction;
+  for (const auto cell : positive_cells) {
+    while (run.world.position().x != cell.x) {
+      REQUIRE(run.world
+                  .move(run.world.position().x < cell.x ? Direction::east
+                                                        : Direction::west)
+                  .ok);
+    }
+    while (run.world.position().y != cell.y) {
+      REQUIRE(run.world
+                  .move(run.world.position().y < cell.y ? Direction::north
+                                                        : Direction::south)
+                  .ok);
+    }
+    if (cell != positive_cells.back()) {
+      REQUIRE(run.world.eat().ok);
+    }
+  }
+  REQUIRE_FALSE(run.world.all_positive_items_eaten());
+  run.enqueue(openai_tool_stream({
+      {.id = "last-food", .name = "eat", .arguments = "{}"},
+      {.id = "refused", .name = "move", .arguments = R"({"direction":"east"})"},
+  }));
+  run.enqueue(openai_text_stream("All food collected."));
+  run.send();
+  run.finish();
+
+  REQUIRE(run.outcome->status == TurnStatus::completed);
+  REQUIRE(run.outcome->tool_stats);
+  CHECK(run.outcome->tool_stats->calls == 2);
+  CHECK(run.outcome->tool_stats->rejected_calls == 1);
+  CHECK(run.world.all_positive_items_eaten());
+  CHECK(run.world.position() == positive_cells.back());
+  REQUIRE(run.activities.size() == 1);
+  CHECK(run.activities.front().kind == pigpen::agent::ToolKind::eat);
+  REQUIRE(run.calls.size() == 2);
+  CHECK_FALSE(run.calls[0].is_error);
+  CHECK(run.calls[1].is_error);
+  CHECK(run.calls[1].result.text.find(
+            "All positive-value items have been eaten") != std::string::npos);
+  auto history = run.conversation.to_json();
+  REQUIRE(history);
+  CHECK(history->text.find("last-food") != std::string::npos);
   CHECK(history->text.find("refused") != std::string::npos);
 }
 
@@ -333,6 +385,17 @@ TEST_CASE("world side effects remain observable if Scry cannot post a result") {
        .arguments = R"({"direction":"east"})"},
   }));
   run.send();
+  SECTION("terminal delivery flushes the pending action") {}
+  SECTION("shutdown can flush before terminal delivery without duplication") {
+    pump_until(
+        run.harness,
+        [&run] { return run.world.position() != pigpen::world::World::spawn; },
+        {.max_callbacks = 1});
+    REQUIRE_FALSE(run.outcome);
+    REQUIRE(run.activities.empty());
+    run.binding.flush_pending_activity();
+    REQUIRE(run.activities.size() == 1);
+  }
   run.finish();
   CHECK(run.outcome->status == TurnStatus::error);
   CHECK_FALSE(run.outcome->tool_stats);
@@ -344,6 +407,6 @@ TEST_CASE("world side effects remain observable if Scry cannot post a result") {
   CHECK_FALSE(run.activities.front().result_dispatched);
   CHECK(run.activities.front().arguments_json == "null");
   CHECK(run.activities.front().result_json == "null");
-  run.binding.finish_turn();
+  run.binding.flush_pending_activity();
   CHECK(run.activities.size() == 1);
 }
