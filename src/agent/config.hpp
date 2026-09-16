@@ -9,8 +9,8 @@
 
 namespace pigpen::agent {
 
-/// @brief Hard application-side limit on world actions authorized during one
-/// turn.
+/// @brief Hard limit on tool requests per turn, enforced by Scry before
+/// dispatch; unknown tools and invalid arguments also spend this budget.
 inline constexpr std::size_t max_world_tool_calls_per_turn{4};
 
 /// @brief Runtime and experiment settings shared by the headless and GUI

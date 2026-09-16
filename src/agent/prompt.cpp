@@ -82,10 +82,10 @@ std::string build_system_prompt(const Config &config) {
       "You have at most " + std::to_string(config.turn_budget) +
       " conversation turns, with at most " +
       std::to_string(config.max_tool_rounds) +
-      " tool rounds per turn. Pig Pen executes at most " +
+      " tool rounds per turn. Pig Pen allows at most " +
       std::to_string(max_world_tool_calls_per_turn) +
-      " world-tool actions per conversation turn. Each successfully decoded "
-      "world-tool result reports the remaining call budget. Each conversation "
+      " world-tool requests per conversation turn, including invalid requests. "
+      "Excess calls are refused without acting. Each conversation "
       "turn should contain one "
       "or more useful tool calls, followed by a short final action summary "
       "with no more tool calls. Prioritize calling the registered world tools "

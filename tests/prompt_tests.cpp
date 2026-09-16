@@ -52,8 +52,8 @@ TEST_CASE(
   CHECK(contains(prompt, "eat()"));
   CHECK(contains(prompt, "at most 11 conversation turns"));
   CHECK(contains(prompt, "at most 6 tool rounds per turn"));
-  CHECK(contains(prompt, "executes at most 4 world-tool actions"));
-  CHECK(contains(prompt, "successfully decoded world-tool result reports"));
+  CHECK(contains(prompt, "allows at most 4 world-tool requests"));
+  CHECK(contains(prompt, "including invalid requests"));
   CHECK(contains(prompt, "followed by a short final action summary"));
   CHECK(contains(prompt, "Prioritize calling the registered world tools"));
   CHECK(contains(prompt, "over extended thinking"));

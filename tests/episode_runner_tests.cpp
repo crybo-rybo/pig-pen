@@ -337,3 +337,33 @@ TEST_CASE("a zero-tool turn adds a corrective automatic next-turn nudge") {
   REQUIRE(turns.size() == 2);
   CHECK(turns[1].tool_calls == 1);
 }
+
+TEST_CASE(
+    "round-limit metadata reaches the log observer and next-turn prompt") {
+  FakeTransport transport;
+  std::vector<pigpen::agent::TurnRecord> turns;
+  pigpen::agent::EpisodeRunner runner{
+      transport,
+      2,
+      [] { return false; },
+      {.on_turn_finished = [&turns](const auto &turn) {
+        turns.push_back(turn);
+      }}};
+  REQUIRE(runner.play());
+  runner.tick();
+  transport.complete(
+      {.tool_stats = pigpen::agent::TurnToolStats{.rounds = 1,
+                                                  .calls = 2,
+                                                  .rejected_calls = 1,
+                                                  .round_limit_reached = true,
+                                                  .unexecuted_calls = 3}});
+  runner.tick();
+  REQUIRE(turns.size() == 1);
+  REQUIRE(turns.front().tool_stats);
+  CHECK(turns.front().tool_stats->calls == 2);
+  CHECK(turns.front().tool_stats->rejected_calls == 1);
+  CHECK(turns.front().tool_stats->round_limit_reached);
+  REQUIRE(transport.messages.size() == 2);
+  CHECK(transport.messages.back().find(
+            "3 requested tool calls were not executed") != std::string::npos);
+}

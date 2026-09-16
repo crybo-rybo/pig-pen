@@ -1,6 +1,6 @@
 /// @file world_tools_tests.cpp
 /// @brief Covers the reflected tool boundary: compile-time input schemas,
-/// typed result envelopes, the explicit begin_turn/budget lifecycle, and the
+/// typed world results and the
 /// opaque_look / reward_feedback visibility toggles.
 ///
 /// WorldTools accepts and returns only reflected C++ values, so everything
@@ -16,7 +16,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <stdexcept>
 #include <string>
 
 namespace {
@@ -24,7 +23,6 @@ namespace {
 using pigpen::agent::Config;
 using pigpen::agent::DirectionArguments;
 using pigpen::agent::EatArguments;
-using pigpen::agent::ToolFailureCode;
 using pigpen::agent::WorldTools;
 using pigpen::world::Direction;
 using pigpen::world::Position;
@@ -99,89 +97,22 @@ TEST_CASE("C++ declarations are the complete model input-schema source") {
 TEST_CASE("Move returns a fixed typed result for success and wall failure") {
   World world{37};
   WorldTools tools{world};
-  std::size_t turn = 1;
 
-  tools.begin_turn(turn++);
   const auto east = tools.move({.direction = Direction::east});
   CHECK(east.response.ok);
-  CHECK_FALSE(east.response.error);
-  CHECK_FALSE(east.response.error_code);
   CHECK(east.response.position == (Position{.x = 6, .y = 5}));
-  CHECK(east.response.action_executed);
 
   for (int y = world.position().y; y < World::height - 1; ++y) {
-    tools.begin_turn(turn++);
     const auto moved = tools.move({.direction = Direction::north});
     REQUIRE(moved.response.ok);
   }
   const auto before_wall = world.position();
-  tools.begin_turn(turn);
   const auto wall = tools.move({.direction = Direction::north});
   CHECK_FALSE(wall.response.ok);
   REQUIRE(wall.response.reason);
   CHECK(*wall.response.reason == pigpen::world::MoveFailure::wall);
   CHECK(wall.response.position == before_wall);
-  CHECK(wall.response.action_executed);
   CHECK(wall.before == wall.after);
-}
-
-TEST_CASE("World-tool turn lifecycle is explicit and monotonic") {
-  World world{2};
-  WorldTools tools{world};
-
-  CHECK_THROWS_AS(tools.eat({}), std::logic_error);
-  tools.begin_turn(2);
-  REQUIRE_NOTHROW(
-      static_cast<void>(tools.look({.direction = Direction::north})));
-  CHECK_THROWS_AS(tools.begin_turn(1), std::logic_error);
-}
-
-TEST_CASE("Per-turn budget returns a flat reflected failure without acting") {
-  World world{37};
-  WorldTools tools{world};
-  const auto initial = world.position();
-  tools.begin_turn(11);
-
-  for (std::size_t used = 1;
-       used <= pigpen::agent::max_world_tool_calls_per_turn; ++used) {
-    const auto looked = tools.look({.direction = Direction::north});
-    REQUIRE(looked.response.ok);
-    CHECK_FALSE(looked.response.error);
-    CHECK_FALSE(looked.response.error_code);
-    CHECK(looked.response.turn_tool_budget.used == used);
-    CHECK(looked.response.turn_tool_budget.remaining ==
-          pigpen::agent::max_world_tool_calls_per_turn - used);
-  }
-
-  const auto rejected = tools.move({.direction = Direction::east});
-  CHECK_FALSE(rejected.response.ok);
-  CHECK_FALSE(rejected.response.action_executed);
-  REQUIRE(rejected.response.error_code);
-  CHECK(*rejected.response.error_code ==
-        ToolFailureCode::tool_budget_exhausted);
-  REQUIRE(rejected.response.error);
-  CHECK(*rejected.response.error ==
-        "No action was executed because this turn's world-tool call budget "
-        "is exhausted.");
-  CHECK(rejected.response.position == initial);
-  CHECK(rejected.response.turn_tool_budget.used ==
-        pigpen::agent::max_world_tool_calls_per_turn);
-  CHECK(rejected.response.turn_tool_budget.remaining == 0);
-  CHECK(world.position() == initial);
-
-  const auto encoded = scry::reflection::encode(rejected.response);
-  REQUIRE(encoded.has_value());
-  const auto rejected_json = nlohmann::json::parse(encoded->text);
-  CHECK(rejected_json.at("ok") == false);
-  CHECK(rejected_json.at("action_executed") == false);
-  CHECK(rejected_json.at("error_code") == "tool_budget_exhausted");
-  CHECK_FALSE(rejected_json.contains("result"));
-
-  tools.begin_turn(12);
-  const auto next_turn = tools.move({.direction = Direction::east});
-  REQUIRE(next_turn.response.ok);
-  CHECK(next_turn.response.turn_tool_budget.used == 1);
-  CHECK(next_turn.response.action_executed);
 }
 
 TEST_CASE("Look returns a typed complete ray and supports opaque items") {
@@ -191,7 +122,6 @@ TEST_CASE("Look returns a typed complete ray and supports opaque items") {
   const auto viewpoint = viewpoint_for(placement.position);
   move_to(visible_world, viewpoint.position);
   WorldTools visible_tools{visible_world};
-  visible_tools.begin_turn(4);
 
   const auto visible = visible_tools.look({.direction = viewpoint.direction});
   REQUIRE(visible.response.ok);
@@ -207,7 +137,6 @@ TEST_CASE("Look returns a typed complete ray and supports opaque items") {
   Config config;
   config.opaque_look = true;
   WorldTools opaque_tools{opaque_world, config};
-  opaque_tools.begin_turn(4);
   const auto opaque = opaque_tools.look({.direction = viewpoint.direction});
   REQUIRE(opaque.response.ok);
   REQUIRE(opaque.response.cells.front().item);
@@ -221,7 +150,6 @@ TEST_CASE(
   const auto placement = feedback_world.items().front();
   move_to(feedback_world, placement.position);
   WorldTools feedback_tools{feedback_world};
-  feedback_tools.begin_turn(5);
 
   const auto revealed = feedback_tools.eat({});
   REQUIRE(revealed.response.ok);
@@ -235,7 +163,6 @@ TEST_CASE(
   Config config;
   config.reward_feedback = false;
   WorldTools hidden_tools{hidden_world, config};
-  hidden_tools.begin_turn(5);
   const auto hidden = hidden_tools.eat({});
   REQUIRE(hidden.response.ok);
   CHECK_FALSE(hidden.response.reward);
@@ -248,7 +175,6 @@ TEST_CASE(
     "Scry publicly encodes typed arguments and responses for observability") {
   World world{9};
   WorldTools tools{world};
-  tools.begin_turn(1);
   const auto execution = tools.move({.direction = Direction::east});
   const auto arguments = scry::reflection::encode(
       DirectionArguments{.direction = Direction::east});
@@ -259,11 +185,7 @@ TEST_CASE(
   CHECK(arguments->text == R"({"direction":"east"})");
   const auto response_json = nlohmann::json::parse(response->text);
   CHECK(response_json.at("ok") == true);
-  CHECK(response_json.at("action_executed") == true);
-  CHECK(response_json.at("error_code").is_null());
-  CHECK(response_json.at("error").is_null());
   CHECK(response_json.at("position") == nlohmann::json{{"x", 6}, {"y", 5}});
   CHECK(response_json.at("reason").is_null());
   CHECK_FALSE(response_json.contains("result"));
-  CHECK(response_json.at("turn_tool_budget").at("used") == 1);
 }

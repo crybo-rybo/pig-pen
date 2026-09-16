@@ -30,10 +30,9 @@ struct PumpStats {
 /// resets the world, conversation, additive tool registry, callbacks, and
 /// log.
 ///
-/// Tools are registered on the harness with a weak_ptr back to the session,
-/// so a callback arriving after the session is gone fails cleanly instead
-/// of touching freed state.
-class Session final : public std::enable_shared_from_this<Session> {
+/// The harness adopts a standalone tool registry whose bindings and world
+/// outlive it; turn delivery is disconnected before any state is destroyed.
+class Session final {
 public:
   /// @brief Validate @p config, open the metrics log, build the scry
   /// harness and conversation, and register the world tools.
@@ -86,7 +85,6 @@ private:
   class Impl;
 
   explicit Session(std::unique_ptr<Impl> impl);
-  [[nodiscard]] std::expected<void, std::string> register_tools();
 
   std::unique_ptr<Impl> impl_;
 };

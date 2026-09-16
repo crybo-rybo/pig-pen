@@ -95,6 +95,7 @@ add_library(pigpen_agent STATIC
   src/agent/prompt.cpp
   src/agent/scry_transport.cpp
   src/agent/session.cpp
+  src/agent/world_tool_binding.cpp
 )
 target_link_libraries(
   pigpen_agent

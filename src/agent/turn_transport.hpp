@@ -6,9 +6,11 @@
 /// whole turn loop be tested against a scripted transport without a model.
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -21,6 +23,15 @@ enum class TurnStatus : std::uint8_t {
   error,
 };
 
+/// Scry's completed-turn accounting, distinct from decoded world actions.
+struct TurnToolStats {
+  std::uint32_t rounds{};
+  std::uint32_t calls{};
+  std::uint32_t rejected_calls{};
+  bool round_limit_reached{};
+  std::size_t unexecuted_calls{};
+};
+
 /// @brief Terminal result of one model turn, delivered via
 /// TurnCallbacks::on_finished.
 struct TurnOutcome {
@@ -29,6 +40,8 @@ struct TurnOutcome {
   std::string error{};
   std::uint64_t input_tokens{};
   std::uint64_t output_tokens{};
+  /// Absent when Scry fails or cancels a turn without a Completion.
+  std::optional<TurnToolStats> tool_stats{};
 };
 
 /// @brief Streaming and completion callbacks for one turn.

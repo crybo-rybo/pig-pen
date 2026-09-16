@@ -78,6 +78,7 @@ struct TurnRecord {
   std::uint64_t output_tokens{};
   std::size_t tool_calls{};
   std::chrono::milliseconds latency{};
+  std::optional<TurnToolStats> tool_stats{};
 };
 
 /// @brief Terminal outcome delivered to EpisodeObservers::on_episode_finished.
