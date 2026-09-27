@@ -283,10 +283,10 @@ agent::Config AppUi::config_from_controls() const {
       .base_url = trim_copy(base_url_.data()),
       .model = trim_copy(model_.data()),
       .seed = seed_,
-      .turn_budget =
-          static_cast<std::size_t>(std::clamp(turn_budget_, 1, 10'000)),
-      .max_tool_rounds =
-          static_cast<std::uint32_t>(std::clamp(max_tool_rounds_, 1, 64)),
+      .turn_budget = static_cast<std::uint32_t>(std::clamp(
+          turn_budget_, 1, static_cast<int>(agent::turn_budget_limit))),
+      .max_tool_rounds = static_cast<std::uint32_t>(std::clamp(
+          max_tool_rounds_, 1, static_cast<int>(agent::tool_rounds_limit))),
       .max_output_tokens = max_output_tokens_,
       .temperature = std::clamp(temperature_, 0.0, 2.0),
       .sampling_seed =
@@ -899,7 +899,7 @@ void AppUi::draw_stats_panel() {
         std::pair{"move", moves},
         std::pair{"look", looks},
         std::pair{"eat attempts", eat_attempts},
-        std::pair{"decoded calls", session_->tool_call_count()},
+        std::pair{"decoded calls", session_->tool_activities().size()},
     };
     for (std::size_t index = 0; index < item_types.size(); ++index) {
       ImGui::TableNextRow();

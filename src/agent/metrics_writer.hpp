@@ -17,6 +17,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <string_view>
 
 namespace pigpen::agent {
 
@@ -47,28 +48,26 @@ public:
   [[nodiscard]] std::expected<void, std::string>
   finish(const EpisodeResult &result, int final_score);
 
-  /// @brief Absolute path of the JSONL file being written.
   [[nodiscard]] const std::filesystem::path &path() const noexcept {
     return path_;
   }
-  /// @brief True once a footer has been written; the log is then immutable.
-  [[nodiscard]] bool finalized() const noexcept { return finalized_; }
 
 private:
   MetricsWriter(std::filesystem::path path, std::ofstream stream,
                 std::chrono::steady_clock::time_point started);
 
-  [[nodiscard]] std::expected<void, std::string> write_line(std::string record,
-                                                            bool flush = false);
   [[nodiscard]] std::expected<void, std::string>
-  write_footer(std::string reason, std::uint32_t turns_used, std::string error,
-               int final_score, bool complete);
+  write_footer(std::string_view reason, std::uint32_t turns_used,
+               std::string_view error, int final_score, bool complete);
 
   std::filesystem::path path_{};
   std::ofstream stream_{};
   std::chrono::steady_clock::time_point started_{};
-  std::map<std::string, std::size_t> tool_counts_{};
-  std::map<std::string, std::size_t> eaten_counts_{};
+  // Pre-seeded so the footer always lists every tool and item, even at zero.
+  std::map<std::string, std::size_t> tool_counts_{
+      {"move", 0}, {"look", 0}, {"eat", 0}};
+  std::map<std::string, std::size_t> eaten_counts_{
+      {"berry", 0}, {"apple", 0}, {"truffle", 0}, {"toadstool", 0}};
   std::uint32_t turns_recorded_{};
   int last_score_{};
   bool finalized_{false};

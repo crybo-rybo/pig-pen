@@ -51,36 +51,27 @@ public:
   /// @note The harness gets a 2 ms time budget and at most 32 callbacks per
   /// pump, so no single pass can stall a frame.
   [[nodiscard]] PumpStats pump();
-  /// @brief Forwards to EpisodeRunner::play().
+
+  // Forward to the EpisodeRunner; stop() cancellation is cooperative.
   [[nodiscard]] bool play();
-  /// @brief Forwards to EpisodeRunner::pause().
   [[nodiscard]] bool pause();
-  /// @brief Forwards to EpisodeRunner::stop(); cancellation is cooperative.
   [[nodiscard]] bool stop();
-  /// @brief Forwards to EpisodeRunner::queue_user_input().
   [[nodiscard]] std::uint64_t queue_user_input(std::string message);
-  /// @brief Forwards to EpisodeRunner::remove_pending_user_input().
   [[nodiscard]] bool remove_pending_user_input(std::uint64_t id);
-  /// @brief Forwards to EpisodeRunner::clear_pending_user_inputs().
   void clear_pending_user_inputs();
 
-  /// @brief The validated configuration this session was created with.
   [[nodiscard]] const Config &config() const noexcept;
   /// @brief The simulation; mutated only through registered tools.
   [[nodiscard]] const world::World &world() const noexcept;
   /// @brief Append-only feed of successfully decoded tool activity.
   [[nodiscard]] const ToolActivityFeed &tool_activities() const noexcept;
-  /// @brief The episode state machine.
   [[nodiscard]] const EpisodeRunner &runner() const noexcept;
-  /// @brief Number of successfully decoded world-tool invocations so far.
-  [[nodiscard]] std::size_t tool_call_count() const noexcept;
-  /// @brief Path of this session's JSONL metrics log.
   [[nodiscard]] const std::filesystem::path &metrics_path() const noexcept;
   /// @brief Last metrics-write failure, or empty; a failure is terminal.
   [[nodiscard]] const std::string &metrics_error() const noexcept;
 
 private:
-  class Impl;
+  struct Impl;
 
   explicit Session(std::unique_ptr<Impl> impl);
 

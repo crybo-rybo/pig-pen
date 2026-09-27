@@ -279,7 +279,8 @@ parse_unsigned(const std::string_view value, const std::string_view option,
       if (!parsed) {
         return std::unexpected(std::move(parsed.error()));
       }
-      auto number = parse_unsigned<std::size_t>(*parsed, name, 10'000);
+      auto number = parse_unsigned<std::uint32_t>(
+          *parsed, name, pigpen::agent::turn_budget_limit);
       if (!number || *number == 0) {
         return std::unexpected(number ? "--turns must be in the range 1..10000"
                                       : std::move(number.error()));
@@ -290,7 +291,8 @@ parse_unsigned(const std::string_view value, const std::string_view option,
       if (!parsed) {
         return std::unexpected(std::move(parsed.error()));
       }
-      auto number = parse_unsigned<std::uint32_t>(*parsed, name, 64);
+      auto number = parse_unsigned<std::uint32_t>(
+          *parsed, name, pigpen::agent::tool_rounds_limit);
       if (!number || *number == 0) {
         return std::unexpected(
             number ? "--max-tool-rounds must be in the range 1..64"
@@ -517,7 +519,7 @@ void print_updates(const pigpen::agent::Session &session,
             << " turns_used=" << snapshot.turns_used
             << " turn_budget=" << snapshot.turn_budget
             << " score=" << session->world().score()
-            << " tool_calls=" << session->tool_call_count() << '\n'
+            << " tool_calls=" << session->tool_activities().size() << '\n'
             << "log_path=" << std::quoted(session->metrics_path().string())
             << '\n';
   std::cout.flush();
@@ -541,7 +543,7 @@ void print_updates(const pigpen::agent::Session &session,
     }
     return runtime_error_exit;
   }
-  if (session->tool_call_count() == 0) {
+  if (session->tool_activities().empty()) {
     std::cerr << "validation error: model completed without a successfully "
                  "decoded world-tool invocation\n";
     return no_tools_exit;

@@ -6,8 +6,6 @@
 
 #include <nlohmann/json.hpp>
 
-#include <algorithm>
-#include <array>
 #include <cctype>
 #include <chrono>
 #include <ctime>
@@ -68,24 +66,20 @@ iso_timestamp(const std::chrono::system_clock::time_point now) {
   return result.str();
 }
 
-/// @brief Build <timestamp>-<model>-<seed>.jsonl, appending -N until the
-/// name is unused so concurrent episodes never share a log.
-[[nodiscard]] std::filesystem::path
-unique_log_path(const std::filesystem::path &directory, const Config &config,
-                const std::chrono::system_clock::time_point now) {
-  const auto stem = timestamp(now) + '-' +
-                    sanitized_filename_component(config.model) + '-' +
-                    std::to_string(config.seed);
-  auto candidate = directory / (stem + ".jsonl");
-  for (std::size_t suffix = 1; std::filesystem::exists(candidate); ++suffix) {
-    candidate = directory / (stem + '-' + std::to_string(suffix) + ".jsonl");
-  }
-  return candidate;
-}
-
 /// @brief Project a grid position into the log's {"x", "y"} shape.
 [[nodiscard]] nlohmann::json position_json(const world::Position position) {
   return {{"x", position.x}, {"y", position.y}};
+}
+
+/// @brief Append one JSONL record and flush so a crash loses nothing.
+[[nodiscard]] std::expected<void, std::string>
+write_line(std::ofstream &stream, const std::filesystem::path &path,
+           const nlohmann::json &record) {
+  stream << record.dump() << '\n' << std::flush;
+  if (!stream) {
+    return std::unexpected("failed writing metrics log: " + path.string());
+  }
+  return {};
 }
 
 /// @brief Stable lowercase name recorded in turn lines.
@@ -115,8 +109,18 @@ MetricsWriter::create(const std::filesystem::path &log_directory,
   }
 
   const auto wall_started = std::chrono::system_clock::now();
-  auto path = unique_log_path(log_directory, config, wall_started);
-  std::ofstream stream{path, std::ios::out | std::ios::trunc};
+  // <timestamp>-<model>-<seed>.jsonl, suffixed -N until an exclusive create
+  // succeeds, so concurrent episodes never share or clobber a log.
+  const auto stem = timestamp(wall_started) + '-' +
+                    sanitized_filename_component(config.model) + '-' +
+                    std::to_string(config.seed);
+  auto path = log_directory / (stem + ".jsonl");
+  std::ofstream stream{path, std::ios::out | std::ios::noreplace};
+  for (std::size_t suffix = 1; !stream && std::filesystem::exists(path);
+       ++suffix) {
+    path = log_directory / (stem + '-' + std::to_string(suffix) + ".jsonl");
+    stream = std::ofstream{path, std::ios::out | std::ios::noreplace};
+  }
   if (!stream) {
     return std::unexpected("could not open metrics log: " + path.string());
   }
@@ -153,7 +157,8 @@ MetricsWriter::create(const std::filesystem::path &log_directory,
            {"opaque_look", config.opaque_look},
        }},
   };
-  if (auto status = writer->write_line(header.dump(), true); !status) {
+  if (auto status = write_line(writer->stream_, writer->path_, header);
+      !status) {
     return std::unexpected(std::move(status.error()));
   }
   return writer;
@@ -162,10 +167,7 @@ MetricsWriter::create(const std::filesystem::path &log_directory,
 MetricsWriter::MetricsWriter(
     std::filesystem::path path, std::ofstream stream,
     const std::chrono::steady_clock::time_point started)
-    : path_(std::move(path)), stream_(std::move(stream)), started_(started),
-      tool_counts_{{"move", 0}, {"look", 0}, {"eat", 0}},
-      eaten_counts_{
-          {"berry", 0}, {"apple", 0}, {"truffle", 0}, {"toadstool", 0}} {}
+    : path_(std::move(path)), stream_(std::move(stream)), started_(started) {}
 
 MetricsWriter::~MetricsWriter() {
   if (!finalized_ && stream_) {
@@ -191,24 +193,24 @@ MetricsWriter::record_tool(const ToolActivity &activity) {
   if (activity.eaten) {
     ++eaten_counts_[std::string{world::item_name(*activity.eaten)}];
   }
-  return write_line(nlohmann::json{
-      {"type", "tool"},
-      {"turn", activity.turn},
-      {"tick", activity.tick},
-      {"scry_turn_id", activity.scry_turn_id},
-      {"call_id", activity.call_id},
-      {"round", activity.round},
-      {"index", activity.index},
-      {"tool", tool_kind_name(activity.kind)},
-      {"args", std::move(arguments)},
-      {"result", std::move(result)},
-      {"before", position_json(activity.before)},
-      {"after", position_json(activity.after)},
-      {"action_executed", true},
-      {"result_dispatched", activity.result_dispatched},
-      {"score_after", activity.score_after},
-  }
-                        .dump());
+  return write_line(stream_, path_,
+                    {
+                        {"type", "tool"},
+                        {"turn", activity.turn},
+                        {"tick", activity.tick},
+                        {"scry_turn_id", activity.scry_turn_id},
+                        {"call_id", activity.call_id},
+                        {"round", activity.round},
+                        {"index", activity.index},
+                        {"tool", tool_kind_name(activity.kind)},
+                        {"args", std::move(arguments)},
+                        {"result", std::move(result)},
+                        {"before", position_json(activity.before)},
+                        {"after", position_json(activity.after)},
+                        {"action_executed", true},
+                        {"result_dispatched", activity.result_dispatched},
+                        {"score_after", activity.score_after},
+                    });
 }
 
 std::expected<void, std::string>
@@ -216,7 +218,7 @@ MetricsWriter::record_turn(const TurnRecord &record) {
   if (finalized_) {
     return std::unexpected("cannot record a turn after the metrics footer");
   }
-  turns_recorded_ = std::max(turns_recorded_, record.turn);
+  turns_recorded_ = record.turn;
   nlohmann::json tool_stats = nullptr;
   if (record.tool_stats) {
     const auto &stats = *record.tool_stats;
@@ -227,7 +229,8 @@ MetricsWriter::record_turn(const TurnRecord &record) {
                   {"unexecuted_calls", stats.unexecuted_calls}};
   }
   return write_line(
-      nlohmann::json{
+      stream_, path_,
+      {
           {"type", "turn"},
           {"turn", record.turn},
           {"status", turn_status_name(record.status)},
@@ -241,52 +244,35 @@ MetricsWriter::record_turn(const TurnRecord &record) {
           {"zero_tool_turn",
            record.status == TurnStatus::completed && record.tool_calls == 0U},
           {"latency_ms", record.latency.count()},
-      }
-          .dump(),
-      true);
+      });
 }
 
 std::expected<void, std::string>
 MetricsWriter::finish(const EpisodeResult &result, const int final_score) {
-  return write_footer(std::string{finish_reason_name(result.reason)},
-                      result.turns_used, result.error, final_score, true);
+  return write_footer(finish_reason_name(result.reason), result.turns_used,
+                      result.error, final_score, true);
 }
 
-std::expected<void, std::string> MetricsWriter::write_line(std::string record,
-                                                           const bool flush) {
-  stream_ << record << '\n';
-  if (flush) {
-    stream_.flush();
-  }
-  if (!stream_) {
-    return std::unexpected("failed writing metrics log: " + path_.string());
-  }
-  return {};
-}
-
-std::expected<void, std::string>
-MetricsWriter::write_footer(std::string reason, const std::uint32_t turns_used,
-                            std::string error, const int final_score,
-                            const bool complete) {
+std::expected<void, std::string> MetricsWriter::write_footer(
+    const std::string_view reason, const std::uint32_t turns_used,
+    const std::string_view error, const int final_score, const bool complete) {
   if (finalized_) {
     return std::unexpected("metrics log already has a footer");
   }
   const auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
       std::chrono::steady_clock::now() - started_);
-  auto status = write_line(
-      nlohmann::json{
-          {"type", "footer"},
-          {"complete", complete},
-          {"finish_reason", std::move(reason)},
-          {"error", std::move(error)},
-          {"final_score", final_score},
-          {"items_eaten", eaten_counts_},
-          {"tool_call_counts", tool_counts_},
-          {"turns_used", turns_used},
-          {"duration_ms", duration.count()},
-      }
-          .dump(),
-      true);
+  auto status = write_line(stream_, path_,
+                           {
+                               {"type", "footer"},
+                               {"complete", complete},
+                               {"finish_reason", reason},
+                               {"error", error},
+                               {"final_score", final_score},
+                               {"items_eaten", eaten_counts_},
+                               {"tool_call_counts", tool_counts_},
+                               {"turns_used", turns_used},
+                               {"duration_ms", duration.count()},
+                           });
   if (status) {
     finalized_ = true;
   }

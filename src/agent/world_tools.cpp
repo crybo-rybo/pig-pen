@@ -2,8 +2,10 @@
 /// @brief WorldTools implementation; the contract is in the header.
 #include "agent/world_tools.hpp"
 
+#include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace pigpen::agent {
 
@@ -11,29 +13,17 @@ WorldTools::WorldTools(world::World &world, const Config &config)
     : world_(world), opaque_look_(config.opaque_look),
       reward_feedback_(config.reward_feedback) {}
 
-ToolExecution<MoveToolResponse>
-WorldTools::move(const DirectionArguments arguments) {
-  const auto before = world_.position();
-
+MoveToolResponse WorldTools::move(const DirectionArguments arguments) {
   const auto moved = world_.move(arguments.direction);
   return {
-      .response =
-          {
-              .ok = moved.ok,
-              .item_here = moved.item_here,
-              .position = moved.position,
-              .reason = moved.failure,
-          },
-      .before = before,
-      .after = world_.position(),
-      .direction = arguments.direction,
+      .ok = moved.ok,
+      .item_here = moved.item_here,
+      .position = moved.position,
+      .reason = moved.failure,
   };
 }
 
-ToolExecution<LookToolResponse>
-WorldTools::look(const DirectionArguments arguments) {
-  const auto before = world_.position();
-
+LookToolResponse WorldTools::look(const DirectionArguments arguments) {
   const auto looked = world_.look(arguments.direction);
   std::vector<LookToolCell> cells;
   cells.reserve(looked.cells.size());
@@ -48,27 +38,17 @@ WorldTools::look(const DirectionArguments arguments) {
         .item = std::move(item),
     });
   }
-
   return {
-      .response =
-          {
-              .ok = true,
-              .direction = arguments.direction,
-              .cells = std::move(cells),
-              .wall_at_distance = looked.wall_at_distance,
-          },
-      .before = before,
-      .after = world_.position(),
+      .ok = true,
       .direction = arguments.direction,
+      .cells = std::move(cells),
+      .wall_at_distance = looked.wall_at_distance,
   };
 }
 
-ToolExecution<EatToolResponse>
-WorldTools::eat(const EatArguments /*arguments*/) {
-  const auto before = world_.position();
-
+EatToolResponse WorldTools::eat(const EatArguments /*arguments*/) {
   const auto eaten = world_.eat();
-  auto response = EatToolResponse{
+  EatToolResponse response{
       .ok = eaten.ok,
       .ate = eaten.ate,
       .reason = eaten.failure,
@@ -77,13 +57,7 @@ WorldTools::eat(const EatArguments /*arguments*/) {
     response.reward = eaten.reward;
     response.score = eaten.score;
   }
-
-  return {
-      .response = std::move(response),
-      .before = before,
-      .after = world_.position(),
-      .eaten = eaten.ate,
-  };
+  return response;
 }
 
 } // namespace pigpen::agent
