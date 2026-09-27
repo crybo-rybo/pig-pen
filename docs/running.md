@@ -35,7 +35,7 @@ text as it arrives, prints one line per decoded world-tool call with the before
 → after position, and ends with a summary:
 
 ```
-session model="llama3.1:8b-instruct-q4_K_M" base_url="http://127.0.0.1:11434/v1" seed=42 turns=4 max_tool_rounds=8 max_world_tool_calls_per_turn=4 max_output_tokens=8096 temperature=0 sampling_seed=unset
+session model="llama3.1:8b-instruct-q4_K_M" base_url="http://127.0.0.1:11434/v1" seed=42 turns=4 max_tool_rounds=8 max_world_tool_calls_per_turn=4 max_output_tokens=8192 temperature=0 sampling_seed=unset
 log_path="logs/20260807-101500-123-llama3.1_8b-instruct-q4_K_M-42.jsonl"
 tool[turn=1,tick=1] look args={"direction":"north"} result={"cells":[...],"direction":"north","ok":true,"wall_at_distance":5} position=(5,5)->(5,5)
 assistant[turn=1]: I
@@ -50,7 +50,7 @@ design — pipe it to a file, or read the JSONL log instead, if you want the
 turn's text in one piece. Tool lines go to stdout; errors, timeouts, and signal
 notices go to stderr.
 
-Pig Pen asks the provider to limit each response to 8096 output tokens. The
+Pig Pen asks the provider to limit each response to 8192 output tokens. The
 prompt asks the model to prioritize calling the registered world tools over
 extended thinking or describing intended actions. For the per-turn call budget
 and round limit, see [Tool errors and limits](world.md#tool-errors-and-limits).

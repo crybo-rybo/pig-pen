@@ -23,7 +23,7 @@ Written when the session is created, before the model is contacted.
 
 ```json
 {"type":"header","model":"acme/pig-model:Q4_K_M","base_url":"http://127.0.0.1:11434/v1",
- "temperature":0.2,"max_output_tokens":8096,"seed":42,"sampling_seed":null,"started_at":"2026-08-07T06:45:12-0400","prompt_variant":"default",
+ "temperature":0.2,"max_output_tokens":8192,"seed":42,"sampling_seed":null,"started_at":"2026-08-07T06:45:12-0400","prompt_variant":"default",
  "scenario":{"grid":{"width":10,"height":10},"spawn":{"x":5,"y":5},
    "items":{"berry":6,"apple":3,"truffle":1,"toadstool":3},
    "turn_budget":2,"max_tool_rounds":8,"max_world_tool_calls_per_turn":4,

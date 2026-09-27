@@ -25,7 +25,7 @@ struct Config {
   std::uint64_t seed{};
   std::uint32_t turn_budget{20};
   std::uint32_t max_tool_rounds{8};
-  std::uint32_t max_output_tokens{8'096};
+  std::uint32_t max_output_tokens{8'192};
   double temperature{0.0};
   /// Provider sampling seed, independent of the world seed. Sent as the
   /// OpenAI-compatible `seed` field when set and omitted when unset;

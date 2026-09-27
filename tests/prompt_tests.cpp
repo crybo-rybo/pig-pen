@@ -17,7 +17,7 @@ TEST_CASE("Agent configuration requires callers to select a model") {
   CHECK(config.seed == 0);
   CHECK(config.turn_budget == 20);
   CHECK(config.max_tool_rounds == 8);
-  CHECK(config.max_output_tokens == 8'096);
+  CHECK(config.max_output_tokens == 8'192);
   CHECK(pigpen::agent::max_world_tool_calls_per_turn == 4);
   CHECK(config.temperature == 0.0);
   CHECK(config.known_item_values);
