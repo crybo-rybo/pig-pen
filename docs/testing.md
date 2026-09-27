@@ -53,6 +53,8 @@ covering:
 - `pigpen_headless_rejects_invalid_bounds` — `--max-tool-rounds 65` must fail
 - `pigpen_headless_rejects_invalid_temperature` — non-finite sampling values
   must fail
+- `pigpen_headless_rejects_invalid_sampling_seed` — a `--sampling-seed` above
+  the 32-bit range must print the range diagnostic
 - `pigpen_headless_graceful_sigint` / `_sigterm` — `tests/headless_signal_tests.py`
   starts a stub socket server on a loopback port, points the CLI at it, sends
   an exact tagged model identifier, verifies that identifier in the HTTP

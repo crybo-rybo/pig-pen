@@ -94,6 +94,8 @@ void print_usage(std::ostream &output, const std::string_view program) {
          "8)\n"
       << "  --temperature NUMBER     Sampling temperature, 0.0..2.0 (default: "
          "0.0)\n"
+      << "  --sampling-seed INTEGER   Provider sampling seed, 0..4294967295 "
+         "(default: unset)\n"
       << "  --log-dir PATH            JSONL output directory (default: logs)\n"
       << "  --timeout-seconds INTEGER Overall episode timeout, 1..86400 "
          "(default: 300)\n"
@@ -261,6 +263,17 @@ parse_unsigned(const std::string_view value, const std::string_view option,
         return std::unexpected(std::move(number.error()));
       }
       options.config.seed = *number;
+    } else if (name == "--sampling-seed") {
+      auto parsed = value();
+      if (!parsed) {
+        return std::unexpected(std::move(parsed.error()));
+      }
+      auto number = parse_unsigned<std::uint32_t>(
+          *parsed, name, std::numeric_limits<std::uint32_t>::max());
+      if (!number) {
+        return std::unexpected(std::move(number.error()));
+      }
+      options.config.sampling_seed = *number;
     } else if (name == "--turns") {
       auto parsed = value();
       if (!parsed) {
@@ -417,7 +430,14 @@ void print_updates(const pigpen::agent::Session &session,
             << " max_world_tool_calls_per_turn="
             << pigpen::agent::max_world_tool_calls_per_turn
             << " max_output_tokens=" << options.config.max_output_tokens
-            << " temperature=" << options.config.temperature << '\n'
+            << " temperature=" << options.config.temperature
+            << " sampling_seed=";
+  if (options.config.sampling_seed) {
+    std::cout << *options.config.sampling_seed;
+  } else {
+    std::cout << "unset";
+  }
+  std::cout << '\n'
             << "log_path=" << std::quoted(session->metrics_path().string())
             << '\n';
   std::cout.flush();

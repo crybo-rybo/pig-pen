@@ -130,6 +130,9 @@ MetricsWriter::create(const std::filesystem::path &log_directory,
       {"temperature", config.temperature},
       {"max_output_tokens", config.max_output_tokens},
       {"seed", config.seed},
+      {"sampling_seed", config.sampling_seed
+                            ? nlohmann::json(*config.sampling_seed)
+                            : nlohmann::json(nullptr)},
       {"started_at", iso_timestamp(wall_started)},
       {"prompt_variant", std::move(prompt_variant)},
       {"scenario",

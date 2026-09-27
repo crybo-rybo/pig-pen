@@ -70,6 +70,8 @@ private:
   int max_tool_rounds_{8};
   std::uint32_t max_output_tokens_{8'096};
   double temperature_{};
+  bool use_sampling_seed_{false};
+  std::uint32_t sampling_seed_{};
   int preset_{0};
   bool known_item_values_{true};
   bool reward_feedback_{true};

@@ -70,6 +70,16 @@ endfunction()
 pigpen_failing_headless_test(requires_model)
 pigpen_failing_headless_test(rejects_invalid_bounds --max-tool-rounds 65)
 pigpen_failing_headless_test(rejects_invalid_temperature --temperature nan)
+# The sampling seed is 32 bits (Scry's SamplingConfig::seed); match the
+# diagnostic so an accepted value that later fails to connect cannot pass.
+add_test(
+  NAME pigpen_headless_rejects_invalid_sampling_seed
+  COMMAND pig-pen-headless --model m --sampling-seed 4294967296
+)
+set_tests_properties(
+  pigpen_headless_rejects_invalid_sampling_seed
+  PROPERTIES PASS_REGULAR_EXPRESSION "--sampling-seed must be in the range"
+)
 
 add_test(
   NAME pigpen_reflection_integration
