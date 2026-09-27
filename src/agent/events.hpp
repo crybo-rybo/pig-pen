@@ -32,10 +32,32 @@ enum class ToolOutcome : std::uint8_t {
 };
 
 /// @brief Stable provider/log spelling of @p kind.
-[[nodiscard]] constexpr std::string_view tool_kind_name(ToolKind kind) noexcept;
+[[nodiscard]] constexpr std::string_view
+tool_kind_name(const ToolKind kind) noexcept {
+  switch (kind) {
+  case ToolKind::move:
+    return "move";
+  case ToolKind::look:
+    return "look";
+  case ToolKind::eat:
+    return "eat";
+  }
+  return "unknown";
+}
+
 /// @brief Stable presentation/log spelling of @p outcome.
 [[nodiscard]] constexpr std::string_view
-tool_outcome_name(ToolOutcome outcome) noexcept;
+tool_outcome_name(const ToolOutcome outcome) noexcept {
+  switch (outcome) {
+  case ToolOutcome::succeeded:
+    return "succeeded";
+  case ToolOutcome::blocked_by_wall:
+    return "blocked_by_wall";
+  case ToolOutcome::nothing_to_eat:
+    return "nothing_to_eat";
+  }
+  return "unknown";
+}
 
 /// @brief One successfully decoded world-tool handler invocation and its
 /// observable world transition.
@@ -68,37 +90,10 @@ struct ToolActivity {
   [[nodiscard]] constexpr bool succeeded() const noexcept {
     return outcome == ToolOutcome::succeeded;
   }
-
-  friend bool operator==(const ToolActivity &, const ToolActivity &) = default;
 };
 
 /// @brief Append-only activity history; indices are stable for the lifetime
 /// of a session.
 using ToolActivityFeed = std::vector<ToolActivity>;
-
-constexpr std::string_view tool_kind_name(const ToolKind kind) noexcept {
-  switch (kind) {
-  case ToolKind::move:
-    return "move";
-  case ToolKind::look:
-    return "look";
-  case ToolKind::eat:
-    return "eat";
-  }
-  return "unknown";
-}
-
-constexpr std::string_view
-tool_outcome_name(const ToolOutcome outcome) noexcept {
-  switch (outcome) {
-  case ToolOutcome::succeeded:
-    return "succeeded";
-  case ToolOutcome::blocked_by_wall:
-    return "blocked_by_wall";
-  case ToolOutcome::nothing_to_eat:
-    return "nothing_to_eat";
-  }
-  return "unknown";
-}
 
 } // namespace pigpen::agent

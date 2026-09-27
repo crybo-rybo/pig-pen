@@ -40,15 +40,9 @@ public:
   ScryTurnTransport(const ScryTurnTransport &) = delete;
   ScryTurnTransport &operator=(const ScryTurnTransport &) = delete;
 
-  /// @brief Start one model turn.
-  /// @return An error when a turn is already active or scry rejects the
-  /// send; otherwise the outcome arrives via @p callbacks.
   [[nodiscard]] std::expected<void, std::string>
   send(std::string user_message, TurnCallbacks callbacks) override;
-  /// @brief Ask scry to cancel the active turn.
-  /// @return true when a cancellation was actually requested.
-  /// @note Cooperative: the turn ends when its terminal callback arrives.
-  [[nodiscard]] bool cancel() noexcept override;
+  bool cancel() noexcept override;
 
 private:
   scry::Harness &harness_;

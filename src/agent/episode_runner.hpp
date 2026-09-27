@@ -12,7 +12,6 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
-#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -94,7 +93,6 @@ struct EpisodeSnapshot {
   std::uint32_t turns_used{};
   std::uint32_t turn_budget{};
   bool turn_in_flight{false};
-  bool stop_requested{false};
   std::optional<FinishReason> finish_reason{};
   std::string error{};
   std::chrono::milliseconds last_turn_latency{};
@@ -108,29 +106,26 @@ struct EpisodeObservers {
 
 /// @brief Runs the turn loop of one episode against an ITurnTransport.
 ///
-/// All state changes happen on the caller's thread inside tick(); transport
-/// callbacks only stage an outcome that the next tick() consumes. This is
-/// what lets the whole loop be tested against a scripted transport.
+/// Everything runs on the caller's thread: transport callbacks only stage a
+/// turn outcome, and the next tick() applies it. The transport must not
+/// deliver callbacks after the runner is destroyed (ScryTurnTransport only
+/// delivers from Session::pump() and disconnects on destruction).
 class EpisodeRunner final {
 public:
   /// @brief Bind the runner to a transport and an episode configuration.
-  /// @param turn_budget Clamped to at least one turn.
-  /// @param objective_complete Optional predicate polled between turns; a
-  /// true result finishes the episode with
-  /// FinishReason::objective_complete.
+  /// @param objective_complete Polled between turns; true finishes the
+  /// episode with FinishReason::objective_complete.
   /// @param tool_call_count Optional counter used to attribute world-tool
   /// calls to turns and to detect zero-tool turns.
   EpisodeRunner(ITurnTransport &transport, std::uint32_t turn_budget,
                 std::function<bool()> objective_complete,
                 EpisodeObservers observers = {},
                 std::function<std::size_t()> tool_call_count = {});
-  /// @brief Cancels any in-flight turn; its late callbacks are ignored.
+  /// @brief Cancels any in-flight turn.
   ~EpisodeRunner();
 
   EpisodeRunner(const EpisodeRunner &) = delete;
   EpisodeRunner &operator=(const EpisodeRunner &) = delete;
-  EpisodeRunner(EpisodeRunner &&) = delete;
-  EpisodeRunner &operator=(EpisodeRunner &&) = delete;
 
   /// @brief Enter RunState::playing.
   /// @return false when already playing or finished.
@@ -157,18 +152,23 @@ public:
   /// @brief Drop all guidance that has not been sent yet.
   void clear_pending_user_inputs();
 
-  /// @brief Copy of the current episode state.
-  [[nodiscard]] EpisodeSnapshot snapshot() const;
+  [[nodiscard]] EpisodeSnapshot snapshot() const { return snapshot_; }
   /// @brief Full transcript, oldest first.
-  [[nodiscard]] const std::vector<TranscriptEntry> &transcript() const noexcept;
+  [[nodiscard]] const std::vector<TranscriptEntry> &
+  transcript() const noexcept {
+    return transcript_;
+  }
   /// @brief All guidance entries, pending and sent.
-  [[nodiscard]] const std::vector<GuidanceEntry> &guidance() const noexcept;
+  [[nodiscard]] const std::vector<GuidanceEntry> &guidance() const noexcept {
+    return guidance_;
+  }
 
 private:
-  struct SharedState;
-
   void start_turn();
   void process_pending_outcome();
+  /// @brief Finish if a stop, the objective, or the budget says so.
+  /// @return Whether the episode is finished.
+  bool finish_if_due();
   void update_pending_guidance_turns();
   void finish(FinishReason reason, std::string error = {});
 
@@ -176,7 +176,18 @@ private:
   std::function<bool()> objective_complete_;
   std::function<std::size_t()> tool_call_count_;
   EpisodeObservers observers_;
-  std::shared_ptr<SharedState> state_;
+
+  EpisodeSnapshot snapshot_{};
+  bool stop_requested_{false};
+  std::chrono::steady_clock::time_point turn_started_{};
+  std::optional<TurnOutcome> pending_outcome_{};
+  std::string active_user_message_{};
+  std::size_t tool_calls_at_turn_start_{};
+  bool recover_zero_tool_turn_{false};
+  std::size_t unexecuted_tool_calls_{};
+  std::uint64_t next_guidance_id_{1};
+  std::vector<GuidanceEntry> guidance_{};
+  std::vector<TranscriptEntry> transcript_{};
 };
 
 /// @brief Stable lowercase name used in logs and the CLI.

@@ -64,7 +64,7 @@ public:
   send(std::string user_message, TurnCallbacks callbacks) = 0;
   /// @brief Request cooperative cancellation of the active turn.
   /// @return true when a cancellation was actually requested.
-  [[nodiscard]] virtual bool cancel() noexcept = 0;
+  virtual bool cancel() noexcept = 0;
 };
 
 } // namespace pigpen::agent
