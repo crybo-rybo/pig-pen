@@ -30,6 +30,7 @@ struct EpisodeRunner::SharedState {
   std::size_t active_assistant_entry{};
   std::size_t tool_calls_at_turn_start{};
   bool recover_zero_tool_turn{};
+  std::size_t unexecuted_tool_calls{};
   std::uint64_t next_guidance_id{1};
   std::vector<GuidanceEntry> guidance{};
   std::vector<TranscriptEntry> transcript{};
@@ -191,9 +192,11 @@ void EpisodeRunner::start_turn() {
       guidance_index ? std::string_view{state_->guidance[*guidance_index].text}
                      : std::string_view{};
   auto message = build_turn_prompt(turn, state_->turn_budget, human_input,
-                                   state_->recover_zero_tool_turn);
+                                   state_->recover_zero_tool_turn,
+                                   state_->unexecuted_tool_calls);
   const auto automatic_message = build_turn_prompt(
-      turn, state_->turn_budget, {}, state_->recover_zero_tool_turn);
+      turn, state_->turn_budget, {}, state_->recover_zero_tool_turn,
+      state_->unexecuted_tool_calls);
 
   state_->active_user_message = message;
   const auto transcript_start = state_->transcript.size();
@@ -286,6 +289,8 @@ void EpisodeRunner::process_pending_outcome() {
   }
   state_->recover_zero_tool_turn = outcome.status == TurnStatus::completed &&
                                    tool_call_count_ && tool_calls == 0U;
+  state_->unexecuted_tool_calls =
+      outcome.tool_stats ? outcome.tool_stats->unexecuted_calls : 0U;
 
   auto &assistant = state_->transcript[state_->active_assistant_entry].text;
   if (assistant.empty()) {
@@ -301,9 +306,13 @@ void EpisodeRunner::process_pending_outcome() {
       .output_tokens = outcome.output_tokens,
       .tool_calls = tool_calls,
       .latency = state_->last_turn_latency,
+      .tool_stats = outcome.tool_stats,
   };
   if (observers_.on_turn_finished) {
     observers_.on_turn_finished(record);
+  }
+  if (state_->run_state == RunState::finished) {
+    return;
   }
 
   if (outcome.status == TurnStatus::error) {

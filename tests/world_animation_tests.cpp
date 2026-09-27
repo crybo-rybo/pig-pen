@@ -1,7 +1,7 @@
 /// @file world_animation_tests.cpp
 /// @brief Covers the activity feed becoming an ordered visual timeline: burst
 /// moves play back sequentially, look/eat become transient effects, and
-/// budget-rejected calls never animate.
+/// wall-rejected calls never animate.
 ///
 /// WorldAnimationState takes the current time as a parameter, so these cases
 /// step a fake clock instead of needing ImGui or a real frame loop.
@@ -113,14 +113,14 @@ TEST_CASE("animation speed changes move duration") {
   CHECK(animation.blob_position().x == Catch::Approx(2.0F));
 }
 
-TEST_CASE("application-budget rejections do not animate as world actions") {
+TEST_CASE("wall-blocked moves do not animate movement") {
   pigpen::ui::WorldAnimationState animation;
   animation.reset({.x = 5, .y = 5});
   const pigpen::agent::ToolActivityFeed activities{{
       .tick = 1,
       .turn = 1,
-      .kind = pigpen::agent::ToolKind::look,
-      .outcome = pigpen::agent::ToolOutcome::budget_exhausted,
+      .kind = pigpen::agent::ToolKind::move,
+      .outcome = pigpen::agent::ToolOutcome::blocked_by_wall,
       .arguments_json = R"({"direction":"north"})",
       .before = {.x = 5, .y = 5},
       .after = {.x = 5, .y = 5},

@@ -29,7 +29,6 @@ enum class ToolOutcome : std::uint8_t {
   succeeded,
   blocked_by_wall,
   nothing_to_eat,
-  budget_exhausted,
 };
 
 /// @brief Stable provider/log spelling of @p kind.
@@ -40,10 +39,8 @@ tool_outcome_name(ToolOutcome outcome) noexcept;
 
 /// @brief One successfully decoded world-tool handler invocation and its
 /// observable world transition.
-/// @note Application-budget rejections still appear here: they carry a
-/// budget_exhausted outcome and identical before/after positions. The JSON
-/// strings are exact canonical payloads produced by scry; consumers may
-/// display or persist them but should use the typed fields for behavior.
+/// @note Calls refused by Scry never enter this feed. JSON strings are exact
+/// canonical dispatch payloads; use typed fields for application behavior.
 struct ToolActivity {
   std::uint64_t tick{};
   std::size_t turn{};
@@ -58,10 +55,14 @@ struct ToolActivity {
   /// Truthful cumulative world score, even when reward feedback is hidden.
   int score_after{};
 
-  /// @brief Whether the world action ran rather than the budget rejecting it.
-  [[nodiscard]] constexpr bool action_executed() const noexcept {
-    return outcome != ToolOutcome::budget_exhausted;
-  }
+  /// Scry's call identity, copied from the contextual handler.
+  std::uint64_t scry_turn_id{};
+  std::string call_id{};
+  std::uint32_t round{};
+  std::uint32_t index{};
+  /// False when a framework failure prevented a dispatch observation. The
+  /// world transition still happened, but its JSON payloads are unavailable.
+  bool result_dispatched{true};
 
   /// @brief Whether the action ran and achieved its purpose.
   [[nodiscard]] constexpr bool succeeded() const noexcept {
@@ -96,8 +97,6 @@ tool_outcome_name(const ToolOutcome outcome) noexcept {
     return "blocked_by_wall";
   case ToolOutcome::nothing_to_eat:
     return "nothing_to_eat";
-  case ToolOutcome::budget_exhausted:
-    return "budget_exhausted";
   }
   return "unknown";
 }

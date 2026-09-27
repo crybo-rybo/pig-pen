@@ -12,7 +12,7 @@ src/app/main.cpp              src/app/headless_main.cpp
    AppUi, WorldAnimation          │
                                   ├── EpisodeRunner   turn loop, play/pause/stop
                                   ├── ScryTurnTransport ──► scry::Harness ──► HTTP
-                                  ├── WorldTools      typed actions and budgets
+                                  ├── WorldTools      typed actions and visibility
                                   ├── Scry reflection schemas and marshalling
                                   ├── ToolActivity    typed semantics + exact payloads
                                   ├── MetricsWriter   JSONL
@@ -32,9 +32,10 @@ serialisation used for determinism tests. Details in [World and tools](world.md)
 | unit | responsibility |
 |---|---|
 | `config.hpp` | `Config`: endpoint, model, seed, budgets, and the three model-visibility flags shared by both front ends |
-| `prompt.cpp` | builds the system prompt and the per-turn nudge from a `Config` |
-| `tool_contract.hpp` | reflected argument and flat response declarations, including status and budget fields; these C++ types are the model-facing contract |
-| `world_tools.cpp` | typed world actions and the explicit per-turn action-budget lifecycle; it contains no JSON parsing or schema code |
+| `prompt.cpp` | builds the system prompt from `Config` and per-turn instructions from feedback and optional human guidance |
+| `tool_contract.hpp` | reflected argument and flat response declarations, including world outcome fields; these C++ types are the model-facing contract |
+| `world_tools.cpp` | typed world actions and scenario visibility; it contains no JSON parsing, budgets, or schema code |
+| `world_tool_binding.cpp` | standalone reflected registry, world-action admission policy, and correlation of typed transitions with Scry dispatch observations |
 | `events.hpp` | `ToolActivity` and its append-only feed: typed application semantics plus exact canonical argument/result text from Scry |
 | `turn_transport.hpp` | `ITurnTransport`, the interface a "send one turn, get callbacks" implementation must satisfy |
 | `scry_transport.cpp` | the real implementation, over `scry::Harness` / `scry::Conversation` |
@@ -46,27 +47,40 @@ Two seams make this testable. `ITurnTransport` lets `EpisodeRunner` be driven
 by a scripted transport in `tests/episode_runner_tests.cpp`, so the whole turn
 loop — including stop-cancels-in-flight-turn — is covered without a model.
 `WorldTools` accepts and returns only reflected C++ values, so world behavior,
-fixed response shapes, and budgets are tested without JSON or a registry.
+fixed response shapes, and scenario visibility are tested without JSON or a registry.
+The public `scry::testing` component exercises the real bindings, transport, tool
+budgets, and transactional history with scripted provider streams.
 
 ### Reflection is the tool boundary
 
-`Session` registers `DirectionArguments` and `EatArguments` through
-`scry::reflection::add`. Scry derives closed JSON Schemas at compile time,
-strictly decodes incoming arguments, invokes the typed handler on the pump
-thread, and encodes its typed response. Scoped enum identifiers are the JSON
-strings, so adding or renaming a direction changes schema, decode, and encode
-from the same declaration. The handler also calls
-`scry::reflection::encode` on its typed arguments and response to retain the
-same canonical payloads for observability; Pig Pen has no reflection encoder
-of its own.
+`WorldToolBinding` builds a standalone `scry::ToolRegistry` with reflected
+`DirectionArguments` and `EatArguments` handlers before the harness is created.
+Scry derives closed JSON Schemas at compile time, strictly decodes arguments,
+invokes the typed handler on the pump thread, and encodes its response. Scoped
+enum identifiers supply the JSON strings from the same C++ declaration.
 
-Protocol failures belong to Scry: unknown tools and calls that cannot be
-decoded never enter `WorldTools`. Pig Pen's activity feed therefore represents
-successfully decoded world-tool handler invocations. Each record exposes typed
-kind, outcome, transition, and truthful score fields for application behavior;
-its canonical JSON strings are opaque display/persistence data. A handler
-invocation may still have `action_executed == false` when the four-call
-application budget is already exhausted.
+Contextual handlers retain the typed world transition and Scry's turn/call ID,
+round, and batch index. The subsequent `on_tool_call` observation supplies the
+exact canonical arguments and result posted for the provider. One pending
+transition suffices because dispatch and observation are serial. There is no
+second encode for logging. If Scry aborts the whole turn before posting a result,
+it emits no observation. The pending world transition is still recorded at turn
+completion (or session destruction), with `result_dispatched: false` and null
+JSON payloads. World side effects remain visible even when history rolls back.
+
+Scry enforces the four-request limit before dispatch. Invalid/unknown requests
+spend the budget too; refused and undecodable requests never become world
+activity. The admission hook prevents further world changes after objective
+completion or logging failure. Logging failure ends the episode after the active
+turn terminates, allowing executed results to commit when the turn succeeds.
+
+Pig Pen uses Scry's completing round-limit policy, so hitting the round cap keeps
+the executed transcript. `TurnOutcome` carries native completion counts and the
+number of calls left unexecuted; `EpisodeRunner` passes these to metrics and
+notifies the model about unexecuted calls in the next turn's prompt. World-action
+counts remain separate because invalid and refused requests are included in
+Scry's counts. When Scry fails/cancels without a Completion, native statistics
+are absent.
 
 ### `Session` is the reset unit
 
@@ -77,17 +91,20 @@ exactly what the GUI's **Reset** button does. That is why connection and
 scenario edits show "Pending settings apply on Reset" instead of mutating a
 live episode.
 
-Tools are registered on the harness with a `weak_ptr` back to the session, so a
-callback arriving after the session is gone fails cleanly instead of touching
-freed state.
+The session owns the bindings and world at stable addresses. They outlive the
+harness that adopts their registry. Destruction flushes pending world activity
+while the runner and log are alive, then cancels and disconnects the transport.
+Clients inspect the runner through a const view and control it through `Session`.
+Scry validates provider configuration before a log is opened; Pig Pen adds only
+its episode-budget and tool-round upper bounds.
 
 ### Everything is pumped, nothing blocks
 
 `Session::pump()` gives the scry harness a 2 ms time budget and at most 32
 callbacks, then ticks the runner. Both front ends call it from their own loop —
 the GUI once per frame, the CLI in a tight loop that sleeps 1 ms when there is
-nothing to do. No background threads, no blocking waits, and the same code path
-in both.
+nothing to do. Scry owns its I/O worker; application callbacks and tools run
+only on the pump thread, with no blocking waits in either front end.
 
 Cancellation is cooperative for the same reason: `stop()` asks the transport to
 cancel and the episode is not finished until the terminal callback comes back,

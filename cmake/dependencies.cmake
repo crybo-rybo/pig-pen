@@ -6,8 +6,9 @@ include(FetchContent)
 
 # --- scry ---------------------------------------------------------------------
 
-# Scry v0.3.0 is one target (scry::scry) built by one compiler, so the only
-# options left to pin are the ones that would add work to this build.
+# Scry v0.4.0 supplies the runtime and optional scripted testing support.
+# Keep upstream tests and examples out of the application build.
+set(SCRY_BUILD_TESTING_SUPPORT ${PIGPEN_BUILD_TESTS} CACHE BOOL "" FORCE)
 set(SCRY_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(SCRY_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(SCRY_ENABLE_FORMAT_CHECK OFF CACHE BOOL "" FORCE)
@@ -68,7 +69,7 @@ endif()
 FetchContent_Declare(
   scry
   GIT_REPOSITORY https://github.com/crybo-rybo/scry.git
-  GIT_TAG v0.3.0
+  GIT_TAG v0.4.0
   GIT_PROGRESS TRUE
   SYSTEM
   EXCLUDE_FROM_ALL

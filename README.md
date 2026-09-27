@@ -3,7 +3,7 @@
 `pig-pen` drops a locally hosted LLM into a deterministic 10×10 pen and lets you
 watch it play. The model is a blob that can only perceive the pen through three
 tools — `look`, `move`, and `eat` — registered with
-[scry](https://github.com/crybo-rybo/scry). You get the omniscient view: the
+[scry v0.4.0](https://github.com/crybo-rybo/scry/releases/tag/v0.4.0). You get the omniscient view: the
 full grid, the model's fog-of-war, its streamed output, every successfully
 decoded world-tool invocation and result, live stats, and a JSONL log of the
 run.

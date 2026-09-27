@@ -82,10 +82,10 @@ std::string build_system_prompt(const Config &config) {
       "You have at most " + std::to_string(config.turn_budget) +
       " conversation turns, with at most " +
       std::to_string(config.max_tool_rounds) +
-      " tool rounds per turn. Pig Pen executes at most " +
+      " tool rounds per turn. Pig Pen allows at most " +
       std::to_string(max_world_tool_calls_per_turn) +
-      " world-tool actions per conversation turn. Each successfully decoded "
-      "world-tool result reports the remaining call budget. Each conversation "
+      " world-tool requests per conversation turn, including invalid requests. "
+      "Excess calls are refused without acting. Each conversation "
       "turn should contain one "
       "or more useful tool calls, followed by a short final action summary "
       "with no more tool calls. Prioritize calling the registered world tools "
@@ -100,7 +100,8 @@ std::string build_system_prompt(const Config &config) {
 std::string build_turn_prompt(const std::size_t turn,
                               const std::size_t turn_budget,
                               const std::string_view human_input,
-                              const bool recover_zero_tool_turn) {
+                              const bool recover_zero_tool_turn,
+                              const std::size_t unexecuted_tool_calls) {
   std::string prompt =
       "Automatic turn instructions:\n"
       "Continue exploring autonomously. Use up to " +
@@ -115,6 +116,13 @@ std::string build_turn_prompt(const std::size_t turn,
         "\nCorrection: the previous turn executed zero world tools. Model "
         "narration is not an action. Begin this turn with a valid look, move, "
         "or eat tool call before summarizing.";
+  }
+  if (unexecuted_tool_calls != 0U) {
+    prompt +=
+        "\nThe previous turn reached its tool-round limit. " +
+        std::to_string(unexecuted_tool_calls) +
+        " requested tool calls were not executed. Choose your next action "
+        "from the tool results actually received.";
   }
   if (!human_input.empty()) {
     prompt += "\n\nHuman guidance:\n";

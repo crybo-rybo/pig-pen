@@ -6,19 +6,15 @@
 #include "agent/metrics_writer.hpp"
 #include "agent/prompt.hpp"
 #include "agent/scry_transport.hpp"
-#include "agent/world_tools.hpp"
+#include "agent/world_tool_binding.hpp"
 
-#include <scry/reflection.hpp>
 #include <scry/scry.hpp>
 
 #include <chrono>
-#include <cmath>
 #include <cstdlib>
-#include <functional>
 #include <memory>
 #include <optional>
-#include <string_view>
-#include <type_traits>
+#include <string>
 #include <utility>
 
 namespace pigpen::agent {
@@ -30,74 +26,27 @@ namespace {
   return value == nullptr ? std::string{} : std::string{value};
 }
 
-/// @brief Translate a Pig Pen config into the scry provider config, with
-/// PIGPEN_API_KEY from the environment as the credential.
-[[nodiscard]] scry::Config provider_config(const Config &config) {
-  return {
-      .base_url = config.base_url,
-      .api_key = environment("PIGPEN_API_KEY"),
-      .model = config.model,
-      .dialect = scry::ProviderDialect::openai_compatible,
-      .sampling = {.temperature = config.temperature,
-                   .top_p = std::nullopt,
-                   .max_tokens = config.max_output_tokens},
-      // Explicitly disabling hidden reasoning keeps bounded local runs finite
-      // and leaves the visible transcript focused on actions across providers.
-      .reasoning_mode = scry::ReasoningMode::disabled,
-      .retry = {},
-      .timeouts = {},
-      .limits = {},
-      .max_tool_rounds = config.max_tool_rounds,
-      .tls_verify_peer = true,
-  };
-}
-
-/// @brief Project each typed tool response into the small application outcome
-/// model. Exact response details remain available in ToolActivity::result_json.
-[[nodiscard]] ToolOutcome tool_outcome(const MoveToolResponse &response) {
-  if (!response.action_executed) {
-    return ToolOutcome::budget_exhausted;
-  }
-  if (response.reason) {
-    switch (*response.reason) {
-    case world::MoveFailure::wall:
-      return ToolOutcome::blocked_by_wall;
-    }
-  }
-  return ToolOutcome::succeeded;
-}
-
-[[nodiscard]] ToolOutcome tool_outcome(const LookToolResponse &response) {
-  return response.action_executed ? ToolOutcome::succeeded
-                                  : ToolOutcome::budget_exhausted;
-}
-
-[[nodiscard]] ToolOutcome tool_outcome(const EatToolResponse &response) {
-  if (!response.action_executed) {
-    return ToolOutcome::budget_exhausted;
-  }
-  if (response.reason) {
-    switch (*response.reason) {
-    case world::EatFailure::nothing_here:
-      return ToolOutcome::nothing_to_eat;
-    }
-  }
-  return ToolOutcome::succeeded;
-}
-
 } // namespace
 
 class Session::Impl final {
 public:
   Impl(Config initial_config, std::unique_ptr<MetricsWriter> initial_metrics,
+       std::unique_ptr<world::World> initial_world,
+       std::unique_ptr<WorldToolBinding> initial_tools,
        scry::Harness initial_harness, scry::Conversation initial_conversation)
-      : config(std::move(initial_config)),
-        world(std::make_shared<world::World>(this->config.seed)),
-        metrics(std::move(initial_metrics)),
+      : config(std::move(initial_config)), world(std::move(initial_world)),
+        metrics(std::move(initial_metrics)), tools(std::move(initial_tools)),
         harness(std::move(initial_harness)),
         conversation(std::move(initial_conversation)),
-        tools(*world, this->config),
-        transport(this->harness, this->conversation),
+        transport(
+            this->harness, this->conversation,
+            {.on_tool_request = [this](const scry::ToolRequest &)
+                 -> std::optional<scry::ToolRejection> {
+               return tools->admit(!metrics_error.empty());
+             },
+             .on_tool_call =
+                 [this](const scry::ToolCall &call) { tools->observe(call); },
+             .on_turn_finished = [this] { tools->flush_pending_activity(); }}),
         runner(
             transport, static_cast<std::uint32_t>(this->config.turn_budget),
             [this] { return world->all_positive_items_eaten(); },
@@ -107,6 +56,8 @@ public:
                       if (auto status = this->metrics->record_turn(record);
                           !status) {
                         metrics_error = std::move(status.error());
+                      }
+                      if (!metrics_error.empty()) {
                         static_cast<void>(runner.fail(metrics_error));
                       }
                     },
@@ -119,55 +70,46 @@ public:
                       }
                     },
             },
-            [this] { return activities.size(); }) {}
+            [this] { return activities.size(); }) {
+    tools->on_activity = [this](ToolActivity activity) {
+      activity.tick = activities.size() + 1U;
+      activity.turn = runner.snapshot().turns_used + 1U;
+      activities.push_back(std::move(activity));
+      if (auto recorded = metrics->record_tool(activities.back()); !recorded) {
+        metrics_error = std::move(recorded.error());
+      }
+    };
+  }
 
   Config config;
-  std::shared_ptr<world::World> world;
+  std::unique_ptr<world::World> world;
   ToolActivityFeed activities{};
   std::unique_ptr<MetricsWriter> metrics;
+  // Destruction runs in reverse: bindings and world outlive the harness.
+  std::unique_ptr<WorldToolBinding> tools;
   scry::Harness harness;
   scry::Conversation conversation;
-  WorldTools tools;
   ScryTurnTransport transport;
   EpisodeRunner runner;
-  std::uint64_t next_tool_tick{1};
   std::string metrics_error{};
-  bool metrics_failure_pending{};
 };
 
 std::expected<std::shared_ptr<Session>, std::string>
 Session::create(Config config, std::filesystem::path log_directory,
                 std::string prompt_variant) {
-  if (config.base_url.empty()) {
-    return std::unexpected("base URL cannot be empty");
-  }
-  if (config.model.empty()) {
-    return std::unexpected("model cannot be empty");
-  }
   if (config.turn_budget == 0) {
     return std::unexpected("turn budget must be greater than zero");
   }
   if (config.turn_budget > 10'000) {
     return std::unexpected("turn budget must not exceed 10000");
   }
-  if (config.max_tool_rounds == 0) {
-    return std::unexpected("maximum tool rounds must be greater than zero");
-  }
   if (config.max_tool_rounds > 64) {
     return std::unexpected("maximum tool rounds must not exceed 64");
   }
-  if (config.max_output_tokens == 0) {
-    return std::unexpected("maximum output tokens must be greater than zero");
-  }
-  if (!std::isfinite(config.temperature) || config.temperature < 0.0 ||
-      config.temperature > 2.0) {
-    return std::unexpected("temperature must be finite and in the range 0..2");
-  }
-
   // Let scry reject a bad provider config before anything with a side effect
   // happens: validate() runs create()'s checks without starting a worker, and
   // the metrics log below is only opened once the whole config is known good.
-  const auto provider = provider_config(config);
+  const auto provider = scry_config(config, environment("PIGPEN_API_KEY"));
   if (auto valid = scry::Harness::validate(provider); !valid) {
     return std::unexpected(valid.error().message);
   }
@@ -176,7 +118,13 @@ Session::create(Config config, std::filesystem::path log_directory,
   if (!conversation) {
     return std::unexpected(conversation.error().message);
   }
-  auto harness = scry::Harness::create(provider);
+  auto world = std::make_unique<world::World>(config.seed);
+  auto tools = std::make_unique<WorldToolBinding>(*world, config);
+  auto registry = tools->registry();
+  if (!registry) {
+    return std::unexpected(registry.error().message);
+  }
+  auto harness = scry::Harness::create(provider, std::move(*registry));
   if (!harness) {
     return std::unexpected(harness.error().message);
   }
@@ -186,96 +134,17 @@ Session::create(Config config, std::filesystem::path log_directory,
     return std::unexpected(std::move(metrics.error()));
   }
 
-  auto session = std::shared_ptr<Session>{new Session{
-      std::make_unique<Impl>(std::move(config), std::move(*metrics),
-                             std::move(*harness), std::move(*conversation))}};
-  if (auto registered = session->register_tools(); !registered) {
-    return std::unexpected(std::move(registered.error()));
-  }
-  return session;
+  return std::shared_ptr<Session>{new Session{std::make_unique<Impl>(
+      std::move(config), std::move(*metrics), std::move(world),
+      std::move(tools), std::move(*harness), std::move(*conversation))}};
 }
 
 Session::Session(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
 
-Session::~Session() = default;
-
-std::expected<void, std::string> Session::register_tools() {
-  const std::weak_ptr<Session> weak_session{shared_from_this()};
-  const auto add = [this, weak_session]<typename Arguments, typename Invoke>(
-                       const ToolKind kind, std::string description,
-                       Invoke invoke) {
-    using Execution = std::invoke_result_t<Invoke &, WorldTools &, Arguments>;
-    using Response = typename Execution::response_type;
-    return scry::reflection::add<Arguments>(
-        impl_->harness.tools(),
-        {
-            .name = std::string{tool_kind_name(kind)},
-            .description = std::move(description),
-        },
-        [weak_session, kind, invoke = std::move(invoke)](
-            Arguments arguments) mutable -> scry::Result<Response> {
-          const auto session = weak_session.lock();
-          if (!session) {
-            return std::unexpected(scry::Error{
-                .category = scry::ErrorCategory::invalid_state,
-                .message = "pig-pen session no longer exists",
-            });
-          }
-          const auto snapshot = session->impl_->runner.snapshot();
-          const auto turn = snapshot.turns_used + 1U;
-          auto arguments_json = scry::reflection::encode(arguments);
-          if (!arguments_json) {
-            return std::unexpected(std::move(arguments_json.error()));
-          }
-          session->impl_->tools.begin_turn(turn);
-          auto execution =
-              std::invoke(invoke, session->impl_->tools, std::move(arguments));
-          auto response_json = scry::reflection::encode(execution.response);
-          if (!response_json) {
-            return std::unexpected(std::move(response_json.error()));
-          }
-          session->impl_->activities.push_back(ToolActivity{
-              .tick = session->impl_->next_tool_tick++,
-              .turn = turn,
-              .kind = kind,
-              .outcome = tool_outcome(execution.response),
-              .arguments_json = std::move(arguments_json->text),
-              .result_json = std::move(response_json->text),
-              .before = execution.before,
-              .after = execution.after,
-              .direction = execution.direction,
-              .eaten = execution.eaten,
-              .score_after = session->impl_->world->score(),
-          });
-          const auto &activity = session->impl_->activities.back();
-          if (auto recorded = session->impl_->metrics->record_tool(activity);
-              !recorded) {
-            session->impl_->metrics_error = std::move(recorded.error());
-            session->impl_->metrics_failure_pending = true;
-          }
-          return std::move(execution.response);
-        });
-  };
-
-  if (auto status = add.template operator()<DirectionArguments>(
-          ToolKind::move, "Move one cell north, south, east, or west.",
-          &WorldTools::move);
-      !status) {
-    return std::unexpected(status.error().message);
-  }
-  if (auto status = add.template operator()<DirectionArguments>(
-          ToolKind::look, "Scan every cell in one direction to the wall.",
-          &WorldTools::look);
-      !status) {
-    return std::unexpected(status.error().message);
-  }
-  if (auto status = add.template operator()<EatArguments>(
-          ToolKind::eat, "Eat the item on the current cell, if present.",
-          &WorldTools::eat);
-      !status) {
-    return std::unexpected(status.error().message);
-  }
-  return {};
+Session::~Session() {
+  // The activity sink uses the runner and metrics writer. Flush while both
+  // are alive; member teardown cancels and disconnects the transport next.
+  impl_->tools->flush_pending_activity();
 }
 
 PumpStats Session::pump() {
@@ -283,14 +152,9 @@ PumpStats Session::pump() {
       .time_budget = std::chrono::milliseconds{2},
       .max_callbacks = 32,
   });
-  if (std::exchange(impl_->metrics_failure_pending, false)) {
-    // The world action and its typed response have already committed. Fail the
-    // episode only after Harness::update returns so the model receives that
-    // truthful response and cancellation is not re-entrant through dispatch.
-    static_cast<void>(impl_->runner.fail(impl_->metrics_error));
-  } else {
-    impl_->runner.tick();
-  }
+  // Turn completion is the single place that ends an episode on logging
+  // failure, after admission has refused further actions and results commit.
+  impl_->runner.tick();
   return {
       .callbacks_delivered = stats.callbacks_delivered,
       .events_remaining = stats.events_remaining,
@@ -319,7 +183,6 @@ const ToolActivityFeed &Session::tool_activities() const noexcept {
   return impl_->activities;
 }
 const EpisodeRunner &Session::runner() const noexcept { return impl_->runner; }
-EpisodeRunner &Session::runner() noexcept { return impl_->runner; }
 std::size_t Session::tool_call_count() const noexcept {
   return impl_->activities.size();
 }

@@ -12,6 +12,7 @@ namespace {
 [[nodiscard]] std::string finish_reason_error(const scry::FinishReason reason) {
   switch (reason) {
   case scry::FinishReason::completed:
+  case scry::FinishReason::tool_round_limit:
     return {};
   case scry::FinishReason::length:
     return "model response reached its output-token limit";
@@ -26,8 +27,26 @@ namespace {
 } // namespace
 
 ScryTurnTransport::ScryTurnTransport(scry::Harness &harness,
-                                     scry::Conversation &conversation)
-    : harness_(harness), conversation_(conversation) {}
+                                     scry::Conversation &conversation,
+                                     ScryToolObservers observers)
+    : harness_(harness), conversation_(conversation),
+      observers_(std::move(observers)) {}
+
+scry::Config scry_config(const Config &config, std::string api_key) {
+  return {
+      .base_url = config.base_url,
+      .api_key = std::move(api_key),
+      .model = config.model,
+      .dialect = scry::ProviderDialect::openai_compatible,
+      .sampling = {.temperature = config.temperature,
+                   .top_p = std::nullopt,
+                   .max_tokens = config.max_output_tokens},
+      .reasoning_mode = scry::ReasoningMode::disabled,
+      .max_tool_rounds = config.max_tool_rounds,
+      .max_tool_calls_per_turn = max_world_tool_calls_per_turn,
+      .tool_round_limit = scry::ToolRoundLimitPolicy::complete,
+  };
+}
 
 ScryTurnTransport::~ScryTurnTransport() {
   if (turn_) {
@@ -55,9 +74,24 @@ ScryTurnTransport::send(std::string user_message, TurnCallbacks callbacks) {
                   callback(delta);
                 }
               },
+          .on_tool_request =
+              [this](const scry::ToolRequest &request) {
+                return observers_.on_tool_request
+                           ? observers_.on_tool_request(request)
+                           : std::nullopt;
+              },
+          .on_tool_call =
+              [this](const scry::ToolCall &call) {
+                if (observers_.on_tool_call) {
+                  observers_.on_tool_call(call);
+                }
+              },
           .on_finished =
-              [callback = std::move(callbacks.on_finished)](
+              [this, callback = std::move(callbacks.on_finished)](
                   scry::Result<scry::Completion> finished) mutable {
+                if (observers_.on_turn_finished) {
+                  observers_.on_turn_finished();
+                }
                 if (!callback) {
                   return;
                 }
@@ -81,6 +115,18 @@ ScryTurnTransport::send(std::string user_message, TurnCallbacks callbacks) {
                     .error = reason_error,
                     .input_tokens = finished->usage.input_tokens,
                     .output_tokens = finished->usage.output_tokens,
+                    .tool_stats =
+                        TurnToolStats{
+                            .rounds = finished->tool_round_count,
+                            .calls = finished->tool_call_count,
+                            .rejected_calls =
+                                finished->rejected_tool_call_count,
+                            .round_limit_reached =
+                                finished->finish_reason ==
+                                scry::FinishReason::tool_round_limit,
+                            .unexecuted_calls =
+                                finished->unexecuted_tool_calls.size(),
+                        },
                 });
               },
       });

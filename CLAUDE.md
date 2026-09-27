@@ -107,7 +107,7 @@ Key invariants to preserve:
   `pigpen_agent` TU compiles with it; `pigpen_agent` links scry privately,
   which keeps the requirement out of `pigpen_world`, `pigpen_ui`, and the
   front-end TUs — keep it that way.
-- **Nothing blocks, no background threads.** Both front ends drive
+- **Application callbacks run on the pump thread.** Scry owns its I/O worker. Both front ends drive
   `Session::pump()` from their own loop (GUI per frame, CLI in a sleep-1ms
   loop). Cancellation is cooperative: an episode isn't finished until the
   terminal callback arrives, which is what guarantees the JSONL footer is
@@ -115,7 +115,11 @@ Key invariants to preserve:
 - **Two test seams**: `ITurnTransport` lets `EpisodeRunner` be driven by a
   scripted transport; `WorldTools` accepts/returns only reflected C++ values.
   New agent-layer code should stay testable through one of these.
-- Tools hold a `weak_ptr` back to the session so late callbacks fail cleanly.
+- The standalone tool registry captures stable world bindings that outlive the
+  harness. Transport destruction cancels and disconnects delivery.
+- Scry v0.4.0 owns call admission, the four-request limit (invalid calls count),
+  and history-preserving round-limit completion. `WorldTools` owns only world
+  semantics and visibility. Exact activity payloads come from `on_tool_call`.
 - The three scenario flags (`--hidden-values`, `--no-reward-feedback`,
   `--opaque-look`) change only what the model is told — the world, scoring,
   and log always record the truth.

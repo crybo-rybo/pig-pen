@@ -47,28 +47,11 @@ become property names and the `world::Direction` enumerators become the accepted
 strings. Generated object schemas set `additionalProperties: false`, so extra
 arguments are rejected rather than ignored.
 
-Pig Pen executes at most four world-tool actions per conversation turn. Every
-successfully decoded call returns a flat reflected response with common status
-and budget fields plus the tool-specific fields:
-
-```json
-{
-  "action_executed": true,
-  "error": null,
-  "error_code": null,
-  "ok": true,
-  "...": "tool-specific fields",
-  "turn_tool_budget": {
-    "used": 3,
-    "remaining": 1,
-    "instruction": "1 world-tool call remains in this turn."
-  }
-}
-```
-
-The fourth result tells the model to return its final summary. Further calls
-reach the typed handler and are logged, but do not change the world; they return
-`ok: false`, `action_executed: false`, and a `tool_budget_exhausted` error.
+Scry enforces a maximum of four tool requests per conversation turn across all
+rounds and batches. Unknown tools and invalid arguments also spend this budget.
+Calls beyond it are refused before any world handler runs; the model receives a
+Scry tool error asking it to summarize. Admitted, decoded calls return flat
+reflected world results with `ok` and the tool-specific fields below.
 
 ### `look(direction)`
 
@@ -80,13 +63,9 @@ observed.
 ```
 ```json
 {
-  "action_executed": true,
   "cells": [{"distance": 1, "item": null}, {"distance": 2, "item": "berry"}],
   "direction": "north",
-  "error": null,
-  "error_code": null,
   "ok": true,
-  "turn_tool_budget": {"used": 1, "remaining": 3, "instruction": "3 world-tool calls remain in this turn."},
   "wall_at_distance": 5
 }
 ```
@@ -102,14 +81,10 @@ models most often get wrong.
 
 ```json
 {
-  "action_executed": true,
-  "error": null,
-  "error_code": null,
   "item_here": "apple",
   "ok": true,
   "position": {"x": 5, "y": 6},
-  "reason": null,
-  "turn_tool_budget": {"used": 1, "remaining": 3, "instruction": "3 world-tool calls remain in this turn."}
+  "reason": null
 }
 ```
 
@@ -117,14 +92,10 @@ Walking into a wall is a normal, recoverable outcome, not an error:
 
 ```json
 {
-  "action_executed": true,
-  "error": null,
-  "error_code": null,
   "item_here": null,
   "ok": false,
   "position": {"x": 5, "y": 9},
-  "reason": "wall",
-  "turn_tool_budget": {"used": 1, "remaining": 3, "instruction": "3 world-tool calls remain in this turn."}
+  "reason": "wall"
 }
 ```
 
@@ -135,61 +106,47 @@ cell and applies its reward to the score.
 
 ```json
 {
-  "action_executed": true,
   "ate": "truffle",
-  "error": null,
-  "error_code": null,
   "ok": true,
   "reason": null,
   "reward": 10,
-  "score": 11,
-  "turn_tool_budget": {"used": 1, "remaining": 3, "instruction": "3 world-tool calls remain in this turn."}
+  "score": 11
 }
 ```
 ```json
 {
-  "action_executed": true,
   "ate": null,
-  "error": null,
-  "error_code": null,
   "ok": false,
   "reason": "nothing_here",
   "reward": null,
-  "score": null,
-  "turn_tool_budget": {"used": 1, "remaining": 3, "instruction": "3 world-tool calls remain in this turn."}
+  "score": null
 }
 ```
 
-### Tool errors
+### Tool errors and limits
 
-Scry owns JSON parsing, schema validation, and reflected decoding. Calls with
-unknown tools or invalid arguments are rejected at that boundary and never
-enter `WorldTools`, consume Pig Pen's action budget, or create a decoded world
-event.
-
-A successfully decoded call beyond the per-turn action limit does reach
-`WorldTools` and returns a flat typed failure without executing an action:
+Scry owns JSON parsing, schema validation, reflected decoding, and the call
+budget. Unknown tools, invalid arguments, and over-budget requests never enter
+`WorldTools` or create world activity. The model receives an error with enough
+information to correct the request, for example:
 
 ```json
-{
-  "action_executed": false,
-  "error": "No action was executed because this turn's world-tool call budget is exhausted.",
-  "error_code": "tool_budget_exhausted",
-  "item_here": null,
-  "ok": false,
-  "position": {"x": 5, "y": 5},
-  "reason": null,
-  "turn_tool_budget": {
-    "used": 4,
-    "remaining": 0,
-    "instruction": "Tool budget exhausted for this turn. Return your final summary now without calling another tool."
-  }
-}
+{"error":"$.direction is not a declared enumerator; must be one of: north, south, east, west"}
 ```
 
-Each successfully decoded handler invocation appends exactly one event. The
-event records whether an action actually executed, so budget rejections remain
-observable without being animated as world actions.
+```json
+{"error":"tool call limit for this turn reached; respond without calling tools"}
+```
+
+Scry's admission hook also refuses subsequent actions when the objective is
+complete or the episode log has failed, including later calls in the same batch.
+The current turn can finish with its executed results intact. Ordinary world
+outcomes such as a wall or an empty cell stay typed results, not protocol errors.
+
+Pig Pen selects `ToolRoundLimitPolicy::complete`: reaching `max_tool_rounds`
+commits the rounds already executed instead of discarding their history. Calls
+requested beyond that round limit never run. Their count appears in the turn
+log and the next automatic prompt tells the model they were not executed.
 
 ## What the model is told
 

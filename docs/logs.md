@@ -33,29 +33,34 @@ Written when the session is created, before the model is contacted.
 preset name. `temperature` records model sampling separately from the
 deterministic world `seed`, and `max_output_tokens` records the per-request
 limit Pig Pen asks the provider to apply. `max_world_tool_calls_per_turn`
-records the hard action cap enforced by Pig Pen. Everything needed to describe
+records the request cap enforced by Scry (invalid requests also count). Everything needed to describe
 the run is in this line, although model sampling is not guaranteed to be
 reproducible.
 
 ## `tool`
 
 One line per successfully decoded reflected world-tool invocation. Calls Scry
-rejects during protocol or schema validation do not enter Pig Pen's world
+rejects during admission, budget, protocol, or schema validation do not enter Pig Pen's world
 layer and therefore do not produce a `tool` record.
 
 ```json
 {"type":"tool","turn":1,"tick":2,"tool":"look",
+ "scry_turn_id":1,"call_id":"call_2","round":1,"index":1,
  "args":{"direction":"south"},
- "result":{"action_executed":true,"cells":[{"distance":1,"item":"berry"}],"direction":"south","error":null,"error_code":null,"ok":true,"turn_tool_budget":{"used":2,"remaining":2,"instruction":"2 world-tool calls remain in this turn."},"wall_at_distance":6},
- "before":{"x":5,"y":5},"after":{"x":5,"y":5},"action_executed":true,"score_after":0}
+ "result":{"cells":[{"distance":1,"item":"berry"}],"direction":"south","ok":true,"wall_at_distance":6},
+ "before":{"x":5,"y":5},"after":{"x":5,"y":5},"action_executed":true,"result_dispatched":true,"score_after":0}
 ```
 
 `tick` is a monotonic counter across the whole episode. `before`/`after` are
 the blob's position either side of the call — identical for `look`, `eat`, a
-wall-blocked `move`, and a call rejected by Pig Pen's action budget.
-`action_executed` distinguishes that budget rejection from an executed world
-operation. `args` and `result` come from Scry's public reflection encoder, the
-same canonical encoder used for registered tool results. A log made with
+wall-blocked `move`. `action_executed` remains `true` for these world records;
+refused calls never enter the feed. `scry_turn_id`, `call_id`, `round` (one-based),
+and `index` (zero-based within the batch) come from Scry's contextual handler.
+`turn` is Pig Pen's episode turn number. `args` and `result` are copied from
+Scry's dispatch observation, exactly as posted for the provider.
+`result_dispatched: false` marks a world action whose result could not be posted
+because the turn failed during dispatch; `args` and `result` are then `null`,
+while the typed transition and score remain truthful. A log made with
 `--opaque-look` therefore shows `"something"` here too.
 
 ## `turn`
@@ -67,12 +72,24 @@ One line per conversation turn, flushed as it completes.
  "user_message":"Automatic turn instructions:\nContinue exploring autonomously. ... Turn 1 of 2.",
  "assistant_text":"I have explored the pen and found valuable items. ...",
  "error":"","input_tokens":1699,"output_tokens":198,"tool_calls":2,
- "zero_tool_turn":false,"latency_ms":2499}
+ "zero_tool_turn":false,"latency_ms":2499,
+ "scry_tools":{"rounds":1,"calls":2,"rejected_calls":0,
+   "round_limit_reached":false,"unexecuted_calls":0}}
 ```
 
 `status` is `completed`, `cancelled`, or `error`. `tool_calls` is counted from
 successfully decoded reflected handler invocations for this turn and
 `zero_tool_turn` makes narration-only or invalid-call-only turns easy to query.
+`scry_tools` comes from Scry's completion: `calls` includes unknown, undecodable,
+and refused requests; `rejected_calls` counts admission/budget refusals, not
+decode errors. `rounds` counts dispatched rounds. `round_limit_reached` and
+`unexecuted_calls` report requests dropped when the round cap completes a turn.
+Those dropped calls are in neither `calls` nor the activity feed. The whole
+`scry_tools` value is `null` when Scry fails/cancels without a Completion;
+world `tool_calls` still records any actions already observed. A provider token
+limit does return a Completion with statistics, although Pig Pen treats that
+truncated response as a turn error.
+
 Token counts come from the provider; `latency_ms` is measured locally around
 the turn.
 
@@ -101,17 +118,17 @@ jq -s '{header: first, footer: last, tools: [.[] | select(.type == "tool")]}' \
   logs/<run>.jsonl
 ```
 
-Just the decoded-call trace (including budget rejections):
+Just the executed world-call trace:
 
 ```sh
 jq -r 'select(.type=="tool")
   | "\(.tick) \(.tool) \(.args) -> \(.result | tostring[0:80])"' logs/<run>.jsonl
 ```
 
-Calls rejected by Pig Pen's per-turn action budget:
+Turns containing Scry budget or admission refusals:
 
 ```sh
-jq -c 'select(.type=="tool" and (.action_executed | not))' logs/<run>.jsonl
+jq -c 'select(.type=="turn" and (.scry_tools.rejected_calls // 0) > 0)' logs/<run>.jsonl
 ```
 
 Compare the outcome of several runs:
@@ -126,3 +143,12 @@ done
 Since the world is seed-deterministic, two runs with the same seed and turn
 budget differ only in what the model did — the ordered `tool` records line up
 directly.
+
+## Scry v0.4.0 migration
+
+World result payloads no longer contain `action_executed`, `error`, `error_code`,
+or `turn_tool_budget`; those fields implemented the old application-side budget.
+The outer world-log `action_executed` field remains for readers of older logs.
+Budget refusals now appear in `scry_tools.rejected_calls`, not as `tool` records.
+The four-request limit now includes unknown and malformed-argument requests, so
+runs with invalid calls can execute fewer world actions than before.

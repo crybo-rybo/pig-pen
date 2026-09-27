@@ -192,12 +192,17 @@ MetricsWriter::record_tool(const ToolActivity &activity) {
       {"type", "tool"},
       {"turn", activity.turn},
       {"tick", activity.tick},
+      {"scry_turn_id", activity.scry_turn_id},
+      {"call_id", activity.call_id},
+      {"round", activity.round},
+      {"index", activity.index},
       {"tool", tool_kind_name(activity.kind)},
       {"args", std::move(arguments)},
       {"result", std::move(result)},
       {"before", position_json(activity.before)},
       {"after", position_json(activity.after)},
-      {"action_executed", activity.action_executed()},
+      {"action_executed", true},
+      {"result_dispatched", activity.result_dispatched},
       {"score_after", activity.score_after},
   }
                         .dump());
@@ -209,6 +214,15 @@ MetricsWriter::record_turn(const TurnRecord &record) {
     return std::unexpected("cannot record a turn after the metrics footer");
   }
   turns_recorded_ = std::max(turns_recorded_, record.turn);
+  nlohmann::json tool_stats = nullptr;
+  if (record.tool_stats) {
+    const auto &stats = *record.tool_stats;
+    tool_stats = {{"rounds", stats.rounds},
+                  {"calls", stats.calls},
+                  {"rejected_calls", stats.rejected_calls},
+                  {"round_limit_reached", stats.round_limit_reached},
+                  {"unexecuted_calls", stats.unexecuted_calls}};
+  }
   return write_line(
       nlohmann::json{
           {"type", "turn"},
@@ -220,6 +234,7 @@ MetricsWriter::record_turn(const TurnRecord &record) {
           {"input_tokens", record.input_tokens},
           {"output_tokens", record.output_tokens},
           {"tool_calls", record.tool_calls},
+          {"scry_tools", std::move(tool_stats)},
           {"zero_tool_turn",
            record.status == TurnStatus::completed && record.tool_calls == 0U},
           {"latency_ms", record.latency.count()},

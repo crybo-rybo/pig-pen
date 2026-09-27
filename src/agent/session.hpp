@@ -30,13 +30,12 @@ struct PumpStats {
 /// resets the world, conversation, additive tool registry, callbacks, and
 /// log.
 ///
-/// Tools are registered on the harness with a weak_ptr back to the session,
-/// so a callback arriving after the session is gone fails cleanly instead
-/// of touching freed state.
-class Session final : public std::enable_shared_from_this<Session> {
+/// The harness adopts a standalone tool registry whose bindings and world
+/// outlive it; turn delivery is disconnected before any state is destroyed.
+class Session final {
 public:
-  /// @brief Validate @p config, open the metrics log, build the scry
-  /// harness and conversation, and register the world tools.
+  /// @brief Validate @p config and compose the world, registered harness,
+  /// conversation, and already-open metrics log.
   /// @return The session, or a human-readable rejection message.
   [[nodiscard]] static std::expected<std::shared_ptr<Session>, std::string>
   create(Config config, std::filesystem::path log_directory = "logs",
@@ -73,8 +72,6 @@ public:
   [[nodiscard]] const ToolActivityFeed &tool_activities() const noexcept;
   /// @brief The episode state machine.
   [[nodiscard]] const EpisodeRunner &runner() const noexcept;
-  /// @brief The episode state machine.
-  [[nodiscard]] EpisodeRunner &runner() noexcept;
   /// @brief Number of successfully decoded world-tool invocations so far.
   [[nodiscard]] std::size_t tool_call_count() const noexcept;
   /// @brief Path of this session's JSONL metrics log.
@@ -86,7 +83,6 @@ private:
   class Impl;
 
   explicit Session(std::unique_ptr<Impl> impl);
-  [[nodiscard]] std::expected<void, std::string> register_tools();
 
   std::unique_ptr<Impl> impl_;
 };

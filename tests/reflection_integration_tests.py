@@ -462,23 +462,13 @@ def extract_tool_response(request: ProviderRequest) -> dict[str, Any]:
         set(response)
         == {
             "ok",
-            "action_executed",
-            "error_code",
-            "error",
             "item_here",
             "position",
             "reason",
-            "turn_tool_budget",
         },
         f"tool result is not the flat typed response: {response!r}",
     )
     check(response["ok"] is True, f"east move was not successful: {response!r}")
-    check(
-        response["action_executed"] is True,
-        f"east move was not executed: {response!r}",
-    )
-    check(response["error_code"] is None, f"move has an error code: {response!r}")
-    check(response["error"] is None, f"move unexpectedly failed: {response!r}")
     check(
         response["position"] == {"x": 6, "y": 5},
         f"east move reached the wrong position: {response!r}",
@@ -491,15 +481,6 @@ def extract_tool_response(request: ProviderRequest) -> dict[str, Any]:
         response["item_here"] is None
         or response["item_here"] in {"berry", "apple", "truffle", "toadstool"},
         f"move returned an invalid reflected item enum: {response!r}",
-    )
-    check(
-        response["turn_tool_budget"]
-        == {
-            "used": 1,
-            "remaining": 3,
-            "instruction": "3 world-tool calls remain in this turn.",
-        },
-        f"unexpected typed turn budget: {response['turn_tool_budget']!r}",
     )
     return response
 
@@ -557,8 +538,25 @@ def assert_reflection_rejection(request: ProviderRequest) -> None:
     content = result.get("content")
     check(isinstance(content, str), f"reflected error is not JSON text: {content!r}")
     check(
-        json.loads(content) == {"error": "tool handler returned an error"},
+        json.loads(content)
+        == {
+            "error": "$.direction is not a declared enumerator; must be one of: north, south, east, west"
+        },
         f"unexpected public reflected error result: {content!r}",
+    )
+
+
+def assert_one_scry_call(turn: dict[str, Any]) -> None:
+    check(
+        turn.get("scry_tools")
+        == {
+            "rounds": 1,
+            "calls": 1,
+            "rejected_calls": 0,
+            "round_limit_reached": False,
+            "unexecuted_calls": 0,
+        },
+        f"native Scry accounting differs from world-action accounting: {turn!r}",
     )
 
 
@@ -583,6 +581,11 @@ def assert_valid_jsonl_log(
     check(tool.get("after") == {"x": 6, "y": 5}, f"wrong after: {tool!r}")
     check(tool.get("action_executed") is True, f"move was not marked: {tool!r}")
     check(tool.get("score_after") == 0, f"move changed the score: {tool!r}")
+    check(tool.get("call_id") == TOOL_CALL_ID, f"wrong call identity: {tool!r}")
+    check(tool.get("scry_turn_id") == 1, f"wrong Scry turn: {tool!r}")
+    check(tool.get("round") == 1, f"wrong tool round: {tool!r}")
+    check(tool.get("index") == 0, f"wrong tool index: {tool!r}")
+    check(tool.get("result_dispatched") is True, f"result was not dispatched: {tool!r}")
 
     header = records[0]
     check(header.get("type") == "header", f"missing JSONL header: {records!r}")
@@ -596,6 +599,7 @@ def assert_valid_jsonl_log(
         f"final provider text was not recorded: {turn_records[0]!r}",
     )
     check(turn_records[0].get("tool_calls") == 1, f"wrong turn count: {records!r}")
+    assert_one_scry_call(turn_records[0])
 
     footer = records[-1]
     check(footer.get("type") == "footer", f"missing JSONL footer: {records!r}")
@@ -652,6 +656,7 @@ def assert_rejected_jsonl_log(records: list[dict[str, Any]], base_url: str) -> N
         f"rejection final text was not logged: {turn!r}",
     )
     check(turn.get("tool_calls") == 0, f"rejected call was counted: {turn!r}")
+    assert_one_scry_call(turn)
     check(turn.get("zero_tool_turn") is True, f"wrong zero-tool marker: {turn!r}")
 
     footer = records[-1]

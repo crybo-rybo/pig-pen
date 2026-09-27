@@ -43,13 +43,18 @@ list(APPEND CMAKE_MODULE_PATH "${catch2_SOURCE_DIR}/extras")
 include(Catch)
 catch_discover_tests(pigpen_tests)
 
-add_executable(pigpen_reflection_tests tests/world_tools_tests.cpp)
+add_executable(pigpen_reflection_tests
+  tests/world_tools_tests.cpp
+  tests/scry_transport_tests.cpp
+)
 target_link_libraries(
   pigpen_reflection_tests
   PRIVATE
     Catch2::Catch2WithMain
     nlohmann_json::nlohmann_json
     pigpen_reflected_tools
+    pigpen_agent
+    scry::testing
 )
 pigpen_target(pigpen_reflection_tests)
 catch_discover_tests(pigpen_reflection_tests)

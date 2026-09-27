@@ -194,6 +194,36 @@ TEST_CASE(
         pigpen::agent::TranscriptRole::error);
 }
 
+TEST_CASE("logging failure at turn completion prevents another turn") {
+  FakeTransport transport;
+  std::size_t finished_episodes{};
+  pigpen::agent::EpisodeRunner runner{
+      transport,
+      4,
+      [] { return false; },
+      {.on_turn_finished =
+           [&runner](const auto &) {
+             REQUIRE(runner.fail("metrics sink failed"));
+           },
+       .on_episode_finished =
+           [&finished_episodes](const auto &) { ++finished_episodes; }}};
+  REQUIRE(runner.play());
+  runner.tick();
+  SECTION("successful provider turn") { transport.complete(); }
+  SECTION("failed provider turn") {
+    transport.complete({.status = pigpen::agent::TurnStatus::error,
+                        .error = "provider failed"});
+  }
+  runner.tick();
+  CHECK(transport.send_count == 1);
+  CHECK(transport.cancel_count == 0);
+  CHECK(runner.snapshot().turns_used == 1);
+  CHECK(runner.snapshot().finish_reason == pigpen::agent::FinishReason::error);
+  CHECK(runner.snapshot().error == "metrics sink failed");
+  CHECK(runner.transcript().back().text == "metrics sink failed");
+  CHECK(finished_episodes == 1);
+}
+
 TEST_CASE("immediate transport admission failure terminates the episode") {
   FakeTransport transport;
   transport.send_error = "busy";
@@ -336,4 +366,34 @@ TEST_CASE("a zero-tool turn adds a corrective automatic next-turn nudge") {
         std::string::npos);
   REQUIRE(turns.size() == 2);
   CHECK(turns[1].tool_calls == 1);
+}
+
+TEST_CASE(
+    "round-limit metadata reaches the log observer and next-turn prompt") {
+  FakeTransport transport;
+  std::vector<pigpen::agent::TurnRecord> turns;
+  pigpen::agent::EpisodeRunner runner{
+      transport,
+      2,
+      [] { return false; },
+      {.on_turn_finished = [&turns](const auto &turn) {
+        turns.push_back(turn);
+      }}};
+  REQUIRE(runner.play());
+  runner.tick();
+  transport.complete(
+      {.tool_stats = pigpen::agent::TurnToolStats{.rounds = 1,
+                                                  .calls = 2,
+                                                  .rejected_calls = 1,
+                                                  .round_limit_reached = true,
+                                                  .unexecuted_calls = 3}});
+  runner.tick();
+  REQUIRE(turns.size() == 1);
+  REQUIRE(turns.front().tool_stats);
+  CHECK(turns.front().tool_stats->calls == 2);
+  CHECK(turns.front().tool_stats->rejected_calls == 1);
+  CHECK(turns.front().tool_stats->round_limit_reached);
+  REQUIRE(transport.messages.size() == 2);
+  CHECK(transport.messages.back().find(
+            "3 requested tool calls were not executed") != std::string::npos);
 }

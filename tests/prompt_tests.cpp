@@ -52,8 +52,8 @@ TEST_CASE(
   CHECK(contains(prompt, "eat()"));
   CHECK(contains(prompt, "at most 11 conversation turns"));
   CHECK(contains(prompt, "at most 6 tool rounds per turn"));
-  CHECK(contains(prompt, "executes at most 4 world-tool actions"));
-  CHECK(contains(prompt, "successfully decoded world-tool result reports"));
+  CHECK(contains(prompt, "allows at most 4 world-tool requests"));
+  CHECK(contains(prompt, "including invalid requests"));
   CHECK(contains(prompt, "followed by a short final action summary"));
   CHECK(contains(prompt, "Prioritize calling the registered world tools"));
   CHECK(contains(prompt, "over extended thinking"));
@@ -128,4 +128,15 @@ TEST_CASE("Turn prompts sustain exploration and carry optional human input") {
   CHECK(contains(corrective, "previous turn executed zero world tools"));
   CHECK(contains(corrective, "Model narration is not an action"));
   CHECK(contains(corrective, "Begin this turn with a valid"));
+}
+
+TEST_CASE("turn recovery instructions remain separate from human guidance") {
+  const auto prompt = pigpen::agent::build_turn_prompt(
+      2, 20, "Please inspect the north wall.", true, 3);
+  const auto notice = prompt.find("3 requested tool calls were not executed");
+  REQUIRE(notice != std::string::npos);
+  CHECK(notice < prompt.find("Human guidance:"));
+  CHECK(prompt.ends_with("Human guidance:\nPlease inspect the north wall."));
+  CHECK_FALSE(contains(pigpen::agent::build_turn_prompt(3, 20),
+                       "requested tool calls were not executed"));
 }

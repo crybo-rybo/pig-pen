@@ -57,11 +57,15 @@ TEST_CASE("metrics log contains a reconcilable header tool turn and footer") {
       .outcome = pigpen::agent::ToolOutcome::succeeded,
       .arguments_json = "{}",
       .result_json =
-          R"({"action_executed":true,"ate":"berry","error":null,"error_code":null,"ok":true,"reason":null,"reward":1,"score":1,"turn_tool_budget":{"instruction":"3 world-tool calls remain in this turn.","remaining":3,"used":1}})",
+          R"({"ate":"berry","ok":true,"reason":null,"reward":1,"score":1})",
       .before = {.x = 4, .y = 4},
       .after = {.x = 4, .y = 4},
       .eaten = pigpen::world::ItemType::berry,
       .score_after = 1,
+      .scry_turn_id = 7,
+      .call_id = "eat-1",
+      .round = 2,
+      .index = 1,
   };
   REQUIRE(writer->record_tool(activity).has_value());
   REQUIRE(writer
@@ -71,6 +75,12 @@ TEST_CASE("metrics log contains a reconcilable header tool turn and footer") {
                   .assistant_text = "ate a berry",
                   .tool_calls = 1,
                   .latency = std::chrono::milliseconds{12},
+                  .tool_stats =
+                      pigpen::agent::TurnToolStats{.rounds = 2,
+                                                   .calls = 4,
+                                                   .rejected_calls = 1,
+                                                   .round_limit_reached = true,
+                                                   .unexecuted_calls = 2},
               })
               .has_value());
   REQUIRE(writer
@@ -94,11 +104,21 @@ TEST_CASE("metrics log contains a reconcilable header tool turn and footer") {
   REQUIRE(records[1].at("type") == "tool");
   REQUIRE(records[1].at("args") == nlohmann::json::object());
   REQUIRE(records[1].at("action_executed") == true);
+  CHECK(records[1].at("scry_turn_id") == 7);
+  CHECK(records[1].at("call_id") == "eat-1");
+  CHECK(records[1].at("round") == 2);
+  CHECK(records[1].at("index") == 1);
   REQUIRE(records[1].at("result") ==
           nlohmann::json::parse(activity.result_json));
   REQUIRE(records[2].at("type") == "turn");
   REQUIRE(records[2].at("tool_calls") == 1);
   REQUIRE(records[2].at("zero_tool_turn") == false);
+  CHECK(records[2].at("scry_tools") ==
+        nlohmann::json{{"rounds", 2},
+                       {"calls", 4},
+                       {"rejected_calls", 1},
+                       {"round_limit_reached", true},
+                       {"unexecuted_calls", 2}});
   REQUIRE(records.back().at("type") == "footer");
   REQUIRE(records.back().at("complete") == true);
   REQUIRE(records.back().at("final_score") == 1);

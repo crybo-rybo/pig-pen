@@ -15,7 +15,7 @@ ctest --preset dev
 
 The suite completes in a few seconds. **No external model server or external
 network access is required** after dependencies have been fetched. Unit tests
-use fake transports; the public-boundary integration test runs real Scry/Curl
+use fake transports and Scry's public scripted transport; the CLI integration test runs real Scry/Curl
 traffic against a loopback stub, so the suite remains safe to run offline.
 
 Configuration itself is part of the reflection gate: it requires GCC 16+ and a
@@ -33,9 +33,10 @@ covering:
 | file | covers |
 |---|---|
 | `tests/world_tests.cpp` | grid constants, seeded placement, movement and wall failures, `look` rays, eating and scoring, positive-item exhaustion, and seed determinism via `World::dump()` |
-| `tests/world_tools_tests.cpp` | compile-time reflected schemas, flat typed responses, the explicit turn/budget lifecycle, Scry's public observability encoder, and the `opaque_look` / `reward_feedback` toggles |
-| `tests/prompt_tests.cpp` | config defaults and that each prompt flag says what it claims — including that the hidden-values prompt never leaks the reward table |
-| `tests/episode_runner_tests.cpp` | the turn loop against a scripted transport: budget exhaustion, pause/resume, stop cancelling an in-flight turn, objective completion, terminal errors, and queued human input |
+| `tests/world_tools_tests.cpp` | compile-time reflected schemas, flat typed responses, Scry's public encoder, and the `opaque_look` / `reward_feedback` toggles |
+| `tests/scry_transport_tests.cpp` | standalone registry manifests, native call budgets across batches and turns, model-visible decode errors, exact dispatch payloads and identity, side effects on dispatch failure and shutdown, objective/logging admission, round-limit history preservation, cancellation, and transport lifetime using `scry::testing` |
+| `tests/prompt_tests.cpp` | config defaults and that each prompt flag says what it claims — including hidden rewards and keeping automatic recovery instructions separate from human guidance |
+| `tests/episode_runner_tests.cpp` | the turn loop against a scripted transport: budget exhaustion, pause/resume, stop cancelling an in-flight turn, objective completion, terminal/logging errors, and queued human input |
 | `tests/metrics_writer_tests.cpp` | header/tool/turn/footer reconciliation, the incomplete footer on destruction, and footer finality |
 | `tests/session_tests.cpp` | config rejection and that a session owns a seeded world plus a registered tool harness atomically |
 | `tests/world_animation_tests.cpp` | the typed activity feed becoming an ordered visual timeline, with caller-supplied time |
@@ -92,3 +93,7 @@ inspecting what happened.
 Note that `pig-pen-headless` writes to `logs/` in the current working
 directory — `cd` to a scratch directory first if you would rather not add to
 the project's logs.
+
+`SCRY_BUILD_TESTING_SUPPORT` follows `PIGPEN_BUILD_TESTS`; the scripted component
+is linked only into the reflection test binary and is absent from production-only
+builds. Loopback tests remain to cover CLI startup, Curl, and OS signals.

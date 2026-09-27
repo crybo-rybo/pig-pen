@@ -1,8 +1,8 @@
 /// @file prompt.hpp
 /// @brief Builders for the system prompt and the per-turn automatic nudge.
 ///
-/// Prompt text is derived from Config alone, so what the model is told is
-/// fully determined by the recorded episode settings.
+/// System instructions derive from Config; per-turn nudges also use recorded
+/// turn feedback and separately labelled human guidance.
 #pragma once
 
 #include "agent/config.hpp"
@@ -25,9 +25,12 @@ namespace pigpen::agent {
 /// section without weakening the autonomy instruction.
 /// @param recover_zero_tool_turn Appends a correction requiring a decoded
 /// world-tool invocation after a turn that produced none.
+/// @param unexecuted_tool_calls Reports calls dropped at the previous round
+/// cap.
 [[nodiscard]] std::string
 build_turn_prompt(std::size_t turn, std::size_t turn_budget,
                   std::string_view human_input = {},
-                  bool recover_zero_tool_turn = false);
+                  bool recover_zero_tool_turn = false,
+                  std::size_t unexecuted_tool_calls = 0);
 
 } // namespace pigpen::agent

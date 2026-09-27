@@ -37,7 +37,7 @@ text as it arrives, prints one line per decoded world-tool call with the before
 ```
 session model="llama3.1:8b-instruct-q4_K_M" base_url="http://127.0.0.1:11434/v1" seed=42 turns=4 max_tool_rounds=8 max_world_tool_calls_per_turn=4 max_output_tokens=8096 temperature=0
 log_path="logs/20260807-101500-123-llama3.1_8b-instruct-q4_K_M-42.jsonl"
-tool[turn=1,tick=1] look args={"direction":"north"} result={"action_executed":true,"cells":[...],"direction":"north","error":null,"error_code":null,"ok":true,"turn_tool_budget":{...},"wall_at_distance":5} position=(5,5)->(5,5)
+tool[turn=1,tick=1] look args={"direction":"north"} result={"cells":[...],"direction":"north","ok":true,"wall_at_distance":5} position=(5,5)->(5,5)
 assistant[turn=1]: I
 assistant[turn=1]:  scanned
 assistant[turn=1]:  north
@@ -52,9 +52,11 @@ notices go to stderr.
 
 Pig Pen asks the provider to limit each response to 8096 output tokens. The
 prompt asks the model to prioritize calling the registered world tools over
-extended thinking or describing intended actions. Successfully decoded tool
-results report a four-action per-turn budget; calls beyond it are logged but
-cannot change the world.
+extended thinking or describing intended actions. Scry allows four tool requests
+per turn, including invalid requests. Excess calls receive a tool error without
+changing the world; turn logs report refused counts separately from world actions.
+At the tool-round limit, executed history is preserved and the next prompt
+reports how many requested calls were left unexecuted.
 
 ### Options
 
