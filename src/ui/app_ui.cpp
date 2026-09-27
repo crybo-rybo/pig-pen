@@ -7,23 +7,22 @@
 
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <imgui_stdlib.h>
 
 #include <algorithm>
 #include <array>
 #include <cctype>
-#include <chrono>
 #include <cmath>
 #include <cstdint>
-#include <cstdio>
-#include <limits>
+#include <numbers>
 #include <optional>
+#include <random>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace pigpen::ui {
 namespace {
-
-constexpr float pi = 3.14159265358979323846F;
 
 struct ScenarioPreset final {
   const char *name;
@@ -41,50 +40,30 @@ constexpr std::array scenario_presets{
     ScenarioPreset{"Opaque look", "opaque-look", true, true, true},
     ScenarioPreset{"Blind learning", "blind-learning", false, false, true},
 };
-constexpr int custom_preset = static_cast<int>(scenario_presets.size());
-constexpr std::array preset_names{
-    scenario_presets[0].name, scenario_presets[1].name,
-    scenario_presets[2].name, scenario_presets[3].name,
-    scenario_presets[4].name, "Custom",
-};
 
-/// @brief Copies @p value into a fixed-size ImGui text buffer, truncating
-/// and always leaving a terminating NUL.
-template <std::size_t Size>
-void set_text(std::array<char, Size> &destination,
-              const std::string_view value) {
-  destination.fill('\0');
-  const auto count = std::min(value.size(), Size - 1U);
-  std::copy_n(value.data(), count, destination.data());
-}
-
-[[nodiscard]] std::string trim_copy(const std::string_view value) {
-  const auto not_space = [](const char character) {
-    return std::isspace(static_cast<unsigned char>(character)) == 0;
-  };
-  const auto first = std::find_if(value.begin(), value.end(), not_space);
-  const auto last =
-      std::find_if(value.rbegin(), value.rend(), not_space).base();
-  if (first >= last) {
+[[nodiscard]] std::string_view trim(const std::string_view value) {
+  constexpr std::string_view whitespace{" \t\n\v\f\r"};
+  const auto first = value.find_first_not_of(whitespace);
+  if (first == std::string_view::npos) {
     return {};
   }
-  return std::string{first, last};
+  return value.substr(first, value.find_last_not_of(whitespace) - first + 1);
 }
 
 [[nodiscard]] std::string lowercase(std::string value) {
-  std::transform(value.begin(), value.end(), value.begin(),
-                 [](const char character) {
-                   return static_cast<char>(
-                       std::tolower(static_cast<unsigned char>(character)));
-                 });
+  std::ranges::transform(value, value.begin(), [](const char character) {
+    return static_cast<char>(
+        std::tolower(static_cast<unsigned char>(character)));
+  });
   return value;
 }
 
 /// @brief Case-insensitive activity-log filter over tick, turn, tool name,
 /// outcome, and the exact argument/result JSON text.
+/// @param lowercase_filter Already trimmed and lowercased.
 [[nodiscard]] bool matches_filter(const agent::ToolActivity &activity,
-                                  const std::string_view filter) {
-  if (filter.empty()) {
+                                  const std::string_view lowercase_filter) {
+  if (lowercase_filter.empty()) {
     return true;
   }
   auto searchable = std::to_string(activity.tick) + " " +
@@ -92,8 +71,8 @@ void set_text(std::array<char, Size> &destination,
                     std::string{agent::tool_kind_name(activity.kind)} + " " +
                     std::string{agent::tool_outcome_name(activity.outcome)} +
                     " " + activity.arguments_json + " " + activity.result_json;
-  return lowercase(std::move(searchable))
-             .find(lowercase(std::string{filter})) != std::string::npos;
+  return lowercase(std::move(searchable)).find(lowercase_filter) !=
+         std::string::npos;
 }
 
 /// @brief Truncates canonical JSON text with an ellipsis for compact cells.
@@ -107,19 +86,18 @@ void set_text(std::array<char, Size> &destination,
   return text;
 }
 
-[[nodiscard]] ImU32 item_color(const world::ItemType item,
-                               const int alpha = 255) noexcept {
+[[nodiscard]] ImU32 item_color(const world::ItemType item) noexcept {
   switch (item) {
   case world::ItemType::berry:
-    return IM_COL32(177, 92, 255, alpha);
+    return IM_COL32(177, 92, 255, 255);
   case world::ItemType::apple:
-    return IM_COL32(244, 76, 92, alpha);
+    return IM_COL32(244, 76, 92, 255);
   case world::ItemType::truffle:
-    return IM_COL32(242, 187, 69, alpha);
+    return IM_COL32(242, 187, 69, 255);
   case world::ItemType::toadstool:
-    return IM_COL32(231, 95, 63, alpha);
+    return IM_COL32(231, 95, 63, 255);
   }
-  return IM_COL32(220, 220, 220, alpha);
+  return IM_COL32(220, 220, 220, 255);
 }
 
 /// @brief Draws one item glyph, scaled to the current cell size.
@@ -210,42 +188,19 @@ decoded_call_label(const agent::ToolActivity &activity) {
   return label;
 }
 
-/// @brief Maps a preset index to the `prompt_variant` stored in the log.
-[[nodiscard]] std::string preset_variant(const int preset) {
-  if (preset >= 0 && preset < custom_preset) {
-    return scenario_presets[static_cast<std::size_t>(preset)].variant;
-  }
-  return "custom";
-}
-
 } // namespace
 
-AppUi::AppUi(const agent::Config &initial_config) {
-  set_text(base_url_, initial_config.base_url);
-  set_text(model_, initial_config.model);
-  seed_ = initial_config.seed;
-  turn_budget_ = static_cast<int>(initial_config.turn_budget);
-  max_tool_rounds_ = static_cast<int>(initial_config.max_tool_rounds);
-  max_output_tokens_ = initial_config.max_output_tokens;
-  temperature_ = initial_config.temperature;
-  use_sampling_seed_ = initial_config.sampling_seed.has_value();
-  sampling_seed_ = initial_config.sampling_seed.value_or(0U);
-  known_item_values_ = initial_config.known_item_values;
-  reward_feedback_ = initial_config.reward_feedback;
-  opaque_look_ = initial_config.opaque_look;
-
-  std::random_device entropy;
-  const auto clock_value =
-      std::chrono::steady_clock::now().time_since_epoch().count();
-  const auto clock_seed = static_cast<std::uint64_t>(clock_value);
-  const auto entropy_seed = static_cast<std::uint64_t>(entropy());
-  reroll_rng_.seed(clock_seed ^ (entropy_seed << 32U) ^ entropy_seed);
-
+AppUi::AppUi(const agent::Config &initial_config)
+    : controls_{initial_config},
+      turn_budget_{static_cast<int>(initial_config.turn_budget)},
+      max_tool_rounds_{static_cast<int>(initial_config.max_tool_rounds)},
+      use_sampling_seed_{initial_config.sampling_seed.has_value()},
+      sampling_seed_{initial_config.sampling_seed.value_or(0U)} {
   if (initial_config.model.empty()) {
     status_message_ =
         "Enter a model identifier in Controls, then press Play or Reset.";
   } else {
-    static_cast<void>(recreate_session(true));
+    recreate_session(true);
   }
 }
 
@@ -254,7 +209,6 @@ void AppUi::pump(const double now_seconds) {
     return;
   }
   pump_stats_ = session_->pump();
-  animation_.set_speed(animation_speed_);
   animation_.update(session_->tool_activities(), session_->world().position(),
                     now_seconds);
   if (!session_->metrics_error().empty()) {
@@ -262,12 +216,16 @@ void AppUi::pump(const double now_seconds) {
   }
 }
 
-void AppUi::draw(const double /*now_seconds*/) {
+void AppUi::draw() {
   const auto dockspace = ImGui::DockSpaceOverViewport(
       0, ImGui::GetMainViewport(), ImGuiDockNodeFlags_None);
-  if (!default_layout_built_) {
-    build_default_dock_layout(dockspace);
-    default_layout_built_ = true;
+  // Only lay out a fresh dockspace; a split one was restored from imgui.ini.
+  if (!dock_layout_checked_) {
+    dock_layout_checked_ = true;
+    if (const auto *node = ImGui::DockBuilderGetNode(dockspace);
+        node == nullptr || node->IsLeafNode()) {
+      build_default_dock_layout(dockspace);
+    }
   }
 
   draw_world_panel();
@@ -279,43 +237,29 @@ void AppUi::draw(const double /*now_seconds*/) {
 }
 
 agent::Config AppUi::config_from_controls() const {
-  return {
-      .base_url = trim_copy(base_url_.data()),
-      .model = trim_copy(model_.data()),
-      .seed = seed_,
-      .turn_budget = static_cast<std::uint32_t>(std::clamp(
-          turn_budget_, 1, static_cast<int>(agent::turn_budget_limit))),
-      .max_tool_rounds = static_cast<std::uint32_t>(std::clamp(
-          max_tool_rounds_, 1, static_cast<int>(agent::tool_rounds_limit))),
-      .max_output_tokens = max_output_tokens_,
-      .temperature = std::clamp(temperature_, 0.0, 2.0),
-      .sampling_seed =
-          use_sampling_seed_ ? std::optional{sampling_seed_} : std::nullopt,
-      .known_item_values = known_item_values_,
-      .reward_feedback = reward_feedback_,
-      .opaque_look = opaque_look_,
-  };
+  auto config = controls_;
+  config.base_url = trim(controls_.base_url);
+  config.model = trim(controls_.model);
+  config.turn_budget = static_cast<decltype(config.turn_budget)>(turn_budget_);
+  config.max_tool_rounds = static_cast<std::uint32_t>(max_tool_rounds_);
+  config.sampling_seed =
+      use_sampling_seed_ ? std::optional{sampling_seed_} : std::nullopt;
+  return config;
 }
 
-bool AppUi::recreate_session(const bool auto_play) {
-  const auto selected_config = config_from_controls();
-  turn_budget_ = static_cast<int>(selected_config.turn_budget);
-  max_tool_rounds_ = static_cast<int>(selected_config.max_tool_rounds);
-  temperature_ = selected_config.temperature;
-  auto created =
-      agent::Session::create(selected_config, "logs", preset_variant(preset_));
+void AppUi::recreate_session(const bool auto_play) {
+  auto created = agent::Session::create(
+      config_from_controls(), "logs",
+      preset_ ? scenario_presets[*preset_].variant : "custom");
   if (!created) {
     visible_error_ = "Could not create session: " + created.error();
-    return false;
+    return;
   }
 
-  if (session_) {
-    static_cast<void>(session_->stop());
-  }
+  // Destroying the old session writes its footer ("abandoned" if unfinished).
   session_ = std::move(*created);
   animation_.reset(session_->world().position());
   pump_stats_ = {};
-  transcript_fingerprint_ = 0U;
   visible_error_.clear();
   status_message_ = "Created session for " + session_->config().model +
                     " (seed " + std::to_string(session_->config().seed) + ").";
@@ -326,21 +270,10 @@ bool AppUi::recreate_session(const bool auto_play) {
       visible_error_ = "Session was created but could not start playing.";
     }
   }
-  return true;
-}
-
-void AppUi::apply_preset(const int preset) {
-  if (preset < 0 || preset >= custom_preset) {
-    return;
-  }
-  const auto &selected = scenario_presets[static_cast<std::size_t>(preset)];
-  known_item_values_ = selected.known_item_values;
-  reward_feedback_ = selected.reward_feedback;
-  opaque_look_ = selected.opaque_look;
 }
 
 void AppUi::queue_guidance() {
-  const auto message = trim_copy(guidance_.data());
+  const auto message = trim(guidance_);
   if (message.empty()) {
     return;
   }
@@ -352,8 +285,8 @@ void AppUi::queue_guidance() {
     visible_error_ = "This episode is finished; Reset before queuing guidance.";
     return;
   }
-  static_cast<void>(session_->queue_user_input(message));
-  guidance_.fill('\0');
+  static_cast<void>(session_->queue_user_input(std::string{message}));
+  guidance_.clear();
   status_message_ = "Guidance added to the FIFO queue.";
   visible_error_.clear();
 }
@@ -462,11 +395,11 @@ void AppUi::draw_world_panel() {
   }
 
   if (const auto effect = animation_.active_effect()) {
-    const auto pulse = std::sin(effect->progress * pi);
+    const auto pulse = std::sin(effect->progress * std::numbers::pi_v<float>);
     const auto alpha = static_cast<int>(80.0F + pulse * 175.0F);
     const auto origin = cell_center(static_cast<float>(effect->origin.x),
                                     static_cast<float>(effect->origin.y));
-    if (effect->kind == VisualEffectKind::look && effect->direction) {
+    if (effect->kind == agent::ToolKind::look && effect->direction) {
       auto endpoint = origin;
       switch (*effect->direction) {
       case world::Direction::north:
@@ -486,7 +419,7 @@ void AppUi::draw_world_panel() {
                          std::max(2.0F, cell_size * 0.08F));
       draw_list->AddCircle(origin, cell_size * (0.25F + 0.12F * pulse),
                            IM_COL32(94, 225, 255, alpha), 24, 2.0F);
-    } else if (effect->kind == VisualEffectKind::eat) {
+    } else if (effect->kind == agent::ToolKind::eat) {
       draw_list->AddCircle(
           origin, cell_size * (0.2F + effect->progress * 0.48F),
           IM_COL32(255, 215, 92, alpha), 32, std::max(2.0F, cell_size * 0.07F));
@@ -585,29 +518,19 @@ void AppUi::draw_transcript_panel() {
   const auto &transcript = session_->runner().transcript();
   const auto &activities = session_->tool_activities();
   const auto snapshot = session_->runner().snapshot();
-  auto fingerprint = transcript.size() * 131U + activities.size();
-  if (!transcript.empty()) {
-    fingerprint += transcript.back().text.size();
-  }
-  const auto should_scroll = fingerprint != transcript_fingerprint_;
-  transcript_fingerprint_ = fingerprint;
 
   ImGui::BeginChild("transcript-scroll", {0.0F, 0.0F}, ImGuiChildFlags_Borders);
   if (transcript.empty()) {
     ImGui::TextDisabled("The first automatic turn will appear here.");
   }
-  for (std::size_t index = 0; index < transcript.size(); ++index) {
-    const auto &entry = transcript[index];
-    ImGui::PushID(static_cast<int>(index));
+  for (const auto &entry : transcript) {
     if (entry.role == agent::TranscriptRole::assistant) {
       ImGui::TextColored({0.95F, 0.78F, 0.32F, 1.0F},
                          "Turn %u · Decoded world-tool calls", entry.turn);
-      auto decoded_calls = 0U;
-      for (const auto &activity : activities) {
-        if (activity.turn != entry.turn) {
-          continue;
-        }
-        ++decoded_calls;
+      // The activity feed is appended in turn order.
+      const auto calls = std::ranges::equal_range(
+          activities, std::size_t{entry.turn}, {}, &agent::ToolActivity::turn);
+      for (const auto &activity : calls) {
         const auto arguments = compact(activity.arguments_json, 72U);
         const auto result = compact(activity.result_json, 110U);
         ImGui::TextColored({0.95F, 0.78F, 0.32F, 1.0F}, "  %s",
@@ -615,16 +538,15 @@ void AppUi::draw_transcript_panel() {
         ImGui::SameLine();
         ImGui::TextDisabled("%s -> %s", arguments.c_str(), result.c_str());
       }
-      if (decoded_calls == 0U) {
-        const auto active_turn = snapshot.turns_used + 1U;
-        if (snapshot.turn_in_flight && entry.turn == active_turn) {
+      if (calls.empty()) {
+        if (snapshot.turn_in_flight && entry.turn == snapshot.turns_used + 1U) {
           ImGui::TextDisabled("  No decoded world-tool calls yet");
         } else {
           ImGui::TextColored({1.0F, 0.52F, 0.32F, 1.0F},
                              "  No decoded world-tool calls");
         }
       }
-      ImGui::TextColored(role_color(entry.role), "Model narration");
+      ImGui::TextColored(role_color(entry.role), "%s", role_name(entry.role));
       ImGui::PushTextWrapPos(0.0F);
       if (entry.text.empty()) {
         ImGui::TextDisabled("Waiting for model output...");
@@ -640,9 +562,11 @@ void AppUi::draw_transcript_panel() {
       ImGui::PopTextWrapPos();
     }
     ImGui::Separator();
-    ImGui::PopID();
   }
-  if (should_scroll && transcript_auto_scroll_) {
+  // Follow new output only while the view is already at the bottom, so
+  // scrolling up to read history is not yanked back every frame.
+  if (transcript_auto_scroll_ &&
+      ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) {
     ImGui::SetScrollHereY(1.0F);
   }
   ImGui::EndChild();
@@ -657,7 +581,7 @@ void AppUi::draw_event_log_panel() {
   ImGui::SetNextItemWidth(
       std::max(120.0F, ImGui::GetContentRegionAvail().x - 115.0F));
   ImGui::InputTextWithHint("##event-filter", "Filter tool, args, result...",
-                           event_filter_.data(), event_filter_.size());
+                           &event_filter_);
   ImGui::SameLine();
   ImGui::TextDisabled("%zu decoded calls",
                       session_ ? session_->tool_activities().size() : 0U);
@@ -679,8 +603,9 @@ void AppUi::draw_event_log_panel() {
     ImGui::TableSetupColumn("Arguments");
     ImGui::TableSetupColumn("Result");
     ImGui::TableHeadersRow();
+    const auto filter = lowercase(std::string{trim(event_filter_)});
     for (const auto &activity : session_->tool_activities()) {
-      if (!matches_filter(activity, trim_copy(event_filter_.data()))) {
+      if (!matches_filter(activity, filter)) {
         continue;
       }
       ImGui::TableNextRow();
@@ -722,36 +647,49 @@ void AppUi::draw_controls_panel() {
   }
 
   ImGui::SeparatorText("Connection");
-  ImGui::InputText("Base URL", base_url_.data(), base_url_.size());
-  ImGui::InputText("Model (required)", model_.data(), model_.size());
+  ImGui::InputText("Base URL", &controls_.base_url);
+  ImGui::InputText("Model (required)", &controls_.model);
 
   ImGui::SeparatorText("Scenario");
-  auto selected_preset = preset_;
-  if (ImGui::Combo("Preset", &selected_preset, preset_names.data(),
-                   static_cast<int>(preset_names.size()))) {
-    preset_ = selected_preset;
-    apply_preset(preset_);
+  if (ImGui::BeginCombo("Preset",
+                        preset_ ? scenario_presets[*preset_].name : "Custom")) {
+    for (std::size_t index = 0; index < scenario_presets.size(); ++index) {
+      const auto &preset = scenario_presets[index];
+      if (ImGui::Selectable(preset.name, preset_ == index)) {
+        preset_ = index;
+        controls_.known_item_values = preset.known_item_values;
+        controls_.reward_feedback = preset.reward_feedback;
+        controls_.opaque_look = preset.opaque_look;
+      }
+    }
+    ImGui::EndCombo();
   }
-  if (ImGui::Checkbox("Known item values", &known_item_values_)) {
-    preset_ = custom_preset;
+  if (ImGui::Checkbox("Known item values", &controls_.known_item_values)) {
+    preset_.reset();
   }
-  if (ImGui::Checkbox("Reward feedback", &reward_feedback_)) {
-    preset_ = custom_preset;
+  if (ImGui::Checkbox("Reward feedback", &controls_.reward_feedback)) {
+    preset_.reset();
   }
-  if (ImGui::Checkbox("Opaque look", &opaque_look_)) {
-    preset_ = custom_preset;
+  if (ImGui::Checkbox("Opaque look", &controls_.opaque_look)) {
+    preset_.reset();
   }
 
-  ImGui::InputScalar("Seed", ImGuiDataType_U64, &seed_);
+  ImGui::InputScalar("Seed", ImGuiDataType_U64, &controls_.seed);
   ImGui::SameLine();
   if (ImGui::Button("Reroll + Reset")) {
-    seed_ = reroll_rng_();
-    static_cast<void>(recreate_session(true));
+    std::random_device entropy;
+    controls_.seed = (std::uint64_t{entropy()} << 32U) | entropy();
+    recreate_session(true);
   }
+  // Clamp to the ranges Session::create accepts as soon as they are edited.
   ImGui::InputInt("Turn budget", &turn_budget_);
+  turn_budget_ =
+      std::clamp(turn_budget_, 1, static_cast<int>(agent::turn_budget_limit));
   ImGui::InputInt("Tool rounds / turn", &max_tool_rounds_);
-  ImGui::InputDouble("Temperature", &temperature_, 0.1, 0.5, "%.2f");
-  temperature_ = std::clamp(temperature_, 0.0, 2.0);
+  max_tool_rounds_ = std::clamp(max_tool_rounds_, 1,
+                                static_cast<int>(agent::tool_rounds_limit));
+  ImGui::InputDouble("Temperature", &controls_.temperature, 0.1, 0.5, "%.2f");
+  controls_.temperature = std::clamp(controls_.temperature, 0.0, 2.0);
   if (ImGui::IsItemHovered()) {
     ImGui::SetTooltip("Sampling control from 0.0 to 2.0; applies on Reset.");
   }
@@ -767,9 +705,10 @@ void AppUi::draw_controls_panel() {
     ImGui::SetTooltip("Best-effort repeatability on OpenAI-compatible servers; "
                       "independent of the world seed. Applies on Reset.");
   }
-  ImGui::SliderFloat("Animation speed", &animation_speed_, 0.25F, 4.0F,
-                     "%.2fx");
-  animation_.set_speed(animation_speed_);
+  if (ImGui::SliderFloat("Animation speed", &animation_speed_, 0.25F, 4.0F,
+                         "%.2fx")) {
+    animation_.set_speed(animation_speed_);
+  }
 
   ImGui::SeparatorText("Episode");
   const auto snapshot =
@@ -779,29 +718,29 @@ void AppUi::draw_controls_panel() {
   ImGui::BeginDisabled(!can_play);
   if (ImGui::Button(snapshot.state == agent::RunState::paused ? "Resume"
                                                               : "Play")) {
-    if (!session_ && !recreate_session(false)) {
-      // recreate_session already provided a visible error.
-    } else if (session_ && !session_->play()) {
-      visible_error_ = "The current episode cannot enter playing state.";
+    if (session_) {
+      static_cast<void>(session_->play());
+    } else {
+      recreate_session(true);
     }
   }
   ImGui::EndDisabled();
   ImGui::SameLine();
   ImGui::BeginDisabled(!session_ || snapshot.state != agent::RunState::playing);
-  if (ImGui::Button("Pause") && !session_->pause()) {
-    visible_error_ = "Pause takes effect only while an episode is playing.";
+  if (ImGui::Button("Pause")) {
+    static_cast<void>(session_->pause());
   }
   ImGui::EndDisabled();
   ImGui::SameLine();
   ImGui::BeginDisabled(!session_ ||
                        snapshot.state == agent::RunState::finished);
-  if (ImGui::Button("Stop") && !session_->stop()) {
-    visible_error_ = "The current episode could not be stopped.";
+  if (ImGui::Button("Stop")) {
+    static_cast<void>(session_->stop());
   }
   ImGui::EndDisabled();
   ImGui::SameLine();
   if (ImGui::Button("Reset")) {
-    static_cast<void>(recreate_session(true));
+    recreate_session(true);
   }
 
   if (session_) {
@@ -862,25 +801,16 @@ void AppUi::draw_stats_panel() {
                 snapshot.turn_in_flight ? " (model turn active)" : "");
   }
 
-  std::size_t moves{};
-  std::size_t looks{};
-  std::size_t eat_attempts{};
-  std::size_t successful_eats{};
-  std::size_t failed_eats{};
-  for (const auto &activity : session_->tool_activities()) {
-    if (activity.kind == agent::ToolKind::move) {
-      ++moves;
-    } else if (activity.kind == agent::ToolKind::look) {
-      ++looks;
-    } else if (activity.kind == agent::ToolKind::eat) {
-      ++eat_attempts;
-      if (activity.eaten) {
-        ++successful_eats;
-      } else {
-        ++failed_eats;
-      }
-    }
-  }
+  const auto &activities = session_->tool_activities();
+  const auto calls_to = [&activities](const agent::ToolKind kind) {
+    return static_cast<std::size_t>(
+        std::ranges::count(activities, kind, &agent::ToolActivity::kind));
+  };
+  const auto eat_attempts = calls_to(agent::ToolKind::eat);
+  const auto successful_eats = static_cast<std::size_t>(
+      std::ranges::count_if(activities, [](const auto &activity) {
+        return activity.eaten.has_value();
+      }));
 
   if (ImGui::BeginTable("stats-table", 4,
                         ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
@@ -896,10 +826,10 @@ void AppUi::draw_stats_panel() {
         world::ItemType::toadstool,
     };
     const std::array<std::pair<const char *, std::size_t>, 4> tools{
-        std::pair{"move", moves},
-        std::pair{"look", looks},
+        std::pair{"move", calls_to(agent::ToolKind::move)},
+        std::pair{"look", calls_to(agent::ToolKind::look)},
         std::pair{"eat attempts", eat_attempts},
-        std::pair{"decoded calls", session_->tool_activities().size()},
+        std::pair{"decoded calls", activities.size()},
     };
     for (std::size_t index = 0; index < item_types.size(); ++index) {
       ImGui::TableNextRow();
@@ -917,12 +847,11 @@ void AppUi::draw_stats_panel() {
     ImGui::EndTable();
   }
 
-  ImGui::Text("Eat attempts %zu", eat_attempts);
-  ImGui::SameLine();
-  ImGui::TextColored({0.46F, 0.92F, 0.62F, 1.0F}, "| successful %zu",
+  ImGui::TextColored({0.46F, 0.92F, 0.62F, 1.0F}, "Successful eats %zu",
                      successful_eats);
   ImGui::SameLine();
-  ImGui::TextColored({1.0F, 0.52F, 0.32F, 1.0F}, "| failed %zu", failed_eats);
+  ImGui::TextColored({1.0F, 0.52F, 0.32F, 1.0F}, "| failed %zu",
+                     eat_attempts - successful_eats);
 
   ImGui::TextDisabled(
       "Callbacks %zu | transport queued %zu | visuals queued %zu",
@@ -942,20 +871,19 @@ void AppUi::draw_guidance_panel() {
   ImGui::SetNextItemWidth(std::max(120.0F, ImGui::GetContentRegionAvail().x -
                                                button_width - 10.0F));
   const auto submitted = ImGui::InputTextWithHint(
-      "##guidance", "e.g. Search the western edge before eating.",
-      guidance_.data(), guidance_.size(), ImGuiInputTextFlags_EnterReturnsTrue);
+      "##guidance", "e.g. Search the western edge before eating.", &guidance_,
+      ImGuiInputTextFlags_EnterReturnsTrue);
   ImGui::SameLine();
   const auto clicked = ImGui::Button("Queue", {button_width, 0.0F});
   if (submitted || clicked) {
     queue_guidance();
   }
   if (session_) {
-    auto has_pending = false;
-    for (const auto &entry : session_->runner().guidance()) {
-      has_pending =
-          has_pending || entry.status == agent::GuidanceStatus::pending;
-    }
-    if (has_pending) {
+    if (std::ranges::any_of(session_->runner().guidance(),
+                            [](const agent::GuidanceEntry &entry) {
+                              return entry.status ==
+                                     agent::GuidanceStatus::pending;
+                            })) {
       if (ImGui::Button("Clear pending")) {
         session_->clear_pending_user_inputs();
         status_message_ = "Cleared pending guidance.";

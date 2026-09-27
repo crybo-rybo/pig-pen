@@ -1,24 +1,21 @@
 /// @file app_ui.hpp
 /// @brief The Dear ImGui front end: session ownership and panel drawing.
-///
-/// AppUi owns the shared_ptr<agent::Session> and all widget state; the GUI
-/// entry point only constructs it and calls pump() and draw() each frame.
 #pragma once
 
 #include "agent/config.hpp"
 #include "agent/session.hpp"
 #include "ui/world_animation.hpp"
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <random>
+#include <optional>
 #include <string>
 
 namespace pigpen::ui {
 
-/// @brief The GUI application: session, control state, dockable panels.
+/// @brief The GUI application: session, control state, dockable panels. The
+/// GUI entry point only constructs it and calls pump() and draw() each frame.
 ///
 /// A Session is the reset unit, so connection and scenario edits never touch
 /// a live episode; they take effect when Reset rebuilds the session wholesale.
@@ -26,28 +23,23 @@ class AppUi final {
 public:
   /// @brief Seeds the controls from @p initial_config; a non-empty model
   /// identifier creates and auto-starts a session immediately.
-  explicit AppUi(const agent::Config &initial_config = {});
+  explicit AppUi(const agent::Config &initial_config);
 
-  /// @brief Advances the session and the animation timeline.
+  /// @brief Advances the session and the animation timeline; call once per
+  /// frame, before draw().
   /// @param now_seconds Monotonic time supplied by the frame loop.
-  /// @note Call once per frame, before draw().
   void pump(double now_seconds);
 
   /// @brief Emits every panel for the current ImGui frame.
-  void draw(double now_seconds);
+  void draw();
 
 private:
-  /// @brief Snapshots the control widgets into a validated agent::Config.
+  /// @brief The Config the controls describe; Session::create validates it.
   [[nodiscard]] agent::Config config_from_controls() const;
-  /// @brief Destroys the current session and builds a new one from the
-  /// controls; the only way settings changes are applied.
-  [[nodiscard]] bool recreate_session(bool auto_play);
-  /// @brief Applies a scenario preset to the three model-visibility flags.
-  void apply_preset(int preset);
-  /// @brief Queues the guidance text for delivery on a future model turn.
+  /// @brief Replaces the session with one built from the controls — the only
+  /// way settings changes are applied. Failures surface in visible_error_.
+  void recreate_session(bool auto_play);
   void queue_guidance();
-  /// @brief Splits the dockspace into the default panel layout, first run
-  /// only; afterwards imgui.ini owns the layout.
   void build_default_dock_layout(std::uint32_t dockspace_id);
 
   void draw_world_panel();
@@ -61,29 +53,24 @@ private:
   WorldAnimationState animation_{};
   agent::PumpStats pump_stats_{};
 
-  std::array<char, 384> base_url_{};
-  std::array<char, 160> model_{};
-  std::array<char, 160> event_filter_{};
-  std::array<char, 1024> guidance_{};
-  std::uint64_t seed_{};
-  int turn_budget_{20};
-  int max_tool_rounds_{8};
-  std::uint32_t max_output_tokens_{8'096};
-  double temperature_{};
-  bool use_sampling_seed_{false};
+  /// Settings for the next session. turn_budget, max_tool_rounds, and
+  /// sampling_seed are edited through the widget mirrors below instead.
+  agent::Config controls_{};
+  int turn_budget_{};
+  int max_tool_rounds_{};
+  bool use_sampling_seed_{};
   std::uint32_t sampling_seed_{};
-  int preset_{0};
-  bool known_item_values_{true};
-  bool reward_feedback_{true};
-  bool opaque_look_{false};
+  /// Index into the scenario presets; nullopt once a flag is edited by hand.
+  std::optional<std::size_t> preset_{0};
+
+  std::string event_filter_{};
+  std::string guidance_{};
   bool transcript_auto_scroll_{true};
   float animation_speed_{1.0F};
 
-  std::mt19937_64 reroll_rng_{};
   std::string status_message_{};
   std::string visible_error_{};
-  std::size_t transcript_fingerprint_{};
-  bool default_layout_built_{false};
+  bool dock_layout_checked_{false};
 };
 
 } // namespace pigpen::ui
