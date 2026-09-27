@@ -4,13 +4,9 @@
 #include "world/world.hpp"
 
 #include <algorithm>
-#include <array>
-#include <cstdint>
 #include <cstdlib>
-#include <locale>
+#include <format>
 #include <random>
-#include <sstream>
-#include <utility>
 
 namespace pigpen::world {
 namespace {
@@ -45,8 +41,7 @@ namespace {
 [[nodiscard]] std::size_t bounded_index(std::mt19937_64 &engine,
                                         const std::size_t bound) {
   const auto unsigned_bound = static_cast<std::uint64_t>(bound);
-  const auto rejection_threshold =
-      static_cast<std::uint64_t>(-unsigned_bound) % unsigned_bound;
+  const auto rejection_threshold = -unsigned_bound % unsigned_bound;
   while (true) {
     const auto value = engine();
     if (value >= rejection_threshold) {
@@ -110,9 +105,7 @@ World::World(const std::uint64_t seed) : seed_(seed) {
 
   const auto truffle_position = take_random(truffle_candidates, engine);
   items_[index(truffle_position)] = ItemType::truffle;
-  const auto truffle_in_candidates =
-      std::find(candidates.begin(), candidates.end(), truffle_position);
-  candidates.erase(truffle_in_candidates);
+  std::erase(candidates, truffle_position);
 
   const auto place = [this, &candidates, &engine](const ItemType item,
                                                   const std::size_t count) {
@@ -127,12 +120,6 @@ World::World(const std::uint64_t seed) : seed_(seed) {
   place(ItemType::toadstool, default_toadstool_count);
 }
 
-std::uint64_t World::seed() const noexcept { return seed_; }
-
-Position World::position() const noexcept { return position_; }
-
-int World::score() const noexcept { return score_; }
-
 std::optional<ItemType> World::item_at(const Position position) const noexcept {
   if (!in_bounds(position)) {
     return std::nullopt;
@@ -146,7 +133,6 @@ bool World::is_observed(const Position position) const noexcept {
 
 std::vector<ItemPlacement> World::items() const {
   std::vector<ItemPlacement> placements;
-  placements.reserve(default_item_count);
   for (int y = 0; y < height; ++y) {
     for (int x = 0; x < width; ++x) {
       const Position position{.x = x, .y = y};
@@ -158,61 +144,24 @@ std::vector<ItemPlacement> World::items() const {
   return placements;
 }
 
-std::vector<Position> World::observed_positions() const {
-  std::vector<Position> positions;
-  positions.reserve(observed_.count());
-  for (int y = 0; y < height; ++y) {
-    for (int x = 0; x < width; ++x) {
-      const Position position{.x = x, .y = y};
-      if (is_observed(position)) {
-        positions.push_back(position);
-      }
-    }
-  }
-  return positions;
-}
-
-std::size_t World::remaining_count(const ItemType item) const noexcept {
-  return static_cast<std::size_t>(
-      std::count(items_.begin(), items_.end(), item));
-}
-
-std::size_t World::eaten_count(const ItemType item) const noexcept {
-  return eaten_counts_[item_index(item)];
-}
-
 MoveResult World::move(const Direction direction) {
   const auto destination = step(position_, direction);
   if (!in_bounds(destination)) {
-    return {
-        .ok = false,
-        .position = position_,
-        .item_here = std::nullopt,
-        .failure = MoveFailure::wall,
-    };
+    return {.position = position_, .failure = MoveFailure::wall};
   }
 
   position_ = destination;
   observed_.set(index(position_));
-  return {
-      .ok = true,
-      .position = position_,
-      .item_here = item_at(position_),
-      .failure = std::nullopt,
-  };
+  return {.ok = true, .position = position_, .item_here = item_at(position_)};
 }
 
 LookResult World::look(const Direction direction) {
-  LookResult result{.direction = direction};
+  LookResult result;
   auto scanned = step(position_, direction);
   int distance = 1;
   while (in_bounds(scanned)) {
     observed_.set(index(scanned));
-    result.cells.push_back({
-        .distance = distance,
-        .position = scanned,
-        .item = item_at(scanned),
-    });
+    result.cells.push_back({.distance = distance, .item = item_at(scanned)});
     scanned = step(scanned, direction);
     ++distance;
   }
@@ -223,26 +172,14 @@ LookResult World::look(const Direction direction) {
 EatResult World::eat() {
   const auto item = item_at(position_);
   if (!item) {
-    return {
-        .ok = false,
-        .ate = std::nullopt,
-        .reward = 0,
-        .score = score_,
-        .failure = EatFailure::nothing_here,
-    };
+    return {.score = score_, .failure = EatFailure::nothing_here};
   }
 
   const auto reward = item_reward(*item);
   score_ += reward;
   items_[index(position_)] = std::nullopt;
-  ++eaten_counts_[item_index(*item)];
-  return {
-      .ok = true,
-      .ate = item,
-      .reward = reward,
-      .score = score_,
-      .failure = std::nullopt,
-  };
+  ++eaten_counts_[static_cast<std::size_t>(*item)];
+  return {.ok = true, .ate = item, .reward = reward, .score = score_};
 }
 
 bool World::all_positive_items_eaten() const noexcept {
@@ -252,22 +189,18 @@ bool World::all_positive_items_eaten() const noexcept {
 }
 
 std::string World::dump() const {
-  std::ostringstream output;
-  output.imbue(std::locale::classic());
-  output << "seed=" << seed_ << ";position=" << position_.x << ','
-         << position_.y << ";score=" << score_ << ";items=";
+  auto out = std::format("seed={};position={},{};score={};items=", seed_,
+                         position_.x, position_.y, score_);
   for (const auto item : items_) {
-    output << item_glyph(item);
+    out += item_glyph(item);
   }
-  output << ";observed=";
+  out += ";observed=";
   for (std::size_t cell = 0; cell < cell_count; ++cell) {
-    output << (observed_.test(cell) ? '1' : '0');
+    out += observed_.test(cell) ? '1' : '0';
   }
-  output << ";eaten=" << eaten_count(ItemType::berry) << ','
-         << eaten_count(ItemType::apple) << ','
-         << eaten_count(ItemType::truffle) << ','
-         << eaten_count(ItemType::toadstool);
-  return output.str();
+  out += std::format(";eaten={},{},{},{}", eaten_counts_[0], eaten_counts_[1],
+                     eaten_counts_[2], eaten_counts_[3]);
+  return out;
 }
 
 } // namespace pigpen::world

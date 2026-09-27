@@ -53,7 +53,7 @@ WorldTools::look(const DirectionArguments arguments) {
       .response =
           {
               .ok = true,
-              .direction = looked.direction,
+              .direction = arguments.direction,
               .cells = std::move(cells),
               .wall_at_distance = looked.wall_at_distance,
           },
