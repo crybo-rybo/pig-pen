@@ -46,7 +46,8 @@ struct TurnOutcome {
 
 /// @brief Streaming and completion callbacks for one turn.
 /// @note on_finished is the terminal signal; exactly one outcome arrives per
-/// accepted send, including after a cancellation.
+/// accepted send, including after a cancellation. Callbacks never run inside
+/// send(), and none for a turn arrive after its on_finished.
 struct TurnCallbacks {
   std::function<void(std::string_view)> on_text_delta{};
   std::function<void(TurnOutcome)> on_finished{};
