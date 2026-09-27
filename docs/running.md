@@ -52,11 +52,8 @@ notices go to stderr.
 
 Pig Pen asks the provider to limit each response to 8096 output tokens. The
 prompt asks the model to prioritize calling the registered world tools over
-extended thinking or describing intended actions. Scry allows four tool requests
-per turn, including invalid requests. Excess calls receive a tool error without
-changing the world; turn logs report refused counts separately from world actions.
-At the tool-round limit, executed history is preserved and the next prompt
-reports how many requested calls were left unexecuted.
+extended thinking or describing intended actions. For the per-turn call budget
+and round limit, see [Tool errors and limits](world.md#tool-errors-and-limits).
 
 ### Options
 

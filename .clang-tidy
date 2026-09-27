@@ -1,13 +1,5 @@
----
-# Advisory, run locally: clang cannot parse the -freflection translation
-# units (P2996 is GCC-only today), and scry::scry carries -freflection into
-# every agent TU, so point clang-tidy at the TUs it can compile — src/world
-# and src/ui — using the exported compile_commands.json:
-#
-#   clang-tidy -p build/dev src/world/world.cpp
-#
-# The identifier-naming options below are the project's conventions; new code
-# should follow them even where clang-tidy cannot check it.
+# Advisory only. clang cannot parse the -freflection TUs (all of src/agent), so
+# run it on src/world and src/ui:  clang-tidy -p build/dev src/world/world.cpp
 Checks: >
   bugprone-*,
   modernize-*,

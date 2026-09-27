@@ -44,17 +44,17 @@ covering:
 
 **CLI tests** registered in `cmake/testing.cmake`:
 
-- `pigpen_reflection_integration` — a loopback OpenAI-compatible server verifies
-  the provider-visible reflected schemas, strict typed decode, encoded response
-  shape, typed activity payload, and JSONL record through the real Scry/Curl
-  path
+- `pigpen_headless_integration` — `tests/headless_integration_tests.py` runs
+  the CLI against a loopback OpenAI-compatible stub through the real Scry/Curl
+  path: argv wiring (including `--sampling-seed`), the tool result posted back
+  to the provider, stdout, the JSONL log on disk, and exit codes `0` (a valid
+  `move`) and `5` (only a schema-invalid call)
 - `pigpen_headless_help` — `--help` exits 0
-- `pigpen_headless_requires_model` — omitting `--model` must fail
-- `pigpen_headless_rejects_invalid_bounds` — `--max-tool-rounds 65` must fail
-- `pigpen_headless_rejects_invalid_temperature` — non-finite sampling values
-  must fail
-- `pigpen_headless_rejects_invalid_sampling_seed` — a `--sampling-seed` above
-  the 32-bit range must print the range diagnostic
+- `pigpen_headless_requires_model`, `pigpen_headless_rejects_invalid_bounds`
+  (`--max-tool-rounds 65`), `pigpen_headless_rejects_invalid_temperature`
+  (`--temperature nan`), and `pigpen_headless_rejects_invalid_sampling_seed`
+  (above the 32-bit range) — each passes only if the CLI prints the matching
+  option diagnostic
 - `pigpen_headless_graceful_sigint` / `_sigterm` — `tests/headless_signal_tests.py`
   starts a stub socket server on a loopback port, points the CLI at it, sends
   an exact tagged model identifier, verifies that identifier in the HTTP
@@ -62,14 +62,13 @@ covering:
   *and* that the JSONL file still ends with a finalized footer
 
 Python 3 is required whenever tests are enabled. The two signal tests only
-register on UNIX; the loopback reflection integration test runs on every
+register on UNIX; the loopback integration test runs on every
 supported platform.
 
 ## Running a subset
 
 ```sh
 ctest --preset dev -R world              # by test name
-ctest --preset dev --output-on-failure   # already the preset default
 ./build/dev/pigpen_tests --list-tests
 ./build/dev/pigpen_tests "[determinism]" # Catch2 tags
 ./build/dev/pigpen_tests -s "eating consumes each item and applies its reward"

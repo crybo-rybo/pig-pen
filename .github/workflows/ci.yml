@@ -5,8 +5,6 @@ on:
     branches: [main]
   pull_request:
 
-# Only run the latest CI for a ref; superseded runs are cancelled to keep
-# feedback fast on active branches.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -15,9 +13,20 @@ permissions:
   contents: read
 
 jobs:
-  # Full GUI builds (dev/release) plus the headless-only preset, which
-  # exercises the CMake path with no SDL3/OpenGL/ImGui. Configure fetches
-  # all pinned dependencies, so this also guards the dependency pins.
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # Pinned: a different clang-format major can format differently.
+      - name: Install pinned formatters
+        run: pipx install clang-format==22.1.8 && pipx install ruff==0.16.1
+      - name: clang-format
+        run: git ls-files '*.cpp' '*.hpp' | xargs clang-format --dry-run --Werror
+      - name: ruff format
+        run: ruff format --check tests
+      - name: ruff lint
+        run: ruff check tests
+
   build-and-test:
     name: build & test (${{ matrix.preset }})
     runs-on: ubuntu-24.04
@@ -32,10 +41,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # Pig Pen requires GCC 16+ with C++26 reflection; the runner image
-      # ships GCC 13, so install from the toolchain PPA. libcurl is scry's
-      # HTTP transport. The remaining packages are the Ubuntu names for the
-      # Linux GUI deps in docs/building.md (harmless on the headless preset).
+      # The runner ships GCC 13; GCC 16 comes from the toolchain PPA. The X11,
+      # Wayland, and GL headers are SDL3's Linux build deps (docs/building.md).
       - name: Install toolchain and system libraries
         run: |
           sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
@@ -60,20 +67,11 @@ jobs:
             libwayland-dev \
             wayland-protocols
 
-      - name: Show toolchain versions
-        run: |
-          gcc-16 --version | head -n1
-          g++-16 --version | head -n1
-          cmake --version | head -n1
-          ninja --version
-          python3 --version
-          pkg-config --modversion libcurl
-
-      - name: Configure (${{ matrix.preset }})
+      - name: Configure
         run: cmake --preset ${{ matrix.preset }}
 
-      - name: Build (${{ matrix.preset }})
+      - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
 
-      - name: Test (${{ matrix.preset }})
-        run: ctest --preset ${{ matrix.preset }} --output-on-failure
+      - name: Test
+        run: ctest --preset ${{ matrix.preset }}

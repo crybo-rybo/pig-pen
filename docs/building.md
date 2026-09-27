@@ -4,7 +4,7 @@
 
 | requirement | notes |
 |---|---|
-| CMake 3.31+ | the Glaze revision scry fetches requires it (Pig Pen's and scry's own files accept 3.28); presets use schema version 6 |
+| CMake 3.31+ | presets use schema version 6 |
 | Ninja | the generator the presets select |
 | GCC 16+ | C++26 P2996/P3394 reflection; configured with `-std=c++26 -freflection` |
 | Python 3 | required when the test suite is enabled; drives public-boundary integration tests |
@@ -36,7 +36,7 @@ sudo apt-get install -y --no-install-recommends \
   libxi-dev libxinerama-dev libxkbcommon-dev libxrandr-dev \
   libxrender-dev libxss-dev libxtst-dev \
   libwayland-dev wayland-protocols
-# Ubuntu 24.04 packages CMake 3.28, older than the fetched Glaze accepts.
+# Ubuntu 24.04 packages CMake 3.28; Pig Pen needs 3.31+.
 python3 -m pip install --user --break-system-packages 'cmake>=3.31'
 ```
 
@@ -103,7 +103,6 @@ preset named `--model`.
 | `PIGPEN_BUILD_GUI` | `ON` | build `pig-pen`; turn off to skip SDL3, ImGui, and OpenGL entirely |
 | `PIGPEN_BUILD_TESTS` | `ON` | build both Catch2 test binaries and register all CTest cases |
 | `PIGPEN_WARNINGS_AS_ERRORS` | `ON` | `-Werror` for pig-pen's own code only |
-| `PIGPEN_SCRY_SOURCE` | *(empty)* | deprecated compatibility alias for a local scry checkout |
 
 Pig Pen is intentionally a reflection-first C++26 application. Configuration
 rejects non-GNU compilers and GCC versions older than 16. Scry performs an
@@ -134,8 +133,8 @@ cmake --preset dev \
 Use an absolute path; CMake warns that relative `FETCHCONTENT_SOURCE_DIR_*`
 values depend on the calling scope. The checkout must provide the `scry::scry`
 target and pass Scry's GCC 16 capability probe; otherwise configure fails.
-The old `PIGPEN_SCRY_SOURCE` option remains accepted with a deprecation warning
-for compatibility. Deleting `build/dev/` goes back to the pinned commit.
+The override is stored in the preset's CMake cache; delete `build/dev/` to go
+back to the pinned commit.
 
 ## Troubleshooting
 

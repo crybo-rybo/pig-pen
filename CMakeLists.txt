@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.28)
+cmake_minimum_required(VERSION 3.31)
 
 project(
   pig-pen
@@ -15,80 +15,32 @@ if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR
   message(FATAL_ERROR "Pig Pen requires GCC 16 or newer with C++26 reflection")
 endif()
 
-# Pig Pen uses no C++ modules. From CMake 3.28 the default is to scan every
-# C++20-and-later source for module dependencies, which adds a scan compile per
-# translation unit and puts GCC into module mode; Scry disables it for the same
-# reason.
+# Pig Pen uses no C++ modules; skip the per-TU module dependency scan.
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
 option(PIGPEN_BUILD_GUI "Build the Dear ImGui application" ON)
 option(PIGPEN_BUILD_TESTS "Build pig-pen's test suite" ON)
 option(PIGPEN_WARNINGS_AS_ERRORS "Treat warnings in pig-pen code as errors" ON)
-set(
-  PIGPEN_SCRY_SOURCE
-  ""
-  CACHE PATH
-  "Deprecated path to a local scry checkout; prefer FETCHCONTENT_SOURCE_DIR_SCRY"
-)
 include(cmake/dependencies.cmake)
 
-# Let newer CMake versions de-duplicate static libraries according to the
-# selected linker's capabilities. Older supported versions retain their
-# established ordering behavior.
-if(POLICY CMP0156)
-  cmake_policy(SET CMP0156 NEW)
-endif()
-
-# Pig Pen's warning policy. Fetched dependencies are SYSTEM and never link
-# this, so they are unaffected; public consumers also do not inherit it.
-add_library(pigpen_defaults INTERFACE)
-target_compile_options(
-  pigpen_defaults
-  INTERFACE
-    -Wall
-    -Wextra
-    -Wpedantic
-    -Wconversion
-    -Wshadow
-)
-if(PIGPEN_WARNINGS_AS_ERRORS)
-  target_compile_options(pigpen_defaults INTERFACE -Werror)
-endif()
-
+# Standard, include root, and warnings for a pig-pen target. Fetched
+# dependencies are SYSTEM and never get these warnings.
 function(pigpen_target target)
-  set(pigpen_usage_scope PRIVATE)
-  if(ARGC GREATER 1)
-    if(NOT ARGC EQUAL 2 OR NOT ARGV1 STREQUAL "PUBLIC")
-      message(
-        FATAL_ERROR
-        "pigpen_target accepts only an optional PUBLIC argument"
-      )
-    endif()
-    set(pigpen_usage_scope PUBLIC)
-  endif()
-
-  target_link_libraries(${target} PRIVATE pigpen_defaults)
-  target_compile_features(${target} ${pigpen_usage_scope} cxx_std_26)
-  target_include_directories(
+  target_compile_features(${target} PUBLIC cxx_std_26)
+  set_target_properties(${target} PROPERTIES CXX_EXTENSIONS OFF)
+  target_include_directories(${target} PUBLIC "${PROJECT_SOURCE_DIR}/src")
+  target_compile_options(
     ${target}
-    ${pigpen_usage_scope} "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>"
-  )
-  set_target_properties(
-    ${target}
-    PROPERTIES
-      CXX_STANDARD 26
-      CXX_STANDARD_REQUIRED ON
-      CXX_EXTENSIONS OFF
+    PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow
+            $<$<BOOL:${PIGPEN_WARNINGS_AS_ERRORS}>:-Werror>
   )
 endfunction()
 
 add_library(pigpen_world STATIC src/world/world.cpp)
-pigpen_target(pigpen_world PUBLIC)
+pigpen_target(pigpen_world)
 
-add_library(pigpen_reflected_tools STATIC src/agent/world_tools.cpp)
-target_link_libraries(pigpen_reflected_tools PUBLIC pigpen_world scry::scry)
-pigpen_target(pigpen_reflected_tools PUBLIC)
-
+# Every TU here compiles with -freflection (carried by scry::scry). Scry stays
+# PRIVATE so pigpen_world, pigpen_ui, and the front ends remain reflection-free.
 add_library(pigpen_agent STATIC
   src/agent/episode_runner.cpp
   src/agent/metrics_writer.cpp
@@ -96,24 +48,20 @@ add_library(pigpen_agent STATIC
   src/agent/scry_transport.cpp
   src/agent/session.cpp
   src/agent/world_tool_binding.cpp
+  src/agent/world_tools.cpp
 )
 target_link_libraries(
   pigpen_agent
-  PUBLIC
-    pigpen_world
-  PRIVATE
-    nlohmann_json::nlohmann_json
-    pigpen_reflected_tools
-    scry::scry
+  PUBLIC pigpen_world
+  PRIVATE nlohmann_json::nlohmann_json scry::scry
 )
-pigpen_target(pigpen_agent PUBLIC)
+pigpen_target(pigpen_agent)
 
-# UI logic shared by the GUI application and the test suite (kept ImGui-free so
-# tests build without SDL/OpenGL).
+# ImGui-free UI logic shared by the GUI and the tests.
 if(PIGPEN_BUILD_GUI OR PIGPEN_BUILD_TESTS)
   add_library(pigpen_ui STATIC src/ui/gui_options.cpp src/ui/world_animation.cpp)
-  target_link_libraries(pigpen_ui PUBLIC pigpen_agent pigpen_world)
-  pigpen_target(pigpen_ui PUBLIC)
+  target_link_libraries(pigpen_ui PUBLIC pigpen_agent)
+  pigpen_target(pigpen_ui)
 endif()
 
 add_executable(pig-pen-headless src/app/headless_main.cpp)
@@ -147,7 +95,7 @@ if(PIGPEN_BUILD_GUI)
   )
 
   add_executable(pig-pen src/app/main.cpp src/ui/app_ui.cpp)
-  target_link_libraries(pig-pen PRIVATE pigpen_agent pigpen_imgui pigpen_ui)
+  target_link_libraries(pig-pen PRIVATE pigpen_imgui pigpen_ui)
   pigpen_target(pig-pen)
 endif()
 

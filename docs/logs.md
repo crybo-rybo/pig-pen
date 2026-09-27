@@ -14,7 +14,8 @@ write somewhere other than `logs/`.
 
 A file always has exactly one `header` line first and one `footer` line last,
 with `tool` and `turn` records in between, in the order they happened. Object
-keys are emitted in sorted order.
+keys are written in sorted order; the examples below group them for
+readability instead.
 
 ## `header`
 
@@ -58,11 +59,11 @@ wall-blocked `move`. `action_executed` remains `true` for these world records;
 refused calls never enter the feed. `scry_turn_id`, `call_id`, `round` (one-based),
 and `index` (zero-based within the batch) come from Scry's contextual handler.
 `turn` is Pig Pen's episode turn number. `args` and `result` are copied from
-Scry's dispatch observation, exactly as posted for the provider.
+Scry's dispatch observation, exactly as posted for the provider, so a log made
+with `--opaque-look` shows `"something"` here too.
 `result_dispatched: false` marks a world action whose result could not be posted
 because the turn failed during dispatch; `args` and `result` are then `null`,
-while the typed transition and score remain truthful. A log made with
-`--opaque-look` therefore shows `"something"` here too.
+while the typed transition and score remain truthful.
 
 ## `turn`
 
@@ -144,12 +145,3 @@ done
 Since the world is seed-deterministic, two runs with the same seed and turn
 budget differ only in what the model did — the ordered `tool` records line up
 directly.
-
-## Scry v0.4.0 migration
-
-World result payloads no longer contain `action_executed`, `error`, `error_code`,
-or `turn_tool_budget`; those fields implemented the old application-side budget.
-The outer world-log `action_executed` field remains for readers of older logs.
-Budget refusals now appear in `scry_tools.rejected_calls`, not as `tool` records.
-The four-request limit now includes unknown and malformed-argument requests, so
-runs with invalid calls can execute fewer world actions than before.

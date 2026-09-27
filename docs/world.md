@@ -47,11 +47,9 @@ become property names and the `world::Direction` enumerators become the accepted
 strings. Generated object schemas set `additionalProperties: false`, so extra
 arguments are rejected rather than ignored.
 
-Scry enforces a maximum of four tool requests per conversation turn across all
-rounds and batches. Unknown tools and invalid arguments also spend this budget.
-Calls beyond it are refused before any world handler runs; the model receives a
-Scry tool error asking it to summarize. Admitted, decoded calls return flat
-reflected world results with `ok` and the tool-specific fields below.
+Admitted, decoded calls return flat reflected world results with `ok` and the
+tool-specific fields below. The per-turn call budget and round limit are
+described under [Tool errors and limits](#tool-errors-and-limits).
 
 ### `look(direction)`
 
@@ -126,8 +124,11 @@ cell and applies its reward to the score.
 ### Tool errors and limits
 
 Scry owns JSON parsing, schema validation, reflected decoding, and the call
-budget. Unknown tools, invalid arguments, and over-budget requests never enter
-`WorldTools` or create world activity. The model receives an error with enough
+budget: at most four tool requests per conversation turn across all rounds and
+batches, with unknown tools and invalid arguments also spending it. Unknown
+tools, invalid arguments, and over-budget requests never enter `WorldTools` or
+create world activity; over-budget calls get a tool error asking the model to
+summarize. The model receives an error with enough
 information to correct the request, for example:
 
 ```json
