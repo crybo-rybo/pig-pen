@@ -13,7 +13,7 @@ rules, log format) — consult them before re-deriving anything below.
 
 ## Build & test
 
-Requires GCC 16+ (`-std=c++26 -freflection`, P2996/P3394), CMake 3.28+, Ninja,
+Requires GCC 16+ (`-std=c++26 -freflection`, P2996/P3394), CMake 3.31+ (the Glaze revision scry fetches requires it), Ninja,
 Python 3, libcurl. Configure fails fast on any other compiler. First configure
 fetches all pinned dependencies (scry, nlohmann/json, SDL3, ImGui, Catch2) and
 needs network access.
@@ -117,9 +117,12 @@ Key invariants to preserve:
   New agent-layer code should stay testable through one of these.
 - The standalone tool registry captures stable world bindings that outlive the
   harness. Transport destruction cancels and disconnects delivery.
-- Scry v0.4.0 owns call admission, the four-request limit (invalid calls count),
+- Scry (v0.4.0+, pinned at v0.5.0) owns call admission, the four-request limit (invalid calls count),
   and history-preserving round-limit completion. `WorldTools` owns only world
   semantics and visibility. Exact activity payloads come from `on_tool_call`.
+- `Config::sampling_seed` maps to scry's `SamplingConfig::seed` (sent as the
+  OpenAI-compatible `seed` only when set). It is independent of the world
+  `seed`, 32-bit by scry's contract, and best-effort on the server side.
 - The three scenario flags (`--hidden-values`, `--no-reward-feedback`,
   `--opaque-look`) change only what the model is told — the world, scoring,
   and log always record the truth.

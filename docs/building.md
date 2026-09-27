@@ -4,7 +4,7 @@
 
 | requirement | notes |
 |---|---|
-| CMake 3.28+ | scry's own minimum; presets use schema version 6 |
+| CMake 3.31+ | the Glaze revision scry fetches requires it (Pig Pen's and scry's own files accept 3.28); presets use schema version 6 |
 | Ninja | the generator the presets select |
 | GCC 16+ | C++26 P2996/P3394 reflection; configured with `-std=c++26 -freflection` |
 | Python 3 | required when the test suite is enabled; drives public-boundary integration tests |
@@ -30,12 +30,14 @@ repos; add the toolchain PPA first:
 sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
 sudo apt-get update
 sudo apt-get install -y --no-install-recommends \
-  g++-16 ninja-build cmake pkg-config python3 \
+  g++-16 ninja-build pkg-config python3 python3-pip \
   libcurl4-openssl-dev libgl1-mesa-dev \
   libx11-dev libxcursor-dev libxext-dev libxfixes-dev \
   libxi-dev libxinerama-dev libxkbcommon-dev libxrandr-dev \
   libxrender-dev libxss-dev libxtst-dev \
   libwayland-dev wayland-protocols
+# Ubuntu 24.04 packages CMake 3.28, older than the fetched Glaze accepts.
+python3 -m pip install --user --break-system-packages 'cmake>=3.31'
 ```
 
 ## macOS

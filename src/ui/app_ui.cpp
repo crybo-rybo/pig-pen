@@ -228,6 +228,8 @@ AppUi::AppUi(const agent::Config &initial_config) {
   max_tool_rounds_ = static_cast<int>(initial_config.max_tool_rounds);
   max_output_tokens_ = initial_config.max_output_tokens;
   temperature_ = initial_config.temperature;
+  use_sampling_seed_ = initial_config.sampling_seed.has_value();
+  sampling_seed_ = initial_config.sampling_seed.value_or(0U);
   known_item_values_ = initial_config.known_item_values;
   reward_feedback_ = initial_config.reward_feedback;
   opaque_look_ = initial_config.opaque_look;
@@ -287,6 +289,8 @@ agent::Config AppUi::config_from_controls() const {
           static_cast<std::uint32_t>(std::clamp(max_tool_rounds_, 1, 64)),
       .max_output_tokens = max_output_tokens_,
       .temperature = std::clamp(temperature_, 0.0, 2.0),
+      .sampling_seed =
+          use_sampling_seed_ ? std::optional{sampling_seed_} : std::nullopt,
       .known_item_values = known_item_values_,
       .reward_feedback = reward_feedback_,
       .opaque_look = opaque_look_,
@@ -750,6 +754,18 @@ void AppUi::draw_controls_panel() {
   temperature_ = std::clamp(temperature_, 0.0, 2.0);
   if (ImGui::IsItemHovered()) {
     ImGui::SetTooltip("Sampling control from 0.0 to 2.0; applies on Reset.");
+  }
+  ImGui::Checkbox("##use_sampling_seed", &use_sampling_seed_);
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Send a provider sampling seed; applies on Reset.");
+  }
+  ImGui::SameLine();
+  ImGui::BeginDisabled(!use_sampling_seed_);
+  ImGui::InputScalar("Sampling seed", ImGuiDataType_U32, &sampling_seed_);
+  ImGui::EndDisabled();
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+    ImGui::SetTooltip("Best-effort repeatability on OpenAI-compatible servers; "
+                      "independent of the world seed. Applies on Reset.");
   }
   ImGui::SliderFloat("Animation speed", &animation_speed_, 0.25F, 4.0F,
                      "%.2fx");

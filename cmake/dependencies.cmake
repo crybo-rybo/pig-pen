@@ -6,7 +6,7 @@ include(FetchContent)
 
 # --- scry ---------------------------------------------------------------------
 
-# Scry v0.4.0 supplies the runtime and optional scripted testing support.
+# Scry v0.5.0 supplies the runtime and optional scripted testing support.
 # Keep upstream tests and examples out of the application build.
 set(SCRY_BUILD_TESTING_SUPPORT ${PIGPEN_BUILD_TESTS} CACHE BOOL "" FORCE)
 set(SCRY_BUILD_TESTS OFF CACHE BOOL "" FORCE)
@@ -69,7 +69,7 @@ endif()
 FetchContent_Declare(
   scry
   GIT_REPOSITORY https://github.com/crybo-rybo/scry.git
-  GIT_TAG v0.4.0
+  GIT_TAG v0.5.0
   GIT_PROGRESS TRUE
   SYSTEM
   EXCLUDE_FROM_ALL

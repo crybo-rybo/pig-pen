@@ -11,6 +11,7 @@
 #include <scry/testing/streams.hpp>
 
 #include <chrono>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -361,6 +362,25 @@ TEST_CASE("destroying the Scry transport suppresses late delivery") {
   pump_until(run.harness, [&run] { return !run.conversation.busy(); });
   CHECK(completions == 0);
   CHECK(run.conversation.messages().empty());
+}
+
+TEST_CASE("the provider sampling seed is sent only when configured") {
+  const auto sent_seed = [](const std::optional<std::uint32_t> seed) {
+    pigpen::agent::Config config;
+    config.sampling_seed = seed;
+    ScriptedWorld run{config};
+    run.enqueue(openai_text_stream("Seeded."));
+    run.send();
+    run.finish();
+    REQUIRE(run.outcome->status == TurnStatus::completed);
+    const auto requests = run.script.requests();
+    REQUIRE(requests.size() == 1);
+    return nlohmann::json::parse(requests.front().body);
+  };
+
+  const auto seeded = sent_seed(4'294'967'295U);
+  CHECK(seeded.at("seed") == 4'294'967'295U);
+  CHECK_FALSE(sent_seed(std::nullopt).contains("seed"));
 }
 
 TEST_CASE("truncated Scry completions remain terminal Pig Pen errors") {

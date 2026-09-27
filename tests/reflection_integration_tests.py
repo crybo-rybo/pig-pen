@@ -13,6 +13,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 
 EXPECTED_MODEL = "reflection-integration-model"
+SAMPLING_SEED = 42
 TOOL_CALL_ID = "call-reflected-move"
 FINAL_TEXT = "Moved east through the reflected contract."
 INVALID_TOOL_CALL_ID = "call-invalid-reflected-move"
@@ -318,6 +319,7 @@ def run_scenario(
     executable: pathlib.Path,
     responses: list[ProviderResponse],
     name: str,
+    extra_arguments: list[str] | None = None,
 ) -> ScenarioResult:
     server = ReflectionServer(responses)
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -347,6 +349,7 @@ def run_scenario(
                 str(log_directory),
                 "--prompt-variant",
                 f"reflection-integration-{name}",
+                *(extra_arguments or []),
             ]
             try:
                 completed = subprocess.run(
@@ -602,6 +605,8 @@ def assert_valid_jsonl_log(
     assert_one_scry_call(turn_records[0])
 
     footer = records[-1]
+    check(header.get("sampling_seed") == SAMPLING_SEED, f"wrong seed: {header!r}")
+
     check(footer.get("type") == "footer", f"missing JSONL footer: {records!r}")
     check(footer.get("complete") is True, f"incomplete JSONL footer: {footer!r}")
     check(
@@ -631,6 +636,7 @@ def assert_rejected_jsonl_log(records: list[dict[str, Any]], base_url: str) -> N
     check(header.get("type") == "header", f"missing rejection header: {records!r}")
     check(header.get("model") == EXPECTED_MODEL, f"wrong log model: {header!r}")
     check(header.get("base_url") == base_url, f"wrong log base URL: {header!r}")
+    check(header.get("sampling_seed") is None, f"unexpected seed: {header!r}")
 
     tool_records = [record for record in records if record.get("type") == "tool"]
     check(
@@ -692,6 +698,7 @@ def main() -> int:
             ProviderResponse(FINAL_STREAM, "req-reflection-final"),
         ],
         "valid",
+        ["--sampling-seed", str(SAMPLING_SEED)],
     )
     check(
         valid.completed.returncode == 0,
@@ -703,6 +710,11 @@ def main() -> int:
         f"expected two valid provider requests, got {len(valid.requests)}",
     )
     assert_reflected_tools(valid.requests[0])
+    for request in valid.requests:
+        check(
+            request.body.get("seed") == SAMPLING_SEED,
+            f"sampling seed was not sent on every request: {request.body!r}",
+        )
     response = extract_tool_response(valid.requests[1])
     assert_headless_tool_activity(valid.completed.stdout, response)
     assert_valid_jsonl_log(valid.records, response, valid.base_url)
@@ -733,6 +745,10 @@ def main() -> int:
         f"expected two rejection provider requests, got {len(rejected.requests)}",
     )
     assert_reflected_tools(rejected.requests[0])
+    check(
+        all("seed" not in request.body for request in rejected.requests),
+        f"unset sampling seed was sent: {rejected.requests!r}",
+    )
     assert_reflection_rejection(rejected.requests[1])
     assert_rejected_jsonl_log(rejected.records, rejected.base_url)
     check(

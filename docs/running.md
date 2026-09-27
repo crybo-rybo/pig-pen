@@ -35,7 +35,7 @@ text as it arrives, prints one line per decoded world-tool call with the before
 → after position, and ends with a summary:
 
 ```
-session model="llama3.1:8b-instruct-q4_K_M" base_url="http://127.0.0.1:11434/v1" seed=42 turns=4 max_tool_rounds=8 max_world_tool_calls_per_turn=4 max_output_tokens=8096 temperature=0
+session model="llama3.1:8b-instruct-q4_K_M" base_url="http://127.0.0.1:11434/v1" seed=42 turns=4 max_tool_rounds=8 max_world_tool_calls_per_turn=4 max_output_tokens=8096 temperature=0 sampling_seed=unset
 log_path="logs/20260807-101500-123-llama3.1_8b-instruct-q4_K_M-42.jsonl"
 tool[turn=1,tick=1] look args={"direction":"north"} result={"cells":[...],"direction":"north","ok":true,"wall_at_distance":5} position=(5,5)->(5,5)
 assistant[turn=1]: I
@@ -68,6 +68,7 @@ reports how many requested calls were left unexecuted.
 | `--turns INTEGER` | `20` | turn budget, 1–10000 |
 | `--max-tool-rounds INTEGER` | `8` | tool rounds allowed inside one turn, 1–64 |
 | `--temperature NUMBER` | `0.0` | model sampling temperature, 0.0–2.0; independent of the world seed |
+| `--sampling-seed INTEGER` | *(unset)* | provider sampling seed, 0–4294967295; sent as the request's `seed` field only when given |
 | `--timeout-seconds INTEGER` | `300` | wall-clock deadline for the whole episode, 1–86400 |
 | `--log-dir PATH` | `logs` | where the JSONL file is written |
 | `--prompt-variant NAME` | `default` | free-form label stored in the log header |
@@ -79,6 +80,13 @@ reports how many requested calls were left unexecuted.
 
 Values may be written either way: `--seed 42` or `--seed=42`. Flags in the last
 block take no value.
+
+`--seed` fixes the world; `--sampling-seed` asks the model server to fix its
+sampling. The two are independent. Repeatability from a sampling seed is up to
+the server and best-effort even there: the same seed, model, prompt, and
+temperature often reproduce a run on one server, but nothing carries across
+models, servers, or server versions. Scry forwards the value and promises
+nothing more.
 
 The three scenario flags change only what the model is told — the world, the
 scoring, and the log always record the truth. See
@@ -138,8 +146,9 @@ called out explicitly.
   checkbox switches the dropdown to `Custom`. The preset name is stored as the
   log's `prompt_variant`.
 - Seed (with **Reroll + Reset**), turn budget, tool rounds per turn,
-  temperature, and animation speed. Temperature and other session settings
-  take effect only on reset.
+  temperature, an optional sampling seed (tick the box to send it), and
+  animation speed. Temperature, sampling seed, and other session settings take
+  effect only on reset.
 - *Episode*: **Play / Pause / Stop / Reset**, the current state, the log path,
   and any error.
 

@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 
 namespace pigpen::agent {
@@ -26,6 +27,10 @@ struct Config {
   std::uint32_t max_tool_rounds{8};
   std::uint32_t max_output_tokens{8'096};
   double temperature{0.0};
+  /// Provider sampling seed, independent of the world seed. Sent as the
+  /// OpenAI-compatible `seed` field when set and omitted when unset;
+  /// repeatability is best-effort and entirely up to the server.
+  std::optional<std::uint32_t> sampling_seed{};
 
   /// Include the item/reward table in the system prompt.
   bool known_item_values{true};

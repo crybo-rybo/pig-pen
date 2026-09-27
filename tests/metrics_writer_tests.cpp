@@ -44,6 +44,7 @@ TEST_CASE("metrics log contains a reconcilable header tool turn and footer") {
   config.seed = 42;
   config.turn_budget = 2;
   config.temperature = 0.5;
+  config.sampling_seed = 7;
   auto created =
       pigpen::agent::MetricsWriter::create(directory, config, "default");
   REQUIRE(created.has_value());
@@ -98,6 +99,7 @@ TEST_CASE("metrics log contains a reconcilable header tool turn and footer") {
   REQUIRE(records.front().at("type") == "header");
   REQUIRE(records.front().at("seed") == 42);
   REQUIRE(records.front().at("temperature") == 0.5);
+  REQUIRE(records.front().at("sampling_seed") == 7);
   REQUIRE(records.front().at("max_output_tokens") == config.max_output_tokens);
   REQUIRE(records.front().at("scenario").at("max_world_tool_calls_per_turn") ==
           4);
@@ -146,6 +148,7 @@ TEST_CASE("destroying an unfinished writer still emits an incomplete footer") {
 
   const auto records = read_records(path);
   REQUIRE(records.size() == 3);
+  REQUIRE(records.front().at("sampling_seed").is_null());
   REQUIRE(records.back().at("type") == "footer");
   REQUIRE(records.back().at("complete") == false);
   REQUIRE(records.back().at("finish_reason") == "abandoned");
