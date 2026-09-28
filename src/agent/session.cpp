@@ -3,6 +3,7 @@
 /// reflection-based tool registration; the contract is in the header.
 #include "agent/session.hpp"
 
+#include "agent/episode_summary.hpp"
 #include "agent/metrics_writer.hpp"
 #include "agent/prompt.hpp"
 #include "agent/scry_transport.hpp"
@@ -14,6 +15,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -21,11 +23,13 @@
 namespace pigpen::agent {
 
 struct Session::Impl {
-  Impl(Config initial_config, std::unique_ptr<MetricsWriter> initial_metrics,
+  Impl(Config initial_config, RewardWeights initial_reward_weights,
+       std::unique_ptr<MetricsWriter> initial_metrics,
        std::unique_ptr<world::World> initial_world,
        std::unique_ptr<WorldToolBinding> initial_tools,
        scry::Harness initial_harness, scry::Conversation initial_conversation)
-      : config(std::move(initial_config)), world(std::move(initial_world)),
+      : config(std::move(initial_config)),
+        reward_weights(initial_reward_weights), world(std::move(initial_world)),
         metrics(std::move(initial_metrics)), tools(std::move(initial_tools)),
         harness(std::move(initial_harness)),
         conversation(std::move(initial_conversation)),
@@ -62,9 +66,13 @@ struct Session::Impl {
                       }
                     },
                 .on_episode_finished =
-                    [this](const EpisodeResult &result) {
-                      if (auto status = metrics->finish(result, world->score());
-                          !status) {
+                    [this](const EpisodeResult &) {
+                      finished = std::chrono::steady_clock::now();
+                      // The runner's snapshot already carries the result.
+                      const auto summary = summarize_episode(
+                          *world, activities, turns, runner.snapshot(),
+                          elapsed(), reward_weights);
+                      if (auto status = metrics->finish(summary); !status) {
                         metrics_error = std::move(status.error());
                       }
                     },
@@ -80,9 +88,16 @@ struct Session::Impl {
     };
   }
 
+  [[nodiscard]] std::chrono::milliseconds elapsed() const {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        finished.value_or(std::chrono::steady_clock::now()) - created);
+  }
+
   Config config;
+  RewardWeights reward_weights;
   std::chrono::steady_clock::time_point created{
       std::chrono::steady_clock::now()};
+  std::optional<std::chrono::steady_clock::time_point> finished{};
   std::unique_ptr<world::World> world;
   ToolActivityFeed activities{};
   std::vector<EpisodeTurn> turns{};
@@ -100,7 +115,7 @@ struct Session::Impl {
 
 std::expected<std::shared_ptr<Session>, std::string>
 Session::create(Config config, std::filesystem::path log_directory,
-                std::string prompt_variant) {
+                std::string prompt_variant, RewardWeights reward_weights) {
   if (config.turn_budget == 0) {
     return std::unexpected("turn budget must be greater than zero");
   }
@@ -138,7 +153,7 @@ Session::create(Config config, std::filesystem::path log_directory,
   }
 
   return std::shared_ptr<Session>{new Session{std::make_unique<Impl>(
-      std::move(config), std::move(*metrics), std::move(world),
+      std::move(config), reward_weights, std::move(*metrics), std::move(world),
       std::move(tools), std::move(*harness), std::move(*conversation))}};
 }
 
@@ -190,9 +205,10 @@ const std::vector<EpisodeTurn> &Session::turns() const noexcept {
   return impl_->turns;
 }
 
-std::chrono::milliseconds Session::elapsed() const {
-  return std::chrono::duration_cast<std::chrono::milliseconds>(
-      std::chrono::steady_clock::now() - impl_->created);
+std::chrono::milliseconds Session::elapsed() const { return impl_->elapsed(); }
+
+const RewardWeights &Session::reward_weights() const noexcept {
+  return impl_->reward_weights;
 }
 
 const std::filesystem::path &Session::metrics_path() const noexcept {

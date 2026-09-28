@@ -20,10 +20,12 @@ include(Catch)
 add_executable(
   pigpen_tests
     tests/episode_runner_tests.cpp
+    tests/episode_summary_tests.cpp
     tests/episode_turn_tests.cpp
     tests/gui_options_tests.cpp
     tests/metrics_writer_tests.cpp
     tests/prompt_tests.cpp
+    tests/reward_tests.cpp
     tests/session_tests.cpp
     tests/world_animation_tests.cpp
     tests/world_tests.cpp

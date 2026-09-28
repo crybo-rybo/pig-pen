@@ -1,11 +1,14 @@
 /// @file session_tests.cpp
-/// @brief Covers config rejection and that a session atomically owns a seeded
-/// world, a registered tool harness, and an already-open truthful log.
+/// @brief Covers config rejection, that a session atomically owns a seeded
+/// world, a registered tool harness, and an already-open truthful log, and
+/// that its summary and footer carry the reward weights it was created with.
 ///
 /// Session is the reset unit: creation either yields the whole composed
 /// object or fails without side effects (no directory, no log file).
 
 #include "agent/session.hpp"
+
+#include "agent/episode_summary.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 #include <nlohmann/json.hpp>
@@ -15,6 +18,7 @@
 #include <fstream>
 #include <limits>
 #include <string>
+#include <thread>
 
 namespace {
 
@@ -113,6 +117,57 @@ TEST_CASE("session atomically owns a seeded world registered harness and "
   CHECK(footer.at("type") == "footer");
   CHECK(footer.at("finish_reason") == "abandoned");
   CHECK(footer.at("complete") == false);
+
+  std::error_code ignored;
+  std::filesystem::remove_all(directory, ignored);
+}
+
+TEST_CASE("a session summarises itself with its own reward weights") {
+  const auto directory = session_test_directory();
+  pigpen::agent::Config config;
+  config.model = "registry.example/pig-model:Q4_K_M";
+  pigpen::agent::RewardWeights weights;
+  weights.zero_tool_turn = -3.0;
+  std::filesystem::path log_path;
+  {
+    auto created =
+        pigpen::agent::Session::create(config, directory, "default", weights);
+    REQUIRE(created.has_value());
+    const auto &session = *created;
+    CHECK(session->reward_weights() == weights);
+
+    const auto live = pigpen::agent::summarize_episode(*session, weights);
+    CHECK_FALSE(live.complete());
+    CHECK_FALSE(live.reward.valid);
+    CHECK(live.reward.invalid_reason == "unfinished");
+    CHECK(live.reward_weights == weights);
+
+    // Stopping an idle episode finishes it at once and writes the footer.
+    REQUIRE(session->stop());
+    const auto stopped = pigpen::agent::summarize_episode(*session, weights);
+    CHECK(stopped.finish_reason == pigpen::agent::FinishReason::stopped);
+    CHECK(stopped.reward.invalid_reason == "stopped");
+    // The clock stops with the episode, so the duration stays put.
+    const auto duration = session->elapsed();
+    std::this_thread::sleep_for(std::chrono::milliseconds{3});
+    CHECK(session->elapsed() == duration);
+    CHECK(stopped.duration == duration);
+    log_path = session->metrics_path();
+  }
+
+  std::ifstream stream{log_path};
+  std::string line;
+  std::string last_line;
+  while (std::getline(stream, line)) {
+    last_line = line;
+  }
+  const auto footer = nlohmann::json::parse(last_line);
+  CHECK(footer.at("type") == "footer");
+  CHECK(footer.at("complete") == true);
+  CHECK(footer.at("finish_reason") == "stopped");
+  CHECK(footer.at("reward_weights").at("zero_tool_turn") == -3.0);
+  CHECK(footer.at("reward").at("valid") == false);
+  CHECK(footer.at("reward").at("total").is_null());
 
   std::error_code ignored;
   std::filesystem::remove_all(directory, ignored);
