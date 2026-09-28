@@ -1,6 +1,6 @@
 # Two Catch2 binaries (the reflection one links scry directly), CLI checks
-# against the headless and worker binaries, and Python loopback tests. No model server or
-# network needed.
+# against the headless and worker binaries, Python loopback tests, and the
+# example rollout consumer. No model server or network needed.
 
 include(CTest)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
@@ -197,6 +197,16 @@ add_test(
     "$<TARGET_FILE:pig-pen-worker>"
 )
 set_tests_properties(pigpen_worker_integration PROPERTIES TIMEOUT 90)
+
+add_test(
+  NAME pigpen_rollout_consumer
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/rollout_consumer_tests.py"
+    "${CMAKE_CURRENT_SOURCE_DIR}/examples/rollout_consumer.py"
+    "$<TARGET_FILE:pig-pen-worker>"
+)
+set_tests_properties(pigpen_rollout_consumer PROPERTIES TIMEOUT 60)
 
 if(UNIX)
   # Raw non-UTF-8 argv bytes cannot be spelled portably, hence Python.
