@@ -21,6 +21,12 @@ set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 option(PIGPEN_BUILD_GUI "Build the Dear ImGui application" ON)
 option(PIGPEN_BUILD_TESTS "Build pig-pen's test suite" ON)
 option(PIGPEN_WARNINGS_AS_ERRORS "Treat warnings in pig-pen code as errors" ON)
+set(
+  PIGPEN_SCRY_SOURCE
+  ""
+  CACHE PATH
+  "Deprecated path to a local scry checkout; prefer FETCHCONTENT_SOURCE_DIR_SCRY"
+)
 include(cmake/dependencies.cmake)
 
 # Standard, include root, and warnings for a pig-pen target. Fetched

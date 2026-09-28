@@ -364,6 +364,30 @@ TEST_CASE("destroying the Scry transport suppresses late delivery") {
   CHECK(run.conversation.messages().empty());
 }
 
+TEST_CASE("a turn with an undelivered terminal callback blocks the next "
+          "send") {
+  ScriptedWorld run;
+  std::size_t completions{};
+  const auto count = [&completions](auto) { ++completions; };
+  auto transport = std::make_unique<pigpen::agent::ScryTurnTransport>(
+      run.harness, run.conversation);
+  run.enqueue(openai_text_stream("First."));
+  run.enqueue(openai_text_stream("Second."));
+  REQUIRE(transport->send("One.", {.on_finished = count}));
+  // Scry ingests the terminal event and frees the conversation, but a zero
+  // callback budget holds on_finished back.
+  const auto idle = [&run] { return !run.conversation.busy(); };
+  pump_until(run.harness, idle, {.max_callbacks = 0});
+  CHECK_FALSE(transport->send("Two.", {.on_finished = count}));
+
+  transport.reset();
+  for (int pump = 0; pump < 20; ++pump) {
+    run.harness.update();
+    std::this_thread::sleep_for(1ms);
+  }
+  CHECK(completions == 0);
+}
+
 TEST_CASE("the provider sampling seed is sent only when configured") {
   const auto sent_seed = [](const std::optional<std::uint32_t> seed) {
     pigpen::agent::Config config;

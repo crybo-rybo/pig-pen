@@ -60,6 +60,14 @@ ScryTurnTransport::~ScryTurnTransport() {
 
 std::expected<void, std::string>
 ScryTurnTransport::send(std::string user_message, TurnCallbacks callbacks) {
+  // Scry clears Conversation::busy() once it ingests the terminal event, which
+  // can precede delivery of on_finished under a limited callback budget.
+  // Replacing turn_ then would leave the old callback, which captures this,
+  // connected past destruction; wait for the handle to report finished.
+  if (turn_ && !turn_->finished()) {
+    return std::unexpected("a model turn is already active");
+  }
+
   auto result = harness_.send(
       conversation_, std::move(user_message),
       scry::TurnCallbacks{

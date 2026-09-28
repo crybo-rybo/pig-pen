@@ -12,7 +12,10 @@
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {
-        "CMAKE_EXPORT_COMPILE_COMMANDS": true
+        "CMAKE_EXPORT_COMPILE_COMMANDS": true,
+        "PIGPEN_BUILD_GUI": true,
+        "PIGPEN_BUILD_TESTS": true,
+        "PIGPEN_WARNINGS_AS_ERRORS": true
       }
     },
     {
@@ -64,6 +67,9 @@
       "hidden": true,
       "output": {
         "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
       }
     },
     {

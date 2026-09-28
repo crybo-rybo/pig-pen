@@ -103,6 +103,10 @@ preset named `--model`.
 | `PIGPEN_BUILD_GUI` | `ON` | build `pig-pen`; turn off to skip SDL3, ImGui, and OpenGL entirely |
 | `PIGPEN_BUILD_TESTS` | `ON` | build both Catch2 test binaries and register all CTest cases |
 | `PIGPEN_WARNINGS_AS_ERRORS` | `ON` | `-Werror` for pig-pen's own code only |
+| `PIGPEN_SCRY_SOURCE` | *(empty)* | deprecated compatibility alias for a local scry checkout |
+
+The presets set the first three explicitly, so re-running a preset restores
+them even over a cache configured with them off.
 
 Pig Pen is intentionally a reflection-first C++26 application. Configuration
 rejects non-GNU compilers and GCC versions older than 16. Scry performs an
@@ -133,6 +137,8 @@ cmake --preset dev \
 Use an absolute path; CMake warns that relative `FETCHCONTENT_SOURCE_DIR_*`
 values depend on the calling scope. The checkout must provide the `scry::scry`
 target and pass Scry's GCC 16 capability probe; otherwise configure fails.
+The deprecated `PIGPEN_SCRY_SOURCE` option is still accepted as an alias
+(relative paths resolve against the project root) with a deprecation warning.
 The override is stored in the preset's CMake cache; delete `build/dev/` to go
 back to the pinned commit.
 

@@ -40,6 +40,9 @@ public:
   ScryTurnTransport(const ScryTurnTransport &) = delete;
   ScryTurnTransport &operator=(const ScryTurnTransport &) = delete;
 
+  /// @brief Start one model turn.
+  /// @return An error while the previous turn has not delivered its terminal
+  /// callback, or when scry rejects the send.
   [[nodiscard]] std::expected<void, std::string>
   send(std::string user_message, TurnCallbacks callbacks) override;
   bool cancel() noexcept override;

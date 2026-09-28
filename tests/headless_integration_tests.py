@@ -21,6 +21,31 @@ VALID_CALL_ID = "call-move-east"
 INVALID_CALL_ID = "call-move-up"
 FINAL_TEXT = "Moved east."
 INVALID_FINAL_TEXT = "The invalid move was rejected."
+DIRECTION_SCHEMA = {
+    "additionalProperties": False,
+    "properties": {
+        "direction": {
+            "description": "Cardinal direction: north, south, east, or west",
+            "enum": ["north", "south", "east", "west"],
+            "type": "string",
+        }
+    },
+    "required": ["direction"],
+    "type": "object",
+}
+EAT_SCHEMA = {
+    "additionalProperties": False,
+    "properties": {},
+    "required": [],
+    "type": "object",
+}
+# The provider-visible contract, in registration order: (name, description,
+# parameters) as the HTTP request must carry them.
+EXPECTED_TOOLS = [
+    ("move", "Move one cell north, south, east, or west.", DIRECTION_SCHEMA),
+    ("look", "Scan every cell in one direction to the wall.", DIRECTION_SCHEMA),
+    ("eat", "Eat the item on the current cell, if present.", EAT_SCHEMA),
+]
 # Scry's accounting for a turn with one requested call, valid or not.
 SCRY_ONE_CALL = {
     "rounds": 1,
@@ -140,8 +165,20 @@ def subset(record: dict[str, Any], expected: dict[str, Any]) -> dict[str, Any]:
 def check_first_request(body: dict[str, Any]) -> None:
     check(body.get("model") == MODEL, f"wrong model: {body.get('model')!r}")
     check(body.get("stream") is True, "request did not enable streaming")
-    names = {tool["function"]["name"] for tool in body.get("tools", [])}
-    check(names == {"look", "move", "eat"}, f"unexpected tools: {names}")
+    tools = body.get("tools")
+    check(isinstance(tools, list), f"tools is not an array: {tools!r}")
+    # A list comparison also pins cardinality and rejects duplicate tools.
+    sent = [
+        (
+            tool.get("type"),
+            tool.get("function", {}).get("name"),
+            tool.get("function", {}).get("description"),
+            tool.get("function", {}).get("parameters"),
+        )
+        for tool in tools
+    ]
+    expected = [("function", *tool) for tool in EXPECTED_TOOLS]
+    check(sent == expected, f"unexpected provider-visible tools: {tools!r}")
 
 
 def only_tool_message(body: dict[str, Any]) -> dict[str, Any]:
@@ -249,6 +286,21 @@ def test_schema_rejection_exits_5(executable: str) -> None:
     check_first_request(requests[0])
     check(all("seed" not in body for body in requests), "unset seed was sent")
 
+    history = requests[1]["messages"]
+    assistant_calls = [
+        call
+        for m in history
+        if m.get("role") == "assistant"
+        for call in m.get("tool_calls") or []
+    ]
+    check(
+        [
+            (c.get("id"), c["function"]["name"], json.loads(c["function"]["arguments"]))
+            for c in assistant_calls
+        ]
+        == [(INVALID_CALL_ID, "move", {"direction": "up"})],
+        f"rejected call missing from assistant history: {assistant_calls!r}",
+    )
     message = only_tool_message(requests[1])
     check(message.get("tool_call_id") == INVALID_CALL_ID, f"lost call id: {message!r}")
     check(

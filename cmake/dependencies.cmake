@@ -9,6 +9,55 @@ include(FetchContent)
 
 # scry::testing (the scripted transport) is only needed by the test suite.
 set(SCRY_BUILD_TESTING_SUPPORT ${PIGPEN_BUILD_TESTS} CACHE BOOL "" FORCE)
+
+# Deprecated compatibility alias for FETCHCONTENT_SOURCE_DIR_SCRY. It resolves
+# relative paths against the project source, unlike FetchContent's
+# scope-dependent relative-path handling, and fails rather than silently
+# building the pinned revision when the checkout is invalid or conflicts.
+if(PIGPEN_SCRY_SOURCE)
+  get_filename_component(
+    PIGPEN_SCRY_SOURCE_ABSOLUTE
+    "${PIGPEN_SCRY_SOURCE}"
+    ABSOLUTE
+    BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}"
+  )
+  if(NOT EXISTS "${PIGPEN_SCRY_SOURCE_ABSOLUTE}/CMakeLists.txt")
+    message(
+      FATAL_ERROR
+      "PIGPEN_SCRY_SOURCE does not contain CMakeLists.txt: "
+      "${PIGPEN_SCRY_SOURCE_ABSOLUTE}"
+    )
+  endif()
+
+  if(FETCHCONTENT_SOURCE_DIR_SCRY)
+    get_filename_component(
+      FETCHCONTENT_SOURCE_DIR_SCRY_ABSOLUTE
+      "${FETCHCONTENT_SOURCE_DIR_SCRY}"
+      ABSOLUTE
+      BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+    if(NOT PIGPEN_SCRY_SOURCE_ABSOLUTE STREQUAL
+       FETCHCONTENT_SOURCE_DIR_SCRY_ABSOLUTE)
+      message(
+        FATAL_ERROR
+        "PIGPEN_SCRY_SOURCE and FETCHCONTENT_SOURCE_DIR_SCRY select different checkouts"
+      )
+    endif()
+  endif()
+
+  message(
+    DEPRECATION
+    "PIGPEN_SCRY_SOURCE is deprecated; use FETCHCONTENT_SOURCE_DIR_SCRY"
+  )
+  set(
+    FETCHCONTENT_SOURCE_DIR_SCRY
+    "${PIGPEN_SCRY_SOURCE_ABSOLUTE}"
+    CACHE PATH
+    "Use a local scry checkout instead of fetching the pinned revision"
+    FORCE
+  )
+endif()
+
 FetchContent_Declare(
   scry
   GIT_REPOSITORY https://github.com/crybo-rybo/scry.git
@@ -28,6 +77,10 @@ FetchContent_Declare(
 )
 
 FetchContent_MakeAvailable(scry nlohmann_json)
+
+if(NOT TARGET scry::scry)
+  message(FATAL_ERROR "The selected Scry source does not provide scry::scry")
+endif()
 
 if(PIGPEN_BUILD_GUI)
   # Link SDL3 statically into the GUI binary.
