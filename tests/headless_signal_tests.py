@@ -115,6 +115,15 @@ def main() -> int:
             fail(f"signal footer is not complete: {footer}")
         if footer.get("finish_reason") != "stopped":
             fail(f"unexpected signal finish reason: {footer}")
+        reward = footer.get("reward") or {}
+        if (
+            reward.get("valid") is not False
+            or reward.get("invalid_reason") != "stopped"
+            or reward.get("total") is not None
+        ):
+            fail(f"a stopped episode must carry an invalid reward: {footer}")
+        if " reward=invalid\n" not in stdout:
+            fail(f"summary line does not mark the reward invalid: {stdout}")
         if "received signal" not in stderr:
             fail(f"signal diagnostic missing from stderr: {stderr}")
         if f'model="{expected_model}"' not in stdout:

@@ -5,6 +5,8 @@
 /// printing of the transcript and activity feed, and the exit-code policy
 /// from docs/running.md. Episode behavior itself lives in agent::Session.
 #include "agent/episode_runner.hpp"
+#include "agent/episode_summary.hpp"
+#include "agent/reward.hpp"
 #include "agent/session.hpp"
 
 #include <charconv>
@@ -14,6 +16,7 @@
 #include <cstdint>
 #include <expected>
 #include <filesystem>
+#include <format>
 #include <iomanip>
 #include <iostream>
 #include <limits>
@@ -47,6 +50,7 @@ extern "C" void request_termination(const int signal_number) noexcept {
 
 struct Options {
   pigpen::agent::Config config{};
+  pigpen::agent::RewardWeights reward_weights{};
   std::filesystem::path log_directory{"logs"};
   std::chrono::seconds timeout{300};
   std::string prompt_variant{"default"};
@@ -74,6 +78,10 @@ Options:
   --opaque-look             Report occupied cells as 'something'
   --prompt-variant NAME     Label recorded in the metrics header
   --input TEXT              Human guidance queued for the first turn
+  --reward NAME=VALUE       Override one reward weight; repeatable. NAME is one
+                            of score, explored_cell, active_turn,
+                            zero_tool_turn, failed_action, invalid_call,
+                            budget_refused_call, objective, unused_turn
   --help                    Show this help and exit
 
 Values may also use --option=value. PIGPEN_API_KEY supplies an optional API key.
@@ -183,6 +191,11 @@ Exit codes: 0 success, 1 runtime error, 2 invalid options, 3 timeout,
       result = text(options.prompt_variant);
     } else if (name == "--input") {
       result = text(options.user_input);
+    } else if (name == "--reward") {
+      result = value().and_then([&](const std::string_view assignment) {
+        return pigpen::agent::parse_reward_weight(assignment,
+                                                  options.reward_weights);
+      });
     } else if (name == "--seed") {
       result =
           integer(config.seed, 0, std::numeric_limits<std::uint64_t>::max());
@@ -298,7 +311,8 @@ void print_updates(const pigpen::agent::Session &session,
 /// code.
 [[nodiscard]] int run(const Options &options) {
   auto created = pigpen::agent::Session::create(
-      options.config, options.log_directory, options.prompt_variant);
+      options.config, options.log_directory, options.prompt_variant,
+      options.reward_weights);
   if (!created) {
     std::cerr << "startup error: " << created.error() << '\n';
     return runtime_error_exit;
@@ -375,6 +389,10 @@ void print_updates(const pigpen::agent::Session &session,
   }
 
   const auto snapshot = session->runner().snapshot();
+  const auto summary =
+      pigpen::agent::summarize_episode(*session, session->reward_weights());
+  const auto &reward = summary.reward;
+  // Ten significant digits keep the line readable; the log has the exact sum.
   std::cout << "summary finish_reason="
             << (snapshot.finish_reason
                     ? pigpen::agent::finish_reason_name(*snapshot.finish_reason)
@@ -382,7 +400,10 @@ void print_updates(const pigpen::agent::Session &session,
             << " turns_used=" << snapshot.turns_used
             << " turn_budget=" << snapshot.turn_budget
             << " score=" << session->world().score()
-            << " tool_calls=" << session->tool_activities().size() << '\n'
+            << " tool_calls=" << session->tool_activities().size() << " reward="
+            << (reward.valid ? std::format("{:.10g}", reward.total)
+                             : std::string{"invalid"})
+            << '\n'
             << "log_path=" << std::quoted(session->metrics_path().string())
             << std::endl;
 

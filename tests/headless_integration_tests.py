@@ -7,6 +7,7 @@ wiring, stdout, exit codes 0 and 5, and a JSONL log written to disk.
 from __future__ import annotations
 
 import json
+import math
 import pathlib
 import subprocess
 import sys
@@ -56,10 +57,71 @@ SCRY_ONE_CALL = {
 }
 
 
+DEFAULT_REWARD_WEIGHTS = {
+    "score": 1.0,
+    "explored_cell": 0.05,
+    "active_turn": 0.1,
+    "zero_tool_turn": -1.0,
+    "failed_action": -0.1,
+    "invalid_call": -0.5,
+    "budget_refused_call": -0.25,
+    "objective": 5.0,
+    "unused_turn": 0.1,
+}
+
+
 def call_tally(**counts: int) -> dict[str, int]:
     """A turn's `calls` record: every bucket, zero unless given."""
     buckets = ("executed", "invalid", "budget_refused", "host_refused")
     return {bucket: counts.get(bucket, 0) for bucket in buckets}
+
+
+def check_reward(
+    footer: dict[str, Any],
+    total: float,
+    counts: dict[str, int],
+    weights: dict[str, float],
+) -> None:
+    """Check a valid footer reward: its counts, each term, and the total."""
+    check(footer.get("reward_version") == 1, f"reward version: {footer!r}")
+    check(footer.get("reward_weights") == weights, f"weights: {footer!r}")
+    reward = footer.get("reward") or {}
+    names = (
+        "score",
+        "explored_cells",
+        "active_turns",
+        "zero_tool_turns",
+        "failed_actions",
+        "invalid_calls",
+        "budget_refused_calls",
+        "unused_turns",
+    )
+    expected = {name: counts.get(name, 0) for name in names}
+    expected |= {"valid": True, "invalid_reason": None, "objective_complete": False}
+    check(subset(reward, expected) == expected, f"reward counts: {reward!r}")
+    # Each term is its count times its weight; `objective` is unmet here.
+    term_counts = {
+        "score": expected["score"],
+        "explored_cell": expected["explored_cells"],
+        "active_turn": expected["active_turns"],
+        "zero_tool_turn": expected["zero_tool_turns"],
+        "failed_action": expected["failed_actions"],
+        "invalid_call": expected["invalid_calls"],
+        "budget_refused_call": expected["budget_refused_calls"],
+        "objective": 0,
+        "unused_turn": expected["unused_turns"],
+    }
+    terms = reward.get("terms") or {}
+    check(terms.keys() == term_counts.keys(), f"reward terms: {terms!r}")
+    for name, count in term_counts.items():
+        check(
+            math.isclose(terms[name], count * weights[name], abs_tol=1e-9),
+            f"reward term {name}: {terms!r}",
+        )
+    check(
+        math.isclose(reward.get("total"), total, abs_tol=1e-9),
+        f"reward total: {reward!r}",
+    )
 
 
 def check(condition: bool, message: str) -> None:
@@ -231,6 +293,11 @@ def test_valid_move(executable: str) -> None:
         activity,
         FINAL_TEXT,
         "summary finish_reason=turn_budget",
+        # One cell explored beyond the spawn (0.05) and one active turn (0.1).
+        (
+            "summary finish_reason=turn_budget turns_used=1 turn_budget=1 score=0 "
+            "tool_calls=1 reward=0.15\n"
+        ),
     ):
         check(line in completed.stdout, f"missing {line!r} in stdout\n{output}")
 
@@ -276,8 +343,15 @@ def test_valid_move(executable: str) -> None:
         "complete": True,
         "finish_reason": "turn_budget",
         "tool_call_counts": {"eat": 0, "look": 0, "move": 1},
+        "calls": call_tally(executed=1),
     }
     check(subset(footer, expected_footer) == expected_footer, f"footer: {footer!r}")
+    check_reward(
+        footer,
+        total=0.15,
+        counts={"explored_cells": 1, "active_turns": 1},
+        weights=DEFAULT_REWARD_WEIGHTS,
+    )
 
 
 def test_schema_rejection_exits_5(executable: str) -> None:
@@ -287,6 +361,8 @@ def test_schema_rejection_exits_5(executable: str) -> None:
             tool_call_stream(INVALID_CALL_ID, "move", {"direction": "up"}),
             text_stream(INVALID_FINAL_TEXT),
         ],
+        # Both value syntaxes; the log must record the weights actually used.
+        *("--reward", "invalid_call=-2", "--reward=zero_tool_turn=-1.5"),
     )
     output = f"stdout={completed.stdout}\nstderr={completed.stderr}"
     check(completed.returncode == 5, f"exit {completed.returncode}\n{output}")
@@ -323,7 +399,7 @@ def test_schema_rejection_exits_5(executable: str) -> None:
     check("tool[turn=" not in completed.stdout, f"world activity\n{output}")
     check(
         "summary finish_reason=turn_budget turns_used=1 turn_budget=1 score=0 "
-        "tool_calls=0" in completed.stdout,
+        "tool_calls=0 reward=-3.5\n" in completed.stdout,
         f"unexpected summary\n{output}",
     )
     check("validation error:" in completed.stderr, f"no exit-5 diagnostic\n{output}")
@@ -346,8 +422,15 @@ def test_schema_rejection_exits_5(executable: str) -> None:
         "finish_reason": "turn_budget",
         "final_score": 0,
         "tool_call_counts": {"eat": 0, "look": 0, "move": 0},
+        "calls": call_tally(invalid=1),
     }
     check(subset(footer, expected_footer) == expected_footer, f"footer: {footer!r}")
+    check_reward(
+        footer,
+        total=-3.5,
+        counts={"zero_tool_turns": 1, "invalid_calls": 1},
+        weights=DEFAULT_REWARD_WEIGHTS | {"invalid_call": -2.0, "zero_tool_turn": -1.5},
+    )
 
 
 def main() -> int:
