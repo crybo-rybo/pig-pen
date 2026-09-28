@@ -1,11 +1,12 @@
 /// @file worker_main.cpp
-/// @brief RL worker entry point: play seeds × samples episodes, P at a time,
-/// and write one JSONL record per episode plus a batch record to stdout.
+/// @brief RL worker entry point: play seeds × samples episodes (or the jobs
+/// a trainer writes to stdin), P at a time, and write one JSONL record per
+/// episode plus a batch record to stdout.
 ///
-/// Everything here is the usage text, the worker's own options, turning a
-/// job into a Session, the records, and the exit-code policy from
-/// docs/training.md. Scheduling lives in agent::EpisodeBatch, the deadline
-/// and cooperative cancellation in agent::EpisodeDriver, and episode
+/// Everything here is the usage text, the worker's own options, where jobs
+/// come from, turning a job into a Session, the records, and the exit-code
+/// policy from docs/training.md. Scheduling lives in agent::EpisodeBatch, the
+/// deadline and cooperative cancellation in agent::EpisodeDriver, and episode
 /// behavior in agent::Session, byte for byte the one the other front ends
 /// run. Every callback, including record output, runs on this thread.
 #include "agent/episode_batch.hpp"
@@ -15,6 +16,7 @@
 #include "agent/session_options.hpp"
 #include "agent/summary_json.hpp"
 #include "cli/config_options.hpp"
+#include "cli/line_reader.hpp"
 #include "cli/option_parser.hpp"
 #include "cli/termination_signal.hpp"
 #include "cli/worker_jobs.hpp"
@@ -26,6 +28,7 @@
 #include <exception>
 #include <expected>
 #include <format>
+#include <functional>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -48,11 +51,23 @@ constexpr int signal_exit_base = 128;
 /// @brief invalid_reason of an episode its worker deadline cut short.
 constexpr std::string_view timeout_reason{"timeout"};
 
+/// @brief The only `--jobs` source: job lines on standard input.
+constexpr std::string_view stdin_jobs{"-"};
+/// @brief Job lines read ahead of the batch at most; past this the reader
+/// stops and the pipe holds the writer back.
+constexpr std::size_t queued_job_lines{1024};
+/// @brief Job lines one poll of stdin takes at most, so a flood of rejected
+/// lines cannot starve the live episodes.
+constexpr int job_lines_per_poll{64};
+
 struct Options {
   pigpen::agent::Config config{};
   pigpen::agent::SessionOptions session{};
   std::vector<std::uint64_t> seeds{};
-  std::uint32_t samples{1};
+  /// Engaged only when given, so `--jobs -` can refuse it.
+  std::optional<std::uint32_t> samples{};
+  /// `--jobs`; only `-` is accepted.
+  std::optional<std::string> jobs{};
   std::uint32_t parallel{1};
   std::string rollout_prefix{"rollout"};
   std::optional<std::uint32_t> sampling_seed_base{};
@@ -72,19 +87,23 @@ struct Options {
                   "with --seeds");
   parser.value("--seeds", "LIST",
                "World seeds: comma-separated seeds and inclusive A-B ranges; "
-               "repeatable, each seed at most once (required)",
+               "repeatable, each seed at most once (required without --jobs)",
                [&options](const std::string_view value) {
                  return pigpen::cli::parse_seed_list(value, options.seeds);
                });
   parser.integer("--samples", "INTEGER", options.samples, 1,
                  pigpen::cli::max_worker_samples,
-                 std::format("Episodes per world seed, 1..{} (default: {})",
-                             pigpen::cli::max_worker_samples, options.samples));
+                 std::format("Episodes per world seed, 1..{} (default: 1)",
+                             pigpen::cli::max_worker_samples));
+  parser.text("--jobs", "-", options.jobs,
+              "Read jobs as JSON lines from stdin instead of --seeds, until "
+              "end of input");
   parser.integer("--parallel", "INTEGER", options.parallel, 1, 256,
                  std::format("Episodes in flight at once, 1..256 (default: {})",
                              options.parallel));
   parser.text("--rollout-prefix", "TEXT", options.rollout_prefix,
-              std::format("Rollout ids are PREFIX/SEED/SAMPLE (default: {})",
+              std::format("Rollout ids are PREFIX/SEED/SAMPLE unless a job "
+                          "line names its own (default: {})",
                           options.rollout_prefix));
   parser.integer("--sampling-seed-base", "INTEGER", options.sampling_seed_base,
                  0, u32_max,
@@ -109,11 +128,19 @@ struct Options {
 void print_usage(std::ostream &output, const std::string_view program) {
   Options defaults;
   output << "Usage: " << program << R"( --model NAME --seeds LIST [options]
+       )" << program
+         << R"( --model NAME --jobs - [options] < JOBS
 
 Play every world seed in LIST --samples times against an OpenAI-compatible
 model server, --parallel episodes at a time, and write one JSON line per
 episode to stdout, then one batch line. Every request carries
 X-Pigpen-Rollout: PREFIX/SEED/SAMPLE and X-Pigpen-Seed: SEED.
+
+With --jobs -, each stdin line is one job instead, started as soon as a slot
+is free: {"seed":N} plus optional "sample" (default 0), "rollout_id"
+(default PREFIX/SEED/SAMPLE, unique per stream), and "sampling_seed" (a
+number, or null for --sampling-seed). A line that is not a job gets a
+job_error line on stdout. The batch ends at end of input.
 
 Options:
 )" << option_parser(defaults).help()
@@ -123,15 +150,16 @@ Records go to stdout, diagnostics to stderr.
 
 Exit codes: 0 every episode valid, 1 a session could not be created (batch
             aborted) or stdout failed, 2 invalid options, 6 at least one
-            episode invalid, 130 SIGINT, 143 SIGTERM. Signals cancel
-            in-flight episodes cooperatively and still write their records.
+            episode invalid or job line rejected, 130 SIGINT, 143 SIGTERM.
+            Signals cancel in-flight episodes cooperatively and still write
+            their records.
 )";
 }
 
 /// @brief The parsed options and the jobs they describe.
 struct Plan {
   Options options{};
-  /// Absent only for `--help`.
+  /// Absent for `--help` and for `--jobs -`, whose jobs come from stdin.
   std::optional<pigpen::cli::WorkerJobs> jobs{};
 };
 
@@ -161,9 +189,28 @@ parse_plan(const std::span<const std::string_view> arguments) {
     return std::unexpected(
         "--sampling-seed and --sampling-seed-base cannot both be given");
   }
+  if (options.jobs) {
+    if (*options.jobs != stdin_jobs) {
+      return std::unexpected(
+          "--jobs accepts only - (job lines on standard input)");
+    }
+    const std::pair<bool, std::string_view> exclusive[] = {
+        {!options.seeds.empty(), "--seeds"},
+        {options.samples.has_value(), "--samples"},
+        {options.sampling_seed_base.has_value(), "--sampling-seed-base"},
+    };
+    for (const auto &[given, name] : exclusive) {
+      if (given) {
+        return std::unexpected("--jobs - cannot be combined with " +
+                               std::string{name} +
+                               "; every job line names its own seed");
+      }
+    }
+    return plan;
+  }
   auto jobs = pigpen::cli::WorkerJobs::create(
-      std::move(options.seeds), options.samples, options.rollout_prefix,
-      options.sampling_seed_base);
+      std::move(options.seeds), options.samples.value_or(1),
+      options.rollout_prefix, options.sampling_seed_base);
   if (!jobs) {
     return std::unexpected(std::move(jobs.error()));
   }
@@ -201,6 +248,96 @@ struct RecordTally {
   std::size_t written{};
   std::size_t valid{};
   std::size_t invalid{};
+  /// Job lines rejected, each with a `job_error` record.
+  std::size_t job_errors{};
+};
+
+/// @brief Only spaces, tabs, and carriage returns: a line that is skipped.
+[[nodiscard]] bool is_blank(const std::string_view line) {
+  return line.find_first_not_of(" \t\r") == std::string_view::npos;
+}
+
+/// @brief Where the batch's jobs come from: the command line's seeds ×
+/// samples, or job lines read from stdin as slots free up.
+class JobFeed final {
+public:
+  /// @brief The command line's jobs, all known up front.
+  explicit JobFeed(const pigpen::cli::WorkerJobs &jobs) : jobs_(&jobs) {}
+
+  /// @brief Job lines from stdin, starting a reader thread now.
+  JobFeed(std::string rollout_prefix, RecordTally &tally, RecordOutput &output)
+      : stream_(std::in_place, std::move(rollout_prefix)), tally_(&tally),
+        output_(&output) {
+    reader_.emplace(pigpen::cli::standard_input_bytes(),
+                    pigpen::cli::max_job_line_bytes, queued_job_lines);
+  }
+
+  /// @brief An episode batch over these jobs.
+  [[nodiscard]] pigpen::agent::EpisodeBatch
+  batch(const std::size_t parallel, const std::chrono::seconds timeout,
+        pigpen::agent::EpisodeBatch::Factory factory) {
+    if (jobs_ != nullptr) {
+      return {jobs_->size(), parallel, timeout, std::move(factory)};
+    }
+    return {[this](std::size_t) { return poll(); }, parallel, timeout,
+            std::move(factory)};
+  }
+
+  /// @brief Job @p index, which the batch has just been told is ready.
+  [[nodiscard]] pigpen::cli::WorkerJob take(const std::size_t index) {
+    if (jobs_ != nullptr) {
+      return jobs_->at(index);
+    }
+    return *std::exchange(ready_, std::nullopt);
+  }
+
+private:
+  /// @brief Take stdin lines until one is a job, reporting each rejected
+  /// line; never blocks.
+  [[nodiscard]] pigpen::agent::JobStatus poll() {
+    for (int taken = 0; taken < job_lines_per_poll; ++taken) {
+      pigpen::cli::InputLine line;
+      switch (reader_->poll(line)) {
+      case pigpen::cli::LineStatus::waiting:
+        return pigpen::agent::JobStatus::pending;
+      case pigpen::cli::LineStatus::closed:
+        return pigpen::agent::JobStatus::exhausted;
+      case pigpen::cli::LineStatus::line:
+        break;
+      }
+      if (line.truncated) {
+        reject(line.number, std::format("line is longer than {} bytes",
+                                        pigpen::cli::max_job_line_bytes));
+        continue;
+      }
+      if (is_blank(line.text)) {
+        continue;
+      }
+      auto job = stream_->accept(line.text, line.number);
+      if (job) {
+        ready_ = std::move(*job);
+        return pigpen::agent::JobStatus::ready;
+      }
+      reject(line.number, std::move(job.error()));
+    }
+    return pigpen::agent::JobStatus::pending;
+  }
+
+  /// @brief Count a rejected job line and write its `job_error` record.
+  void reject(const std::size_t number, std::string error) {
+    std::cerr << "job line " << number << " rejected: " << error << '\n';
+    ++tally_->job_errors;
+    static_cast<void>(output_->write(
+        pigpen::agent::to_json_line(pigpen::agent::JobErrorRecord{
+            .line = number, .error = std::move(error)})));
+  }
+
+  const pigpen::cli::WorkerJobs *jobs_{};
+  std::optional<pigpen::cli::JobStream> stream_{};
+  RecordTally *tally_{};
+  RecordOutput *output_{};
+  std::optional<pigpen::cli::LineReader> reader_{};
+  std::optional<pigpen::cli::WorkerJob> ready_{};
 };
 
 /// @brief The `episode` record of a job whose drive just ended, while its
@@ -259,14 +396,16 @@ void report_episode(const pigpen::agent::Session &session,
 [[nodiscard]] int run(const Plan &plan,
                       const pigpen::cli::TerminationSignal &termination) {
   const auto &options = plan.options;
-  const auto &jobs = *plan.jobs;
   const auto api_key = pigpen::cli::api_key_from_environment();
   RecordTally tally;
   RecordOutput output;
+  auto feed = plan.jobs ? std::make_unique<JobFeed>(*plan.jobs)
+                        : std::make_unique<JobFeed>(options.rollout_prefix,
+                                                    tally, output);
 
   const auto create_job = [&](const std::size_t index)
       -> std::expected<pigpen::agent::BatchEntry, std::string> {
-    auto job = jobs.at(index);
+    auto job = feed->take(index);
     auto config = options.config;
     config.seed = job.seed;
     if (job.sampling_seed) {
@@ -302,9 +441,9 @@ void report_episode(const pigpen::agent::Session &session,
   };
 
   int termination_signal = 0;
-  pigpen::agent::EpisodeBatch batch{
-      jobs.size(), options.parallel,
-      std::chrono::seconds{options.timeout_seconds}, create_job};
+  auto batch =
+      feed->batch(options.parallel,
+                  std::chrono::seconds{options.timeout_seconds}, create_job);
   const auto result = batch.run({
       .now = [] { return std::chrono::steady_clock::now(); },
       .sleep =
@@ -334,7 +473,7 @@ void report_episode(const pigpen::agent::Session &session,
   } else if (termination_signal != 0) {
     exit_code = signal_exit_base + termination_signal;
     status = "interrupted";
-  } else if (tally.invalid > 0) {
+  } else if (tally.invalid > 0 || tally.job_errors > 0) {
     exit_code = invalid_episode_exit;
   }
   const pigpen::agent::BatchRecord record{
@@ -344,6 +483,7 @@ void report_episode(const pigpen::agent::Session &session,
       .valid = tally.valid,
       .invalid = tally.invalid,
       .not_started = result.not_started,
+      .job_errors = tally.job_errors,
       .duration = std::chrono::duration_cast<std::chrono::milliseconds>(
           result.duration),
       .error = result.error.value_or(""),

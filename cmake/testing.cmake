@@ -26,6 +26,7 @@ add_executable(
     tests/episode_summary_tests.cpp
     tests/episode_turn_tests.cpp
     tests/gui_options_tests.cpp
+    tests/line_reader_tests.cpp
     tests/metrics_writer_tests.cpp
     tests/prompt_tests.cpp
     tests/reward_tests.cpp
@@ -171,6 +172,21 @@ pigpen_worker_rejects(
   rejects_unknown_reward_weight
   "unknown reward weight \"bogus\""
   --model m --seeds 1 --reward bogus=1
+)
+pigpen_worker_rejects(
+  rejects_jobs_with_seeds
+  "--jobs - cannot be combined with --seeds"
+  --model m --jobs - --seeds 1
+)
+pigpen_worker_rejects(
+  rejects_jobs_with_samples
+  "--jobs - cannot be combined with --samples"
+  --model m --jobs - --samples 2
+)
+pigpen_worker_rejects(
+  rejects_jobs_file
+  "--jobs accepts only - \\(job lines on standard input\\)"
+  --model m --jobs jobs.jsonl
 )
 
 add_test(

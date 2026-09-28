@@ -12,6 +12,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -82,6 +83,37 @@ private:
   std::uint32_t samples_;
   std::string prefix_;
   std::optional<std::uint32_t> sampling_seed_base_;
+};
+
+/// @brief Longest job line `--jobs -` accepts, in bytes.
+inline constexpr std::size_t max_job_line_bytes{64 * 1024};
+
+/// @brief Turns the job lines a trainer writes to `--jobs -` into jobs:
+/// parses each line, fills in the defaults, and keeps rollout ids unique
+/// across the whole stream.
+///
+/// A line is a JSON object with a required `seed` and optional `sample`
+/// (default 0), `rollout_id` (default `<prefix>/<seed>/<sample>`), and
+/// `sampling_seed` (a number, or null or absent for the batch's own
+/// `--sampling-seed`). A rollout id must be non-empty visible ASCII, like
+/// the prefix, so it is a valid header value.
+class JobStream final {
+public:
+  /// @param prefix A prefix validate_rollout_prefix() accepts.
+  explicit JobStream(std::string prefix);
+
+  /// @brief The job for one line; @p number (one-based) is remembered with
+  /// its rollout id, to name it if the id comes again.
+  /// @return The job, or why the line is not one: the JSON error from
+  /// agent::parse_job_spec(), a bad rollout id, or a rollout id already
+  /// used, naming the line that used it. A rejected line reserves nothing.
+  [[nodiscard]] std::expected<WorkerJob, std::string>
+  accept(std::string_view line, std::size_t number);
+
+private:
+  std::string prefix_;
+  /// Every rollout id accepted so far, with its line number.
+  std::unordered_map<std::string, std::size_t> rollout_ids_{};
 };
 
 /// @brief Parse one `--header NAME=VALUE` and append it to @p headers.

@@ -53,6 +53,7 @@ add_library(pigpen_agent STATIC
   src/agent/episode_runner.cpp
   src/agent/episode_summary.cpp
   src/agent/episode_turn.cpp
+  src/agent/job_spec.cpp
   src/agent/metrics_writer.cpp
   src/agent/prompt.cpp
   src/agent/reward.cpp
@@ -75,11 +76,13 @@ pigpen_target(pigpen_agent)
 add_library(
   pigpen_cli STATIC
     src/cli/config_options.cpp
+    src/cli/line_reader.cpp
     src/cli/option_parser.cpp
     src/cli/termination_signal.cpp
     src/cli/worker_jobs.cpp
 )
-target_link_libraries(pigpen_cli PUBLIC pigpen_agent)
+find_package(Threads REQUIRED)
+target_link_libraries(pigpen_cli PUBLIC pigpen_agent PRIVATE Threads::Threads)
 pigpen_target(pigpen_cli)
 
 # ImGui-free UI logic shared by the GUI and the tests.

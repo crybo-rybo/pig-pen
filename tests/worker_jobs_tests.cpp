@@ -3,10 +3,13 @@
 /// ranges, bounds, and each diagnostic), rollout prefixes, seed-major
 /// expansion with rollout ids and sampling seeds (including the 32-bit
 /// ceiling), duplicate seeds, the job cap, `--header` parsing with its
-/// reserved names, and OptionParser::rejected().
+/// reserved names, OptionParser::rejected(), and `--jobs -` job lines:
+/// their parsing, each rejection, and the stream's defaults and unique
+/// rollout ids.
 
 #include "cli/worker_jobs.hpp"
 
+#include "agent/job_spec.hpp"
 #include "cli/option_parser.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -231,4 +234,105 @@ TEST_CASE("a rejected option always fails with its message and is hidden",
   CHECK(seed == 4);
   CHECK_FALSE(parser.help().contains("--seed "));
   CHECK(parser.help().contains("--seed-count"));
+}
+
+TEST_CASE("job lines parse into their fields exactly as given",
+          "[worker][jobs]") {
+  using pigpen::agent::JobSpec;
+  using pigpen::agent::parse_job_spec;
+  CHECK(parse_job_spec(R"({"seed":7})") == JobSpec{.seed = 7});
+  CHECK(parse_job_spec(
+            R"( {"sampling_seed":4294967295,"rollout_id":"a/b","sample":3,)"
+            R"("seed":18446744073709551615} )") ==
+        JobSpec{.seed = u64_max,
+                .sample = 3,
+                .rollout_id = "a/b",
+                .sampling_seed = u32_max});
+  // null is the same as leaving sampling_seed out.
+  CHECK(parse_job_spec(R"({"seed":0,"sampling_seed":null})") ==
+        JobSpec{.seed = 0});
+  // A carriage return before the newline is JSON whitespace.
+  CHECK(parse_job_spec("{\"seed\":1}\r") == JobSpec{.seed = 1});
+}
+
+TEST_CASE("job lines that are not jobs say why", "[worker][jobs]") {
+  const auto error = [](const std::string_view line) {
+    auto spec = pigpen::agent::parse_job_spec(line);
+    return spec ? std::string{} : spec.error();
+  };
+  const std::string seed_range =
+      "\"seed\" must be an integer in 0..18446744073709551615";
+  const std::string sample_range =
+      "\"sample\" must be an integer in 0..4294967295";
+  CHECK(error("") == "invalid JSON at byte 1");
+  CHECK(error("nope") == "invalid JSON at byte 2");
+  CHECK(error(R"({"seed":1)") == "invalid JSON at byte 10");
+  CHECK(error(R"({"seed":1} {"seed":2})") == "invalid JSON at byte 12");
+  CHECK(error("{\"seed\":1,\"rollout_id\":\"r\xff\"}")
+            .starts_with("invalid JSON at byte"));
+  CHECK(error("[1]") == "a job must be a JSON object");
+  CHECK(error("7") == "a job must be a JSON object");
+  CHECK(error(R"({"seed":1,"samples":2})") == "unknown key \"samples\"");
+  CHECK(error("{}") == "\"seed\" is required");
+  CHECK(error(R"({"sample":1})") == "\"seed\" is required");
+  for (const auto *const seed :
+       {"-1", "1.0", "1e3", "\"1\"", "null", "true", "18446744073709551616"}) {
+    CHECK(error(std::string{R"({"seed":)"} + seed + "}") == seed_range);
+  }
+  CHECK(error(R"({"seed":1,"sample":4294967296})") == sample_range);
+  CHECK(error(R"({"seed":1,"sample":-1})") == sample_range);
+  CHECK(error(R"({"seed":1,"sample":null})") == sample_range);
+  CHECK(error(R"({"seed":1,"rollout_id":7})") ==
+        "\"rollout_id\" must be a string");
+  CHECK(error(R"({"seed":1,"rollout_id":null})") ==
+        "\"rollout_id\" must be a string");
+  for (const auto *const value : {"4294967296", "\"5\"", "-2", "0.5"}) {
+    CHECK(error(std::string{R"({"seed":1,"sampling_seed":)"} + value + "}") ==
+          "\"sampling_seed\" must be null or an integer in 0..4294967295");
+  }
+}
+
+TEST_CASE("a job stream fills in defaults and keeps rollout ids unique",
+          "[worker][jobs]") {
+  pigpen::cli::JobStream stream{"run42"};
+  const auto accept = [&stream](const std::string_view line,
+                                const std::size_t number) {
+    auto job = stream.accept(line, number);
+    return job ? *job : WorkerJob{.rollout_id = "error: " + job.error()};
+  };
+  CHECK(accept(R"({"seed":1003})", 1) ==
+        WorkerJob{.seed = 1003, .sample = 0, .rollout_id = "run42/1003/0"});
+  CHECK(accept(R"({"seed":1003,"sample":2,"sampling_seed":9})", 2) ==
+        WorkerJob{.seed = 1003,
+                  .sample = 2,
+                  .rollout_id = "run42/1003/2",
+                  .sampling_seed = 9});
+  CHECK(accept(R"({"seed":5,"rollout_id":"trial-9/a"})", 3) ==
+        WorkerJob{.seed = 5, .sample = 0, .rollout_id = "trial-9/a"});
+
+  // Repeating an id, spelled out or defaulted, names the line that used it.
+  CHECK(accept(R"({"seed":6,"rollout_id":"run42/1003/0"})", 4).rollout_id ==
+        "error: rollout id \"run42/1003/0\" was already used on line 1");
+  CHECK(accept(R"({"seed":1003,"sample":2})", 5).rollout_id ==
+        "error: rollout id \"run42/1003/2\" was already used on line 2");
+  CHECK(accept(R"({"seed":5,"rollout_id":"trial-9/a"})", 6).rollout_id ==
+        "error: rollout id \"trial-9/a\" was already used on line 3");
+
+  // An id must be a header value: non-empty visible ASCII (the values are
+  // JSON text, so the tab is an escape).
+  for (const std::string_view bad : {"", "a b", "tab\\there", "r\xc3\xa9"}) {
+    CHECK(accept(std::string{R"({"seed":1,"rollout_id":")"} + std::string{bad} +
+                     "\"}",
+                 7)
+              .rollout_id ==
+          "error: \"rollout_id\" must be non-empty visible ASCII without "
+          "spaces");
+  }
+  CHECK(accept("[]", 8).rollout_id == "error: a job must be a JSON object");
+
+  // A rejected line reserves nothing: its id is still free afterwards.
+  CHECK(accept(R"({"seed":8,"rollout_id":"free","extra":1})", 9).rollout_id ==
+        "error: unknown key \"extra\"");
+  CHECK(accept(R"({"seed":8,"rollout_id":"free"})", 10) ==
+        WorkerJob{.seed = 8, .sample = 0, .rollout_id = "free"});
 }

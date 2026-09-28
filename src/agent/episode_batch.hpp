@@ -14,6 +14,7 @@
 
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <expected>
 #include <functional>
 #include <list>
@@ -22,6 +23,17 @@
 #include <string>
 
 namespace pigpen::agent {
+
+/// @brief Whether a batch's next job can start, as its job source answers.
+enum class JobStatus : std::uint8_t {
+  /// The job exists: the batch calls the factory for it now.
+  ready,
+  /// Not yet; the batch asks again on a later pass (a stream still waiting
+  /// for input).
+  pending,
+  /// There are no more jobs; the batch never asks again.
+  exhausted,
+};
 
 /// @brief How one started job's episode ended.
 struct EpisodeEnd {
@@ -45,12 +57,15 @@ struct BatchEntry {
 
 /// @brief How a batch ended.
 struct BatchResult {
+  /// The job count a counted batch was given; for a batch with a job source,
+  /// the jobs the source had ready (every job the factory was asked for).
   std::size_t jobs{};
   /// Jobs whose factory call succeeded. Each ended, and reported through
   /// its entry's on_end, exactly once.
   std::size_t started{};
   /// jobs - started: jobs still queued when the batch stopped, plus the
-  /// one whose factory call failed. None of them is reported.
+  /// one whose factory call failed. None of them is reported. A job source's
+  /// jobs that were never asked for are not counted anywhere.
   std::size_t not_started{};
   /// A stop request was honoured.
   bool stopped{};
@@ -74,11 +89,16 @@ struct BatchLoop {
 /// @brief What run() sleeps after a pass with no progress.
 inline constexpr std::chrono::milliseconds idle_pause{1};
 
-/// @brief Runs jobs `0 .. job_count - 1` in order, at most `parallel` at a
-/// time, each under its own EpisodeDriver.
+/// @brief Runs jobs `0, 1, 2, ...` in order, at most `parallel` at a time,
+/// each under its own EpisodeDriver.
 ///
-/// Each step() is one pass: honour a new stop request, start queued jobs
-/// while a slot is free, then step every live driver once in start order.
+/// The jobs are either counted (`0 .. job_count - 1`) or come from a job
+/// source, asked about the next index only while a slot is free, so a
+/// stream is pulled lazily and never read ahead of the batch.
+///
+/// Each step() is one pass: honour a new stop request, start jobs while a
+/// slot is free and the source has one ready, then step every live driver
+/// once in start order.
 /// When a drive ends, the batch calls the entry's on_end and destroys that
 /// episode before the pass moves on, so reports come in completion order
 /// and a finished episode's resources (its log, its harness) are released
@@ -89,10 +109,15 @@ inline constexpr std::chrono::milliseconds idle_pause{1};
 /// cancels its episode cooperatively and waits for it to finish, so every
 /// started job is still reported. Jobs never started are only counted.
 ///
-/// An exception from the factory counts as a factory failure, and one from
-/// an on_end aborts the batch the same way; that job counts as reported and
-/// its episode is still released, so nothing is reported twice. Exceptions
-/// from pumping an episode propagate to the caller.
+/// An exception from the factory or the job source counts as a factory
+/// failure, and one from an on_end aborts the batch the same way; that job
+/// counts as reported and its episode is still released, so nothing is
+/// reported twice. Exceptions from pumping an episode propagate to the
+/// caller.
+///
+/// A counted batch ends once every job has been reported; a batch with a
+/// job source ends once the source is exhausted and every started job has
+/// been reported. Either ends early on a stop request or a failure.
 class EpisodeBatch final {
 public:
   using Clock = EpisodeDriver::Clock;
@@ -101,10 +126,20 @@ public:
   using Factory =
       std::function<std::expected<BatchEntry, std::string>(std::size_t job)>;
 
+  /// Says whether job `next` (0, 1, 2, ... in turn) can start. Called on the
+  /// batch's thread, only while a slot is free and the batch is not
+  /// stopping; it must not block. Once it answers JobStatus::ready the
+  /// factory is called for that index before the source is asked again.
+  using JobSource = std::function<JobStatus(std::size_t next)>;
+
   /// @param parallel Live episodes at most; 0 is treated as 1.
   /// @param timeout Each episode's deadline, from its first step.
   EpisodeBatch(std::size_t job_count, std::size_t parallel,
                Clock::duration timeout, Factory factory);
+
+  /// @brief A batch whose jobs come from @p source until it is exhausted.
+  EpisodeBatch(JobSource source, std::size_t parallel, Clock::duration timeout,
+               Factory factory);
 
   EpisodeBatch(const EpisodeBatch &) = delete;
   EpisodeBatch &operator=(const EpisodeBatch &) = delete;
@@ -123,7 +158,8 @@ public:
   [[nodiscard]] BatchResult run(const BatchLoop &loop);
 
   /// @brief The last pass started no job, ended no episode, and every
-  /// episode it pumped was idle.
+  /// episode it pumped was idle; a source that answered
+  /// JobStatus::pending counts as no progress.
   [[nodiscard]] bool idle() const noexcept;
   /// @brief Episodes currently being driven.
   [[nodiscard]] std::size_t live() const noexcept;
@@ -138,12 +174,18 @@ private:
     EpisodeDriver driver;
   };
 
-  std::size_t job_count_;
+  /// Asks the source about the next job; turns a throw into error_.
+  [[nodiscard]] JobStatus poll_source();
+
+  /// Set for a counted batch, whose result counts every job it was given.
+  std::optional<std::size_t> job_count_;
+  JobSource source_;
   std::size_t parallel_;
   Clock::duration timeout_;
   Factory factory_;
   std::list<Slot> slots_{};
   std::size_t next_job_{};
+  bool exhausted_{};
   std::size_t started_{};
   std::optional<Clock::time_point> first_step_{};
   std::optional<std::string> error_{};

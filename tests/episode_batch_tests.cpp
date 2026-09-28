@@ -6,6 +6,10 @@
 /// and starting nothing more, a factory failure aborting the batch the same
 /// way, an exception from the factory or a report aborting it without
 /// double reports, and run() sleeping only after a pass with no progress.
+/// A batch with a job source is covered the same way: jobs pulled only as
+/// slots free, waiting (idle) while the source is pending, ending once it is
+/// exhausted and live episodes finish, a stop while waiting, and a source
+/// that throws.
 
 #include "agent/episode_batch.hpp"
 
@@ -540,4 +544,195 @@ TEST_CASE("a report that throws is not retried and aborts the batch",
   // The ended batch never reports again.
   CHECK(batch.step(start + 2ms, false));
   CHECK(reports.size() == 2);
+}
+
+namespace {
+
+/// @brief A job source the test feeds by hand: `available` jobs are ready,
+/// then it is pending until `ended`, then exhausted. Records every index it
+/// is asked about.
+struct Stream {
+  std::size_t available{};
+  bool ended{};
+  std::vector<std::size_t> asked{};
+
+  [[nodiscard]] EpisodeBatch::JobSource source() {
+    return [this](const std::size_t next) {
+      asked.push_back(next);
+      if (next < available) {
+        return pigpen::agent::JobStatus::ready;
+      }
+      return ended ? pigpen::agent::JobStatus::exhausted
+                   : pigpen::agent::JobStatus::pending;
+    };
+  }
+};
+
+/// @brief A factory over Harness's scripts for a streamed batch.
+[[nodiscard]] EpisodeBatch streamed(Harness &harness, Stream &stream,
+                                    const std::size_t parallel) {
+  return EpisodeBatch{
+      stream.source(), parallel, 10s,
+      [&harness](
+          const std::size_t job) -> std::expected<BatchEntry, std::string> {
+        harness.factory_calls.push_back(job);
+        const auto found = harness.scripts.find(job);
+        return BatchEntry{
+            .episode = std::make_shared<FakeEpisode>(
+                job, found == harness.scripts.end() ? Script{} : found->second,
+                harness.observed),
+            .on_end =
+                [&harness](const EpisodeEnd &end) {
+                  harness.reports.push_back(
+                      {.end = end, .episode_alive = true});
+                },
+        };
+      }};
+}
+
+} // namespace
+
+TEST_CASE("a streamed batch pulls jobs only as slots free and ends once the "
+          "source is exhausted",
+          "[batch][stream]") {
+  Harness harness;
+  Stream stream;
+  harness.scripts[0] = {.finish_on_pump = 2};
+  harness.scripts[1] = {.finish_on_pump = 1};
+  harness.scripts[2] = {.finish_on_pump = 1};
+  auto batch = streamed(harness, stream, 2);
+
+  // Nothing is ready yet: the source is asked once, nothing starts, and
+  // the pass made no progress, so run() would idle.
+  CHECK_FALSE(batch.step(start, false));
+  CHECK(stream.asked == std::vector<std::size_t>{0});
+  CHECK(batch.idle());
+  CHECK(batch.live() == 0);
+
+  // Three jobs arrive; only two slots exist, so job 2 is not asked for.
+  stream.available = 3;
+  CHECK_FALSE(batch.step(start + 1ms, false));
+  CHECK(stream.asked == std::vector<std::size_t>{0, 0, 1});
+  CHECK(harness.factory_calls == std::vector<std::size_t>{0, 1});
+  CHECK_FALSE(batch.idle());
+  // Job 1 ended in that pass; job 2 starts in the next and ends at once.
+  CHECK(harness.reported_jobs() == std::vector<std::size_t>{1});
+  CHECK_FALSE(batch.step(start + 2ms, false));
+  CHECK(harness.reported_jobs() == std::vector<std::size_t>{1, 0, 2});
+  CHECK(stream.asked == std::vector<std::size_t>{0, 0, 1, 2});
+  // Both slots are free again and the source is pending: the batch waits
+  // for input rather than ending.
+  CHECK_FALSE(batch.step(start + 3ms, false));
+  CHECK(stream.asked.back() == 3);
+  CHECK(batch.idle());
+
+  // The end of input ends the batch.
+  stream.ended = true;
+  const auto result = batch.step(start + 4ms, false);
+  REQUIRE(result);
+  CHECK(result->jobs == 3);
+  CHECK(result->started == 3);
+  CHECK(result->not_started == 0);
+  CHECK_FALSE(result->stopped);
+  CHECK_FALSE(result->error);
+  // An ended batch never asks the source again.
+  const auto asked = stream.asked.size();
+  CHECK(batch.step(start + 5ms, false));
+  CHECK(stream.asked.size() == asked);
+}
+
+TEST_CASE("a streamed batch finishes live episodes after the end of input",
+          "[batch][stream]") {
+  Harness harness;
+  Stream stream{.available = 1, .ended = true};
+  harness.scripts[0] = {.finish_on_pump = 3};
+  auto batch = streamed(harness, stream, 4);
+  CHECK_FALSE(batch.step(start, false));
+  // Job 0 started and the source is already exhausted, but job 0 is live.
+  CHECK(stream.asked == std::vector<std::size_t>{0, 1});
+  CHECK_FALSE(batch.step(start + 1ms, false));
+  const auto result = batch.step(start + 2ms, false);
+  REQUIRE(result);
+  CHECK(harness.reported_jobs() == std::vector<std::size_t>{0});
+  CHECK(result->jobs == 1);
+  CHECK(stream.asked.size() == 2);
+}
+
+TEST_CASE("a stop request ends a streamed batch that is waiting for input",
+          "[batch][stream][stop]") {
+  Harness harness;
+  Stream stream{.available = 1};
+  harness.scripts[0] = {.finish_pumps_after_stop = 1};
+  auto batch = streamed(harness, stream, 2);
+  CHECK_FALSE(batch.step(start, false));
+  CHECK(stream.asked == std::vector<std::size_t>{0, 1});
+  const auto result = batch.step(start + 1ms, true);
+  REQUIRE(result);
+  // The stop is honoured before the source is asked again.
+  CHECK(stream.asked.size() == 2);
+  CHECK(result->stopped);
+  CHECK(result->jobs == 1);
+  CHECK(result->not_started == 0);
+  REQUIRE(harness.reports.size() == 1);
+  CHECK(harness.reports[0].end.outcome == DriveOutcome::interrupted);
+}
+
+TEST_CASE("a job source that throws aborts the batch", "[batch][stream]") {
+  Harness harness;
+  int asked = 0;
+  EpisodeBatch batch{
+      [&asked](const std::size_t next) {
+        ++asked;
+        if (next == 1) {
+          throw std::runtime_error{"stdin vanished"};
+        }
+        return pigpen::agent::JobStatus::ready;
+      },
+      2, 10s,
+      [&harness](
+          const std::size_t job) -> std::expected<BatchEntry, std::string> {
+        return BatchEntry{
+            .episode = std::make_shared<FakeEpisode>(
+                job, Script{.finish_pumps_after_stop = 2}, harness.observed),
+            .on_end =
+                [&harness](const EpisodeEnd &end) {
+                  harness.reports.push_back({.end = end});
+                },
+        };
+      }};
+  CHECK_FALSE(batch.step(start, false));
+  const auto result = batch.step(start + 1ms, false);
+  REQUIRE(result);
+  CHECK(asked == 2);
+  CHECK(result->error == "could not read job 1: stdin vanished");
+  CHECK(result->jobs == 1);
+  CHECK(result->started == 1);
+  REQUIRE(harness.reports.size() == 1);
+  CHECK(harness.reports[0].end.outcome == DriveOutcome::interrupted);
+}
+
+TEST_CASE("run idles while a streamed batch waits for input",
+          "[batch][stream][run]") {
+  Stream stream;
+  Harness harness;
+  harness.scripts[0] = {.finish_on_pump = 1};
+  auto batch = streamed(harness, stream, 1);
+  auto now = start;
+  int sleeps = 0;
+  const auto result = batch.run({
+      .now = [&] { return now; },
+      .sleep =
+          [&](const EpisodeBatch::Clock::duration pause) {
+            now += pause;
+            // Input arrives after three idle passes, then ends.
+            if (++sleeps == 3) {
+              stream.available = 1;
+              stream.ended = true;
+            }
+          },
+      .stop_requested = [] { return false; },
+  });
+  CHECK(sleeps == 3);
+  CHECK(result.jobs == 1);
+  CHECK(harness.reported_jobs() == std::vector<std::size_t>{0});
 }
