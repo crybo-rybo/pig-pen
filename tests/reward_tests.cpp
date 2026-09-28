@@ -265,6 +265,12 @@ TEST_CASE("reward weights parse from NAME=VALUE", "[reward]") {
   CHECK(weights.explored_cell == 0.0);
   REQUIRE(parse_reward_weight("unused_turn=1e-2", weights));
   CHECK(weights.unused_turn == 0.01);
+  REQUIRE(parse_reward_weight("failed_action=-0", weights));
+  CHECK_FALSE(std::signbit(weights.failed_action));
+  REQUIRE(parse_reward_weight("objective=1e6", weights));
+  CHECK(weights.objective == 1e6);
+  REQUIRE(parse_reward_weight("objective=-1e6", weights));
+  CHECK(weights.objective == -1e6);
 
   // Every field is addressable by its documented name.
   for (const auto &field : pigpen::agent::reward_weight_fields) {
@@ -292,7 +298,8 @@ TEST_CASE("reward weight parsing rejects malformed input unchanged",
 
   for (const auto *const bad :
        {"score=", "score=abc", "score=1.5x", "score= 1", "score=+1",
-        "score=inf", "score=nan", "score=1e999"}) {
+        "score=inf", "score=nan", "score=1e999", "score=1e308",
+        "score=-1000001"}) {
     const auto parsed = parse_reward_weight(bad, weights);
     REQUIRE_FALSE(parsed);
     CHECK(parsed.error().contains("must be a finite number"));

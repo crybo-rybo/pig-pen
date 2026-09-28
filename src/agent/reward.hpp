@@ -58,7 +58,8 @@ struct RewardWeightField {
 };
 
 /// @brief Every weight, in declaration order; reward_term_counts() lists
-/// each term's count in this order.
+/// each term's count in this order. The `--reward` help text in
+/// headless_main.cpp lists these names too.
 inline constexpr std::array reward_weight_fields{
     RewardWeightField{"score", &RewardWeights::score},
     RewardWeightField{"explored_cell", &RewardWeights::explored_cell},
@@ -151,11 +152,16 @@ struct RewardBreakdown {
 [[nodiscard]] std::array<double, reward_weight_fields.size()>
 reward_term_counts(const RewardBreakdown &reward) noexcept;
 
+/// @brief Largest accepted weight magnitude. It keeps every term and the
+/// total finite: counts are bounded by the world and the turn budget.
+inline constexpr double max_reward_weight{1e6};
+
 /// @brief Parse one `NAME=VALUE` override and apply it to @p weights.
 /// @param assignment A weight name from reward_weight_fields, `=`, and a
-/// finite decimal number (negative allowed, no leading `+`).
+/// finite decimal number with magnitude at most max_reward_weight (negative
+/// allowed, no leading `+`; `-0` is stored as `0`).
 /// @return A message naming the problem (missing `=`, unknown name, or a
-/// value that is not a finite number); @p weights is then unchanged.
+/// value that is not a number in range); @p weights is then unchanged.
 [[nodiscard]] std::expected<void, std::string>
 parse_reward_weight(std::string_view assignment, RewardWeights &weights);
 

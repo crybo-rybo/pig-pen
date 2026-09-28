@@ -92,13 +92,14 @@ temperature often reproduce a run on one server, but nothing carries across
 models, servers, or server versions. Scry forwards the value and promises
 nothing more.
 
-`--reward` takes a weight name and a finite number, for example
+`--reward` takes a weight name and a number between -1e6 and 1e6, for
+example
 `--reward invalid_call=-1.0 --reward=explored_cell=0.1`. The names are
 `score`, `explored_cell`, `active_turn`, `zero_tool_turn`, `failed_action`,
 `invalid_call`, `budget_refused_call`, `objective`, and `unused_turn`; see
 [World and tools](world.md#reward) for their meaning and defaults. An
-unknown name, a missing `=`, or a value that is not a finite number is an
-invalid command line. Weights only change the computed reward, never the
+unknown name, a missing `=`, or a value that is not a number in that range
+is an invalid command line. Weights only change the computed reward, never the
 episode, and the footer records the weights used.
 
 The three scenario flags change only what the model is told — the world, the

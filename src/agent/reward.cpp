@@ -100,12 +100,14 @@ parse_reward_weight(const std::string_view assignment, RewardWeights &weights) {
   const auto *const end = value.data() + value.size();
   if (const auto [last, error] = std::from_chars(value.data(), end, number);
       value.empty() || error != std::errc{} || last != end ||
-      !std::isfinite(number)) {
+      !std::isfinite(number) || std::abs(number) > max_reward_weight) {
     return std::unexpected("reward weight " + std::string{name} +
-                           " must be a finite number, got \"" +
+                           " must be a finite number between -1e6 and 1e6, "
+                           "got \"" +
                            std::string{value} + '"');
   }
-  weights.*field->member = number;
+  // Adding +0.0 stores -0 as 0, so logs never show "-0.0".
+  weights.*field->member = number + 0.0;
   return {};
 }
 
