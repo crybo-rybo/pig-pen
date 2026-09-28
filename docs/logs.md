@@ -1,6 +1,8 @@
 # Logs
 
-Every session the CLI or GUI creates writes one JSONL file:
+Every session `pig-pen-headless` or the GUI creates writes one JSONL file,
+as does every episode of `pig-pen-worker` when it is given `--log-dir`
+(worker logs are off by default):
 
 ```
 logs/<timestamp>-<model>-<seed>.jsonl
@@ -11,8 +13,8 @@ local time down to the millisecond, and characters that are awkward in
 filenames are replaced with `_`. If the name somehow collides, a `-1`, `-2`, …
 suffix is appended; an existing log is never overwritten. Use `--log-dir` to
 write somewhere other than `logs/`. (A session created without a log
-directory, which neither front end does, writes no file; its summary and
-reward are still available in memory.)
+directory, as the worker's are by default, writes no file; its summary and
+reward are still available in memory, and the worker writes them to stdout.)
 
 A file always has exactly one `header` line first and one `footer` line last,
 with `tool` and `turn` records in between, in the order they happened. Object
@@ -35,8 +37,9 @@ Written when the session is created, before the model is contacted.
 `prompt_variant` is whatever you passed to `--prompt-variant`, or the GUI
 preset name. `rollout_id` is the session's rollout identifier, which is also
 sent to the model server as the `X-Pigpen-Rollout` request header, or `null`
-when the session has none (the CLI and GUI never set one), so the key is
-always present. `temperature` records model sampling separately from the
+when the session has none (`pig-pen-headless` and the GUI never set one;
+the worker always does, see [Training](training.md)), so the key is always
+present. `temperature` records model sampling separately from the
 deterministic world `seed`. `sampling_seed` is the provider sampling seed from
 `--sampling-seed` or the GUI, or `null` when none was sent. `max_output_tokens` records the per-request
 limit Pig Pen asks the provider to apply. `max_world_tool_calls_per_turn`
@@ -116,7 +119,7 @@ the turn.
 ## `footer`
 
 ```json
-{"type":"footer","complete":true,"finish_reason":"turn_budget","error":"",
+{"type":"footer","rollout_id":null,"complete":true,"finish_reason":"turn_budget","error":"",
  "final_score":1,"items_eaten":{"apple":0,"berry":1,"toadstool":0,"truffle":0},
  "tool_call_counts":{"eat":1,"look":3,"move":3},
  "turns_used":2,"duration_ms":3186,
@@ -136,12 +139,14 @@ the turn.
 
 `complete: true` means the episode reached a terminal state on its own —
 `turn_budget`, `objective_complete`, `stopped`, `cancelled`, or `error`. If the
-process exits, the window closes, or the session is reset mid-episode, the
-writer still emits a footer, but with `complete: false` and
-`finish_reason: "abandoned"`. An abandoned footer has only the fields up to
-`duration_ms`. A footer is final: nothing can be recorded after it, and it
-cannot be written twice.
+process exits, the window closes, the session is reset mid-episode, or a
+worker episode's timed-out cancellation stalls, the writer still emits a
+footer, but with `complete: false` and `finish_reason: "abandoned"`. An
+abandoned footer has only the fields up to `duration_ms`, `rollout_id`
+included. A footer is final: nothing can be recorded after it, and it cannot
+be written twice.
 
+`rollout_id` repeats the header's, `null` when the session has none.
 `final_score` is the truthful world score. `items_eaten` and
 `tool_call_counts` list every item and tool, even at zero. `duration_ms` is
 the wall time from session creation to the finish.
@@ -204,6 +209,10 @@ Re-weight a finished run offline, here with `invalid_call` at −1.0:
 jq 'select(.type=="footer" and .reward.valid)
   | .reward.total - .reward.terms.invalid_call + .reward.invalid_calls * -1.0' logs/<run>.jsonl
 ```
+
+The worker's `episode` records on stdout are this footer's fields plus the
+job's identity and `config`, so the same `jq` filters work on them with
+`select(.type=="episode")`; see [Training](training.md#records).
 
 Since the world is seed-deterministic, two runs with the same seed and turn
 budget differ only in what the model did — the ordered `tool` records line up

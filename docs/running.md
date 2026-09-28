@@ -1,6 +1,6 @@
 # Running
 
-Both front ends talk to an OpenAI-compatible chat endpoint. The default
+Every front end talks to an OpenAI-compatible chat endpoint. The default
 endpoint is Ollama on `http://127.0.0.1:11434/v1`, but there is no default
 model. Ensure you pull the desired model before running.
 
@@ -125,6 +125,21 @@ still written, then exits with the conventional status. A timeout gives
 cancellation 15 seconds before giving up. A metrics-write failure ends the
 episode immediately with finish reason `error` and exit 4.
 
+## RL worker
+
+```sh
+./build/dev/pig-pen-worker --model YOUR_MODEL --seeds 1000-1999 --samples 4 --parallel 8
+```
+
+`pig-pen-worker` plays world seeds × samples episodes, several at a time,
+against a trainer's inference server, labels every request with an
+`X-Pigpen-Rollout` header, and writes one JSON record per episode, with its
+shaped reward, to stdout. It accepts every flag in the table above except
+`--seed` (world seeds come from `--seeds`) and `--input`, and writes no logs
+unless given `--log-dir`. Its interface, record format, and exit codes (`6`
+means at least one episode's reward is invalid) are in
+[Training](training.md).
+
 ## GUI
 
 ```sh
@@ -193,7 +208,7 @@ log footer:
 |---|---|
 | `turn_budget` | the turn budget was used up |
 | `objective_complete` | every positive-value item has been eaten (toadstools may remain) |
-| `stopped` | **Stop**, or a CLI signal/timeout |
+| `stopped` | **Stop**, or a CLI signal/timeout (the worker reports a timed-out episode's reward as invalid with reason `timeout`) |
 | `cancelled` | the in-flight model turn was cancelled |
 | `error` | the transport, model turn, or metrics writer failed terminally; there is no retry |
 

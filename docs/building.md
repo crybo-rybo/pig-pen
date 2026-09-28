@@ -74,6 +74,7 @@ Binaries land in `build/<preset>/`:
 
 - `pig-pen` — the ImGui application (not built by the `headless` preset)
 - `pig-pen-headless` — the CLI
+- `pig-pen-worker` — the RL rollout worker (see [Training](training.md))
 - `pigpen_tests` — the Catch2 test binary
 - `pigpen_reflection_tests` — the reflection-isolated Catch2 test binary
 
@@ -89,12 +90,13 @@ just build release
 just test                      # build, then ctest --preset dev
 just run dev --model YOUR_MODEL  # build, launch, and auto-start the GUI
 just run-headless dev --model YOUR_MODEL --turns 4 --seed 42
+just run-worker dev --model YOUR_MODEL --seeds 1-4 --samples 2
 just ci                       # format + lint + dev/release/headless builds & tests (what GitHub runs)
 ```
 
-Note the explicit `dev` in the `run` / `run-headless` lines — those recipes take
-the preset first, so `just run-headless --model YOUR_MODEL` would be read as a
-preset named `--model`.
+Note the explicit `dev` in the `run` / `run-headless` / `run-worker` lines —
+those recipes take the preset first, so `just run-headless --model YOUR_MODEL`
+would be read as a preset named `--model`.
 
 ## CMake options
 
