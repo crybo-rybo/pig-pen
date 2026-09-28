@@ -56,6 +56,12 @@ SCRY_ONE_CALL = {
 }
 
 
+def call_tally(**counts: int) -> dict[str, int]:
+    """A turn's `calls` record: every bucket, zero unless given."""
+    buckets = ("executed", "invalid", "budget_refused", "host_refused")
+    return {bucket: counts.get(bucket, 0) for bucket in buckets}
+
+
 def check(condition: bool, message: str) -> None:
     if not condition:
         raise AssertionError(message)
@@ -263,6 +269,8 @@ def test_valid_move(executable: str) -> None:
         "scry_tools": SCRY_ONE_CALL,
     }
     check([subset(t, expected_turn) for t in turns] == [expected_turn], f"{turns!r}")
+    tallies = [t.get("calls") for t in turns]
+    check(tallies == [call_tally(executed=1)], f"call tally: {tallies!r}")
     expected_footer = {
         "type": "footer",
         "complete": True,
@@ -330,6 +338,8 @@ def test_schema_rejection_exits_5(executable: str) -> None:
         "scry_tools": SCRY_ONE_CALL,
     }
     check([subset(t, expected_turn) for t in turns] == [expected_turn], f"{turns!r}")
+    tallies = [t.get("calls") for t in turns]
+    check(tallies == [call_tally(invalid=1)], f"call tally: {tallies!r}")
     expected_footer = {
         "type": "footer",
         "complete": True,

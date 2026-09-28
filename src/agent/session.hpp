@@ -8,15 +8,18 @@
 
 #include "agent/config.hpp"
 #include "agent/episode_runner.hpp"
+#include "agent/episode_turn.hpp"
 #include "agent/events.hpp"
 #include "world/world.hpp"
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace pigpen::agent {
 
@@ -66,6 +69,11 @@ public:
   /// @brief Append-only feed of successfully decoded tool activity.
   [[nodiscard]] const ToolActivityFeed &tool_activities() const noexcept;
   [[nodiscard]] const EpisodeRunner &runner() const noexcept;
+  /// @brief Every turn the runner finished, oldest first, each with its call
+  /// tally. A turn the runner abandoned in flight (fail()) is not retained.
+  [[nodiscard]] const std::vector<EpisodeTurn> &turns() const noexcept;
+  /// @brief Wall time since the session was created, on a steady clock.
+  [[nodiscard]] std::chrono::milliseconds elapsed() const;
   [[nodiscard]] const std::filesystem::path &metrics_path() const noexcept;
   /// @brief Last metrics-write failure, or empty; a failure is terminal.
   [[nodiscard]] const std::string &metrics_error() const noexcept;

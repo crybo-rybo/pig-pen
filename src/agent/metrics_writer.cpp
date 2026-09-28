@@ -214,10 +214,11 @@ MetricsWriter::record_tool(const ToolActivity &activity) {
 }
 
 std::expected<void, std::string>
-MetricsWriter::record_turn(const TurnRecord &record) {
+MetricsWriter::record_turn(const EpisodeTurn &turn) {
   if (finalized_) {
     return std::unexpected("cannot record a turn after the metrics footer");
   }
+  const auto &record = turn.record;
   turns_recorded_ = record.turn;
   nlohmann::json tool_stats = nullptr;
   if (record.tool_stats) {
@@ -227,6 +228,13 @@ MetricsWriter::record_turn(const TurnRecord &record) {
                   {"rejected_calls", stats.rejected_calls},
                   {"round_limit_reached", stats.round_limit_reached},
                   {"unexecuted_calls", stats.unexecuted_calls}};
+  }
+  nlohmann::json calls = nullptr;
+  if (turn.calls) {
+    calls = {{"executed", turn.calls->executed},
+             {"invalid", turn.calls->invalid},
+             {"budget_refused", turn.calls->budget_refused},
+             {"host_refused", turn.calls->host_refused}};
   }
   return write_line(
       stream_, path_,
@@ -241,6 +249,7 @@ MetricsWriter::record_turn(const TurnRecord &record) {
           {"output_tokens", record.output_tokens},
           {"tool_calls", record.tool_calls},
           {"scry_tools", std::move(tool_stats)},
+          {"calls", std::move(calls)},
           {"zero_tool_turn",
            record.status == TurnStatus::completed && record.tool_calls == 0U},
           {"latency_ms", record.latency.count()},

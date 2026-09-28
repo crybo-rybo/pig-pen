@@ -11,10 +11,12 @@
 #include <scry/scry.hpp>
 
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace pigpen::agent {
 
@@ -35,14 +37,24 @@ struct Session::Impl {
                  },
              .on_tool_call =
                  [this](const scry::ToolCall &call) { tools->observe(call); },
-             .on_turn_finished = [this] { tools->flush_pending_activity(); }}),
+             .on_turn_finished =
+                 [this] { turn_host_refused_calls = tools->complete_turn(); }}),
         runner(
             transport, config.turn_budget,
             [this] { return world->all_positive_items_eaten(); },
             {
                 .on_turn_finished =
                     [this](const TurnRecord &record) {
-                      if (auto status = metrics->record_turn(record); !status) {
+                      // Staged by this turn's terminal delivery, which always
+                      // precedes the runner applying its outcome.
+                      const auto host_refused =
+                          std::exchange(turn_host_refused_calls, 0U);
+                      turns.push_back({
+                          .record = record,
+                          .calls = tally_turn_calls(record, host_refused),
+                      });
+                      if (auto status = metrics->record_turn(turns.back());
+                          !status) {
                         metrics_error = std::move(status.error());
                       }
                       if (!metrics_error.empty()) {
@@ -69,8 +81,13 @@ struct Session::Impl {
   }
 
   Config config;
+  std::chrono::steady_clock::time_point created{
+      std::chrono::steady_clock::now()};
   std::unique_ptr<world::World> world;
   ToolActivityFeed activities{};
+  std::vector<EpisodeTurn> turns{};
+  // Admission refusals of the turn whose terminal delivery just arrived.
+  std::uint32_t turn_host_refused_calls{};
   std::unique_ptr<MetricsWriter> metrics;
   // Destruction runs in reverse: bindings and world outlive the harness.
   std::unique_ptr<WorldToolBinding> tools;
@@ -169,6 +186,14 @@ const ToolActivityFeed &Session::tool_activities() const noexcept {
   return impl_->activities;
 }
 const EpisodeRunner &Session::runner() const noexcept { return impl_->runner; }
+const std::vector<EpisodeTurn> &Session::turns() const noexcept {
+  return impl_->turns;
+}
+
+std::chrono::milliseconds Session::elapsed() const {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - impl_->created);
+}
 
 const std::filesystem::path &Session::metrics_path() const noexcept {
   return impl_->metrics->path();
