@@ -83,7 +83,8 @@ and round limit, see [Tool errors and limits](world.md#tool-errors-and-limits).
 | `--help` | | print the full interface and exit |
 
 Values may be written either way: `--seed 42` or `--seed=42`. Flags in the last
-block take no value.
+block take no value. `--model`, `--base-url`, `--prompt-variant`, and
+`--input` must be valid UTF-8, since they end up in requests and in the log.
 
 `--seed` fixes the world; `--sampling-seed` asks the model server to fix its
 sampling. The two are independent. Repeatability from a sampling seed is up to
@@ -122,7 +123,8 @@ alters.
 `SIGINT` and `SIGTERM` request cooperative cancellation. The CLI keeps pumping
 until the in-flight turn's cancellation callback arrives so the JSONL footer is
 still written, then exits with the conventional status. A timeout gives
-cancellation 15 seconds before giving up. A metrics-write failure ends the
+cancellation 15 seconds before giving up; a signal that arrives during those
+15 seconds does not extend them. A metrics-write failure ends the
 episode immediately with finish reason `error` and exit 4.
 
 ## RL worker

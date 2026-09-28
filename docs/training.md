@@ -108,11 +108,14 @@ episodes, timeouts, signals, startup errors) go to stderr only.
 
 ### `episode`
 
-The record is exactly the summary the log footer writes (see
+The record has the same fields as the log footer's summary (see
 [Logs](logs.md#footer)), with `type` `episode`, plus `seed`, `sample`,
 `sampling_seed` (`null` when unset), and `config`, the episode's full
 configuration in the log header's shape. `rollout_id` is the job's rollout
-id. Here is a real one from a one-turn episode against the test suite's
+id. The values match the footer except for a timed-out episode: its record
+says `invalid_reason: "timeout"`, while its footer records how the
+cancellation ended (`stopped` or `cancelled`), or is `abandoned` when the
+cancellation stalled. Here is a real one from a one-turn episode against the test suite's
 scripted server (a `move` then an empty `eat`), grouped for reading:
 
 ```json
@@ -149,14 +152,15 @@ episode otherwise**; an invalid reward is absent, not zero, and `total` is
 |---|---|
 | `error` | the model turn or transport failed terminally (for example an HTTP 4xx, or a 5xx after retries); `error` has the text |
 | `cancelled` | the in-flight model turn was cancelled |
-| `stopped` | a signal (or an aborted batch) stopped the episode |
+| `stopped` | a signal, an aborted batch, or a failed stdout stopped the episode |
 | `timeout` | `--timeout-seconds` passed; this wins over the `stopped` or `cancelled` the cancellation then produces |
 
 A timed-out episode is cancelled cooperatively and given 15 seconds to
 finish; if it does not, its record is written anyway (with `complete: false`
-and reason `timeout`) and the batch moves on. A signal, by contrast, waits
-for every in-flight cancellation without limit, so each record reflects a
-finished episode.
+and reason `timeout`) and the batch moves on. A signal that arrives during
+that grace period does not extend it. A signal before any timeout, by
+contrast, waits for every in-flight cancellation without limit, so each
+such record reflects a finished episode.
 
 ### `batch`
 
@@ -168,7 +172,8 @@ The last line, written once every started episode has ended:
 ```
 
 `status` is `completed`, `interrupted` (a signal), or `aborted` (a session
-could not be created; `error` has the reason). `episodes` counts the
+could not be created, or reporting an episode failed; `error` has the
+reason). `episodes` counts the
 `episode` lines written, always `valid + invalid`. `not_started` counts jobs
 that never got an episode and therefore have no record: those still queued
 when a signal or abort stopped the batch, plus the job whose session could
@@ -179,13 +184,14 @@ not be created. `exit_code` is the status the process exits with.
 | code | meaning |
 |---|---|
 | `0` | every episode's reward is valid |
-| `1` | a session could not be created (a configuration problem such as a bad `--header` or `--log-dir`); the batch is aborted: in-flight episodes are cancelled cooperatively and still get their records. Also used when stdout cannot be written |
-| `2` | invalid command line; nothing is written to stdout |
+| `1` | a session could not be created (a configuration problem such as a bad `--header` or `--log-dir`), or reporting an episode failed; the batch is aborted: in-flight episodes are cancelled cooperatively and still get their records. Also used when stdout cannot be written (for example the consumer closed the pipe): the worker then writes nothing more to stdout, cancels in-flight episodes cooperatively so their logs still get footers, starts no more jobs, and says so on stderr |
+| `2` | invalid command line, including `--model`, `--base-url`, or `--prompt-variant` text that is not valid UTF-8; nothing is written to stdout |
 | `6` | the batch completed but at least one episode's reward is invalid |
-| `130` / `143` | `SIGINT` / `SIGTERM`: in-flight episodes are cancelled cooperatively, their records written (invalid, `stopped`), queued jobs are not started, and the batch record says `interrupted` |
+| `130` / `143` | `SIGINT` / `SIGTERM`: in-flight episodes are cancelled cooperatively and their records written, normally invalid with reason `stopped` (or `timeout` or `error` if that is how they had already ended), queued jobs are not started, and the batch record says `interrupted` |
 
-When more than one applies, an abort (1) wins over a signal, and a signal over
-6.
+When more than one applies, an abort or a stdout failure (1) wins over a
+signal, and a signal over 6. `SIGPIPE` is ignored, so a closed pipe is a
+failed write, never a fatal signal.
 
 ## Seeds, scenarios, and evaluation
 

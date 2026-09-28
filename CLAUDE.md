@@ -110,7 +110,11 @@ Key invariants to preserve:
   is pure JSONL, one flushed line per record, diagnostics on stderr. A worker
   timeout forces the reward invalid with reason `timeout`. Worker exit codes:
   0 all valid, 6 some invalid, 1 a session could not be created (batch
-  aborted, in-flight episodes still reported), 2 usage, 130/143 signal.
+  aborted, in-flight episodes still reported; also a failed stdout, which
+  is a stop request, with `SIGPIPE` ignored), 2 usage, 130/143 signal.
+  User text that reaches JSON is checked for UTF-8 at the CLI boundary
+  (`cli::require_utf8`), and every dump uses `dump_line()`, which replaces
+  bad bytes instead of throwing.
 - The standalone tool registry captures stable world bindings that outlive the
   harness. Transport destruction cancels and disconnects delivery.
 - Scry owns call admission, the four-request limit (invalid calls count),

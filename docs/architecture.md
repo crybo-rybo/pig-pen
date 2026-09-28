@@ -60,7 +60,7 @@ serialisation used for determinism tests. Details in [World and tools](world.md)
 | `episode_summary.cpp` | `episode_facts()` and `summarize_episode()`: an episode's outcome (finish reason, turns, score, items eaten, tool counts, summed call tally, duration, reward) from a world, activity feed, turns, and runner snapshot, or from a `Session` |
 | `summary_json.cpp` | `to_json_line()`, the only serialisation of a summary, its reward, and its weights, and of the worker's `EpisodeRecord` (the summary plus seed, sample, and `Config`) and `BatchRecord`. `record_json.hpp`, internal to `pigpen_agent`, shares `config_json()` so the log header and the worker record write `Config` one way |
 | `metrics_writer.cpp` | JSONL header/tool/turn/footer; a finished episode's footer is its serialised summary, and a footer is guaranteed even on abnormal shutdown |
-| `episode_driver.cpp` | `IDrivableEpisode` (`pump`, `finished`, `stop`) and `EpisodeDriver`, the one copy of the drive-to-completion policy: overall deadline, cooperative cancellation, the 15 s grace, and a stop request that waits without limit. Time is a parameter, so it is tested with a fake episode |
+| `episode_driver.cpp` | `IDrivableEpisode` (`pump`, `finished`, `stop`) and `EpisodeDriver`, the one copy of the drive-to-completion policy: overall deadline, cooperative cancellation, the 15 s grace, and a stop request that waits without limit unless a timeout's grace period is already running. Time is a parameter, so it is tested with a fake episode |
 | `episode_batch.cpp` | `EpisodeBatch`: jobs by index, a `std::function` factory that turns a job into a `BatchEntry` (an owned `IDrivableEpisode` plus its `on_end` report), and up to P `EpisodeDriver`s pumped round-robin on one thread. Reports come exactly once, in completion order, while the episode is alive; a stop request or a factory failure stops starting jobs and cancels every live one. `run()` takes the clock and the idle sleep, so it is tested with fakes |
 | `session.cpp` | composes all of the above into one owned object, and implements `IDrivableEpisode` |
 
@@ -163,7 +163,9 @@ a new stop request, pumps, reports a finished episode, then checks the
 deadline (measured from the first step). A passed deadline requests `stop()`
 once and allows 15 s more; if cancellation outlasts that, the drive ends
 `cancellation_stalled` with the episode unfinished. A stop request (a signal)
-calls `stop()` and then waits without limit. The outcomes are `finished`,
+calls `stop()`; made before any timeout, it then waits without limit, and
+made during the grace period it leaves the grace deadline in place, so an
+episode stuck in cancellation cannot hold the process forever. The outcomes are `finished`,
 `timed_out`, `cancellation_stalled`, and `interrupted`; the driver never
 sleeps or reads a clock, so one thread can drive several episodes.
 
@@ -178,7 +180,10 @@ need no locking, and every callback, tool handler, and record write still
 happens on the one pump thread. A signal is a stop request for every live
 driver; a job whose session cannot be created stops the batch the same way,
 so every started episode is reported either way, and jobs never started
-are only counted.
+are only counted. An exception from the factory or from a report aborts the
+batch the same way, and the slot is released regardless, so nothing is
+reported twice. The worker also ignores `SIGPIPE` and treats a failed stdout
+write as a stop request, so a closed pipe still cancels cooperatively.
 
 ## `src/ui` — the ImGui layer
 
