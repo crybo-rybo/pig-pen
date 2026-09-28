@@ -4,6 +4,7 @@
 
 #include "agent/config.hpp"
 #include "agent/session.hpp"
+#include "agent/session_options.hpp"
 #include "ui/world_animation.hpp"
 
 #include <cstddef>
@@ -23,7 +24,10 @@ class AppUi final {
 public:
   /// @brief Seeds the controls from @p initial_config; a non-empty model
   /// identifier creates and auto-starts a session immediately.
-  explicit AppUi(const agent::Config &initial_config);
+  /// @param session_options Used for every session; the prompt variant is
+  /// replaced by the selected scenario preset's.
+  AppUi(const agent::Config &initial_config,
+        agent::SessionOptions session_options);
 
   /// @brief Advances the session and the animation timeline; call once per
   /// frame, before draw().
@@ -49,6 +53,7 @@ private:
   void draw_stats_panel();
   void draw_guidance_panel();
 
+  agent::SessionOptions session_options_{};
   std::shared_ptr<agent::Session> session_{};
   WorldAnimationState animation_{};
   agent::PumpStats pump_stats_{};

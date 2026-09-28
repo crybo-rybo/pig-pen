@@ -11,9 +11,10 @@
 
 #include <scry/scry.hpp>
 
+#include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstdint>
-#include <cstdlib>
 #include <memory>
 #include <optional>
 #include <string>
@@ -21,6 +22,19 @@
 #include <vector>
 
 namespace pigpen::agent {
+
+namespace {
+
+/// @brief ASCII case-insensitive equality, as HTTP header names compare.
+[[nodiscard]] bool header_name_equal(const std::string_view left,
+                                     const std::string_view right) {
+  return std::ranges::equal(left, right, [](const char a, const char b) {
+    return std::tolower(static_cast<unsigned char>(a)) ==
+           std::tolower(static_cast<unsigned char>(b));
+  });
+}
+
+} // namespace
 
 struct Session::Impl {
   Impl(Config initial_config, RewardWeights initial_reward_weights,
@@ -30,8 +44,9 @@ struct Session::Impl {
        scry::Harness initial_harness, scry::Conversation initial_conversation)
       : config(std::move(initial_config)),
         reward_weights(initial_reward_weights), world(std::move(initial_world)),
-        metrics(std::move(initial_metrics)), tools(std::move(initial_tools)),
-        harness(std::move(initial_harness)),
+        metrics(std::move(initial_metrics)),
+        metrics_path(metrics ? std::optional{metrics->path()} : std::nullopt),
+        tools(std::move(initial_tools)), harness(std::move(initial_harness)),
         conversation(std::move(initial_conversation)),
         transport(
             harness, conversation,
@@ -57,6 +72,9 @@ struct Session::Impl {
                           .record = record,
                           .calls = tally_turn_calls(record, host_refused),
                       });
+                      if (!metrics) {
+                        return;
+                      }
                       if (auto status = metrics->record_turn(turns.back());
                           !status) {
                         metrics_error = std::move(status.error());
@@ -68,6 +86,9 @@ struct Session::Impl {
                 .on_episode_finished =
                     [this](const EpisodeResult &) {
                       finished = std::chrono::steady_clock::now();
+                      if (!metrics) {
+                        return;
+                      }
                       // The runner's snapshot already carries the result.
                       const auto summary = summarize_episode(
                           *world, activities, turns, runner.snapshot(),
@@ -82,6 +103,9 @@ struct Session::Impl {
       activity.tick = activities.size() + 1U;
       activity.turn = runner.snapshot().turns_used + 1U;
       activities.push_back(std::move(activity));
+      if (!metrics) {
+        return;
+      }
       if (auto recorded = metrics->record_tool(activities.back()); !recorded) {
         metrics_error = std::move(recorded.error());
       }
@@ -103,7 +127,9 @@ struct Session::Impl {
   std::vector<EpisodeTurn> turns{};
   // Admission refusals of the turn whose terminal delivery just arrived.
   std::uint32_t turn_host_refused_calls{};
+  // Null when the session writes no log.
   std::unique_ptr<MetricsWriter> metrics;
+  std::optional<std::filesystem::path> metrics_path;
   // Destruction runs in reverse: bindings and world outlive the harness.
   std::unique_ptr<WorldToolBinding> tools;
   scry::Harness harness;
@@ -114,8 +140,7 @@ struct Session::Impl {
 };
 
 std::expected<std::shared_ptr<Session>, std::string>
-Session::create(Config config, std::filesystem::path log_directory,
-                std::string prompt_variant, RewardWeights reward_weights) {
+Session::create(Config config, SessionOptions options) {
   if (config.turn_budget == 0) {
     return std::unexpected("turn budget must be greater than zero");
   }
@@ -126,6 +151,12 @@ Session::create(Config config, std::filesystem::path log_directory,
   if (config.max_tool_rounds > tool_rounds_limit) {
     return std::unexpected("maximum tool rounds must not exceed " +
                            std::to_string(tool_rounds_limit));
+  }
+  for (const auto &[name, value] : options.request_headers) {
+    if (header_name_equal(name, rollout_header_name)) {
+      return std::unexpected("request header " + std::string{name} +
+                             " is reserved for the rollout id");
+    }
   }
   auto conversation = scry::Conversation::create(
       {.system_prompt = build_system_prompt(config)});
@@ -138,23 +169,28 @@ Session::create(Config config, std::filesystem::path log_directory,
   if (!registry) {
     return std::unexpected(registry.error().message);
   }
-  const auto *api_key = std::getenv("PIGPEN_API_KEY");
-  auto harness = scry::Harness::create(
-      scry_config(config, api_key == nullptr ? "" : api_key),
-      std::move(*registry));
+  // Scry validates the request headers, including collisions with its own.
+  auto harness =
+      scry::Harness::create(scry_config(config, options), std::move(*registry));
   if (!harness) {
     return std::unexpected(harness.error().message);
   }
   // Opened last so a rejected config leaves no log behind.
-  auto metrics =
-      MetricsWriter::create(log_directory, config, std::move(prompt_variant));
-  if (!metrics) {
-    return std::unexpected(std::move(metrics.error()));
+  std::unique_ptr<MetricsWriter> metrics;
+  if (options.log_directory) {
+    auto created = MetricsWriter::create(*options.log_directory, config,
+                                         std::move(options.prompt_variant),
+                                         std::move(options.rollout_id));
+    if (!created) {
+      return std::unexpected(std::move(created.error()));
+    }
+    metrics = std::move(*created);
   }
 
   return std::shared_ptr<Session>{new Session{std::make_unique<Impl>(
-      std::move(config), reward_weights, std::move(*metrics), std::move(world),
-      std::move(tools), std::move(*harness), std::move(*conversation))}};
+      std::move(config), options.reward_weights, std::move(metrics),
+      std::move(world), std::move(tools), std::move(*harness),
+      std::move(*conversation))}};
 }
 
 Session::Session(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
@@ -177,6 +213,10 @@ PumpStats Session::pump() {
       .callbacks_delivered = stats.callbacks_delivered,
       .events_remaining = stats.events_remaining,
   };
+}
+
+bool Session::finished() const {
+  return impl_->runner.snapshot().state == RunState::finished;
 }
 
 bool Session::play() { return impl_->runner.play(); }
@@ -211,8 +251,9 @@ const RewardWeights &Session::reward_weights() const noexcept {
   return impl_->reward_weights;
 }
 
-const std::filesystem::path &Session::metrics_path() const noexcept {
-  return impl_->metrics->path();
+const std::optional<std::filesystem::path> &
+Session::metrics_path() const noexcept {
+  return impl_->metrics_path;
 }
 
 const std::string &Session::metrics_error() const noexcept {

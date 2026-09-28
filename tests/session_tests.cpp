@@ -1,6 +1,7 @@
 /// @file session_tests.cpp
-/// @brief Covers config rejection, that a session atomically owns a seeded
-/// world, a registered tool harness, and an already-open truthful log, and
+/// @brief Covers config and request-header rejection, that a session
+/// atomically owns a seeded world, a registered tool harness, and an
+/// already-open truthful log (or, without a log directory, none at all), and
 /// that its summary and footer carry the reward weights it was created with.
 ///
 /// Session is the reset unit: creation either yields the whole composed
@@ -39,39 +40,51 @@ TEST_CASE("session rejects unsafe or incomplete runtime configuration") {
   config.model = "registry.example/pig-model:Q4_K_M";
 
   config.base_url = "localhost:11434/v1";
-  CHECK_FALSE(pigpen::agent::Session::create(config, directory));
+  CHECK_FALSE(
+      pigpen::agent::Session::create(config, {.log_directory = directory}));
   config.base_url.clear();
-  CHECK_FALSE(pigpen::agent::Session::create(config, directory));
+  CHECK_FALSE(
+      pigpen::agent::Session::create(config, {.log_directory = directory}));
   config.base_url = "http://127.0.0.1:11434/v1";
 
   config.model.clear();
-  CHECK_FALSE(pigpen::agent::Session::create(config, directory));
+  CHECK_FALSE(
+      pigpen::agent::Session::create(config, {.log_directory = directory}));
   config.model = "registry.example/pig-model:Q4_K_M";
 
   config.turn_budget = 0;
-  CHECK_FALSE(pigpen::agent::Session::create(config, directory));
+  CHECK_FALSE(
+      pigpen::agent::Session::create(config, {.log_directory = directory}));
   config.turn_budget = 10'001;
-  CHECK_FALSE(pigpen::agent::Session::create(config, directory));
+  CHECK_FALSE(
+      pigpen::agent::Session::create(config, {.log_directory = directory}));
   config.turn_budget = 20;
 
   config.max_tool_rounds = 0;
-  CHECK_FALSE(pigpen::agent::Session::create(config, directory));
+  CHECK_FALSE(
+      pigpen::agent::Session::create(config, {.log_directory = directory}));
   config.max_tool_rounds = 65;
-  CHECK_FALSE(pigpen::agent::Session::create(config, directory));
+  CHECK_FALSE(
+      pigpen::agent::Session::create(config, {.log_directory = directory}));
 
   config.max_tool_rounds = 8;
   config.max_output_tokens = 0;
-  CHECK_FALSE(pigpen::agent::Session::create(config, directory));
+  CHECK_FALSE(
+      pigpen::agent::Session::create(config, {.log_directory = directory}));
 
   config.max_output_tokens = 2'048;
   config.temperature = -0.1;
-  CHECK_FALSE(pigpen::agent::Session::create(config, directory));
+  CHECK_FALSE(
+      pigpen::agent::Session::create(config, {.log_directory = directory}));
   config.temperature = 2.1;
-  CHECK_FALSE(pigpen::agent::Session::create(config, directory));
+  CHECK_FALSE(
+      pigpen::agent::Session::create(config, {.log_directory = directory}));
   config.temperature = std::numeric_limits<double>::infinity();
-  CHECK_FALSE(pigpen::agent::Session::create(config, directory));
+  CHECK_FALSE(
+      pigpen::agent::Session::create(config, {.log_directory = directory}));
   config.temperature = std::numeric_limits<double>::quiet_NaN();
-  CHECK_FALSE(pigpen::agent::Session::create(config, directory));
+  CHECK_FALSE(
+      pigpen::agent::Session::create(config, {.log_directory = directory}));
   CHECK_FALSE(std::filesystem::exists(directory));
 }
 
@@ -85,7 +98,9 @@ TEST_CASE("session atomically owns a seeded world registered harness and "
   std::filesystem::path log_path;
   {
     auto created =
-        pigpen::agent::Session::create(config, directory, "test-preset");
+        pigpen::agent::Session::create(config, {.log_directory = directory,
+                                                .prompt_variant = "test-preset",
+                                                .rollout_id = "run42/2026/1"});
     REQUIRE(created.has_value());
     const auto &session = *created;
     CHECK(session->config() == config);
@@ -97,7 +112,8 @@ TEST_CASE("session atomically owns a seeded world registered harness and "
     CHECK(first >= std::chrono::milliseconds::zero());
     CHECK(session->elapsed() >= first);
     CHECK(session->metrics_error().empty());
-    log_path = session->metrics_path();
+    REQUIRE(session->metrics_path());
+    log_path = *session->metrics_path();
     CHECK(std::filesystem::exists(log_path));
   }
 
@@ -109,6 +125,7 @@ TEST_CASE("session atomically owns a seeded world registered harness and "
   const auto header = nlohmann::json::parse(header_line);
   const auto footer = nlohmann::json::parse(footer_line);
   CHECK(header.at("prompt_variant") == "test-preset");
+  CHECK(header.at("rollout_id") == "run42/2026/1");
   CHECK(header.at("model") == config.model);
   CHECK(header.at("seed") == 2026);
   CHECK(header.at("temperature") == 0.2);
@@ -130,8 +147,8 @@ TEST_CASE("a session summarises itself with its own reward weights") {
   weights.zero_tool_turn = -3.0;
   std::filesystem::path log_path;
   {
-    auto created =
-        pigpen::agent::Session::create(config, directory, "default", weights);
+    auto created = pigpen::agent::Session::create(
+        config, {.log_directory = directory, .reward_weights = weights});
     REQUIRE(created.has_value());
     const auto &session = *created;
     CHECK(session->reward_weights() == weights);
@@ -152,7 +169,8 @@ TEST_CASE("a session summarises itself with its own reward weights") {
     std::this_thread::sleep_for(std::chrono::milliseconds{3});
     CHECK(session->elapsed() == duration);
     CHECK(stopped.duration == duration);
-    log_path = session->metrics_path();
+    REQUIRE(session->metrics_path());
+    log_path = *session->metrics_path();
   }
 
   std::ifstream stream{log_path};
@@ -168,6 +186,74 @@ TEST_CASE("a session summarises itself with its own reward weights") {
   CHECK(footer.at("reward_weights").at("zero_tool_turn") == -3.0);
   CHECK(footer.at("reward").at("valid") == false);
   CHECK(footer.at("reward").at("total").is_null());
+
+  std::error_code ignored;
+  std::filesystem::remove_all(directory, ignored);
+}
+
+TEST_CASE("session rejects bad request headers before opening a log") {
+  const auto directory = session_test_directory();
+  pigpen::agent::Config config;
+  config.model = "registry.example/pig-model:Q4_K_M";
+  const auto create = [&](pigpen::agent::SessionOptions options) {
+    options.log_directory = directory;
+    return pigpen::agent::Session::create(config, std::move(options));
+  };
+
+  // Pig Pen manages the rollout header, in any letter case.
+  const auto reserved =
+      create({.request_headers = {{"x-pigpen-ROLLOUT", "run/1/0"}}});
+  REQUIRE_FALSE(reserved);
+  CHECK(reserved.error() ==
+        "request header x-pigpen-ROLLOUT is reserved for the rollout id");
+  // Scry rejects headers it manages and malformed names or values.
+  CHECK_FALSE(create({.request_headers = {{"Authorization", "Bearer x"}}}));
+  CHECK_FALSE(create({.request_headers = {{"Content-Type", "text/plain"}}}));
+  CHECK_FALSE(create({.request_headers = {{"bad name", "value"}}}));
+  CHECK_FALSE(create({.request_headers = {{"X-Pigpen-Seed", "1\r\n2"}}}));
+  CHECK_FALSE(create({.rollout_id = "run\n1"}));
+  CHECK_FALSE(std::filesystem::exists(directory));
+
+  auto accepted = create(
+      {.rollout_id = "run42/7/3", .request_headers = {{"X-Pigpen-Seed", "7"}}});
+  REQUIRE(accepted);
+  accepted->reset();
+  std::error_code ignored;
+  std::filesystem::remove_all(directory, ignored);
+}
+
+TEST_CASE("a session without a log directory keeps its facts and writes "
+          "nothing") {
+  const auto directory = session_test_directory();
+  const auto previous = std::filesystem::current_path();
+  std::filesystem::create_directories(directory);
+  // Anything written relative to the working directory would land here.
+  std::filesystem::current_path(directory);
+  pigpen::agent::Config config;
+  config.model = "registry.example/pig-model:Q4_K_M";
+  pigpen::agent::RewardWeights weights;
+  weights.score = 2.0;
+  {
+    auto created = pigpen::agent::Session::create(
+        config, {.rollout_id = "run42/0/0", .reward_weights = weights});
+    REQUIRE(created.has_value());
+    const auto &session = *created;
+    CHECK_FALSE(session->metrics_path());
+    CHECK(session->metrics_error().empty());
+    CHECK(session->reward_weights() == weights);
+    CHECK_FALSE(session->finished());
+
+    REQUIRE(session->stop());
+    CHECK(session->finished());
+    CHECK(session->metrics_error().empty());
+    const auto summary = pigpen::agent::summarize_episode(*session, weights);
+    CHECK(summary.finish_reason == pigpen::agent::FinishReason::stopped);
+    CHECK(summary.complete());
+    CHECK(summary.reward.invalid_reason == "stopped");
+    CHECK(summary.reward_weights == weights);
+  }
+  std::filesystem::current_path(previous);
+  CHECK(std::filesystem::is_empty(directory));
 
   std::error_code ignored;
   std::filesystem::remove_all(directory, ignored);

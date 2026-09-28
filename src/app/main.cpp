@@ -4,6 +4,8 @@
 /// Nothing application-specific lives here — panels, controls, and session
 /// ownership belong to ui::AppUi, which this loop pumps and draws once per
 /// frame.
+#include "agent/session_options.hpp"
+#include "cli/config_options.hpp"
 #include "ui/app_ui.hpp"
 #include "ui/gui_options.hpp"
 
@@ -43,13 +45,11 @@ void print_usage(std::ostream &output, const std::string_view program) {
 Open the pig-pen GUI, optionally creating and starting a session immediately.
 
 Options:
-  --model NAME    Populate the model field and auto-start
-  --base-url URL  Populate the model endpoint field
-                  (default: http://127.0.0.1:11434/v1)
-  --help          Show this help and exit
-
+)" << pigpen::ui::gui_options_help()
+         << R"(
 Values may also use --option=value. Without --model, the GUI waits for
-a model identifier to be entered in Controls.
+a model identifier to be entered in Controls. PIGPEN_API_KEY supplies an
+optional API key. Logs are written to logs/.
 )";
 }
 
@@ -147,7 +147,13 @@ int main(const int argc, char **argv) {
 
   // Declared after every guard so the session, and its log footer, is torn
   // down before the ImGui context it draws into.
-  pigpen::ui::AppUi application{options->config};
+  pigpen::ui::AppUi application{
+      options->config,
+      {
+          .log_directory = "logs",
+          .api_key = pigpen::cli::api_key_from_environment(),
+          .reward_weights = options->reward_weights,
+      }};
   for (;;) {
     SDL_Event event;
     while (SDL_PollEvent(&event)) {

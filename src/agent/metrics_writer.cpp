@@ -109,7 +109,8 @@ write_line(std::ofstream &stream, const std::filesystem::path &path,
 
 std::expected<std::unique_ptr<MetricsWriter>, std::string>
 MetricsWriter::create(const std::filesystem::path &log_directory,
-                      const Config &config, std::string prompt_variant) {
+                      const Config &config, std::string prompt_variant,
+                      std::string rollout_id) {
   std::error_code directory_error;
   std::filesystem::create_directories(log_directory, directory_error);
   if (directory_error) {
@@ -149,6 +150,9 @@ MetricsWriter::create(const std::filesystem::path &log_directory,
                             : nlohmann::json(nullptr)},
       {"started_at", iso_timestamp(wall_started)},
       {"prompt_variant", std::move(prompt_variant)},
+      {"rollout_id", rollout_id.empty()
+                         ? nlohmann::json(nullptr)
+                         : nlohmann::json(std::move(rollout_id))},
       {"scenario",
        {
            {"grid",

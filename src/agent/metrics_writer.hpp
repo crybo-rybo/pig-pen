@@ -29,12 +29,13 @@ namespace pigpen::agent {
 class MetricsWriter final {
 public:
   /// @brief Create the log directory and file, then write the header line.
+  /// @param rollout_id Recorded in the header; empty is written as null.
   /// @return The writer, or a message when the directory or file cannot be
   /// created or the header cannot be written.
   [[nodiscard]] static std::expected<std::unique_ptr<MetricsWriter>,
                                      std::string>
   create(const std::filesystem::path &log_directory, const Config &config,
-         std::string prompt_variant);
+         std::string prompt_variant, std::string rollout_id = {});
 
   /// @brief Writes an incomplete "abandoned" footer if none was written yet.
   ~MetricsWriter();

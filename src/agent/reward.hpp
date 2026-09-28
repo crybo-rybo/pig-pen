@@ -58,8 +58,8 @@ struct RewardWeightField {
 };
 
 /// @brief Every weight, in declaration order; reward_term_counts() lists
-/// each term's count in this order. The `--reward` help text in
-/// headless_main.cpp lists these names too.
+/// each term's count in this order, and the `--reward` help text
+/// (cli::add_reward_option) lists the names from it.
 inline constexpr std::array reward_weight_fields{
     RewardWeightField{"score", &RewardWeights::score},
     RewardWeightField{"explored_cell", &RewardWeights::explored_cell},

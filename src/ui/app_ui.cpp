@@ -237,8 +237,9 @@ void draw_reward_breakdown(const agent::EpisodeSummary &summary) {
 
 } // namespace
 
-AppUi::AppUi(const agent::Config &initial_config)
-    : controls_{initial_config},
+AppUi::AppUi(const agent::Config &initial_config,
+             agent::SessionOptions session_options)
+    : session_options_{std::move(session_options)}, controls_{initial_config},
       turn_budget_{static_cast<int>(initial_config.turn_budget)},
       max_tool_rounds_{static_cast<int>(initial_config.max_tool_rounds)},
       use_sampling_seed_{initial_config.sampling_seed.has_value()},
@@ -295,9 +296,11 @@ agent::Config AppUi::config_from_controls() const {
 }
 
 void AppUi::recreate_session(const bool auto_play) {
-  auto created = agent::Session::create(
-      config_from_controls(), "logs",
-      preset_ ? scenario_presets[*preset_].variant : "custom");
+  auto options = session_options_;
+  options.prompt_variant =
+      preset_ ? scenario_presets[*preset_].variant : "custom";
+  auto created =
+      agent::Session::create(config_from_controls(), std::move(options));
   if (!created) {
     visible_error_ = "Could not create session: " + created.error();
     return;
@@ -796,8 +799,9 @@ void AppUi::draw_controls_panel() {
       ImGui::TextColored({1.0F, 0.78F, 0.28F, 1.0F},
                          "Pending settings apply on Reset.");
     }
+    const auto &metrics_path = session_->metrics_path();
     ImGui::TextWrapped("Metrics: %s",
-                       session_->metrics_path().string().c_str());
+                       metrics_path ? metrics_path->string().c_str() : "off");
   }
   if (!status_message_.empty()) {
     ImGui::TextColored({0.48F, 0.88F, 0.68F, 1.0F}, "%s",

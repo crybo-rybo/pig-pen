@@ -2,7 +2,9 @@
 /// @brief ScryTurnTransport implementation; the contract is in the header.
 #include "agent/scry_transport.hpp"
 
+#include <string>
 #include <utility>
+#include <vector>
 
 namespace pigpen::agent {
 namespace {
@@ -26,10 +28,19 @@ namespace {
 
 } // namespace
 
-scry::Config scry_config(const Config &config, std::string api_key) {
+scry::Config scry_config(const Config &config, const SessionOptions &options) {
+  std::vector<scry::HttpHeader> headers;
+  headers.reserve(options.request_headers.size() + 1);
+  for (const auto &[name, value] : options.request_headers) {
+    headers.push_back({.name = name, .value = value});
+  }
+  if (!options.rollout_id.empty()) {
+    headers.push_back({.name = std::string{rollout_header_name},
+                       .value = options.rollout_id});
+  }
   return {
       .base_url = config.base_url,
-      .api_key = std::move(api_key),
+      .api_key = options.api_key,
       .model = config.model,
       .dialect = scry::ProviderDialect::openai_compatible,
       .sampling = {.temperature = config.temperature,
@@ -39,6 +50,7 @@ scry::Config scry_config(const Config &config, std::string api_key) {
       .max_tool_rounds = config.max_tool_rounds,
       .max_tool_calls_per_turn = max_world_tool_calls_per_turn,
       .tool_round_limit = scry::ToolRoundLimitPolicy::complete,
+      .extra_headers = std::move(headers),
   };
 }
 

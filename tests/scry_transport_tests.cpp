@@ -16,6 +16,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -177,6 +178,52 @@ TEST_CASE("world tools export their reflected contract without a harness") {
         nlohmann::json::parse(
             scry::reflection::input_schema_v<pigpen::agent::EatArguments>));
   CHECK(world.position() == pigpen::world::World::spawn);
+}
+
+TEST_CASE("session options supply the credential and request headers") {
+  pigpen::agent::Config config;
+  config.model = "scripted-pig";
+  const auto provider = pigpen::agent::scry_config(
+      config,
+      {.api_key = "secret",
+       .rollout_id = "run42/1003/2",
+       .request_headers = {{"X-Pigpen-Seed", "1003"}, {"X-Trace", "abc"}}});
+  CHECK(provider.api_key == "secret");
+  REQUIRE(provider.extra_headers.size() == 3);
+  CHECK(provider.extra_headers[0].name == "X-Pigpen-Seed");
+  CHECK(provider.extra_headers[1].value == "abc");
+  CHECK(provider.extra_headers[2].name == "X-Pigpen-Rollout");
+  CHECK(provider.extra_headers[2].value == "run42/1003/2");
+  CHECK(pigpen::agent::scry_config(config).extra_headers.empty());
+
+  // Every request of the turn carries them to the provider.
+  scry::testing::ScriptedTransport script;
+  script.enqueue({.body_chunks = {openai_text_stream("Hello.")}});
+  auto harness = scry::testing::create_harness(provider, script);
+  REQUIRE(harness);
+  auto conversation = make_conversation();
+  pigpen::agent::ScryTurnTransport transport{*harness, conversation};
+  std::optional<pigpen::agent::TurnOutcome> outcome;
+  REQUIRE(transport.send("Continue.", {.on_finished = [&](auto result) {
+                           outcome = std::move(result);
+                         }}));
+  pump_until(*harness, [&] { return outcome.has_value(); });
+  CHECK(outcome->status == TurnStatus::completed);
+  const auto requests = script.requests();
+  REQUIRE(requests.size() == 1);
+  const auto header = [&](const std::string_view name) {
+    std::optional<std::string> value;
+    for (const auto &sent : requests[0].headers) {
+      if (sent.name == name) {
+        value = sent.value;
+      }
+    }
+    return value;
+  };
+  CHECK(header("X-Pigpen-Rollout") == "run42/1003/2");
+  CHECK(header("X-Pigpen-Seed") == "1003");
+  CHECK(header("X-Trace") == "abc");
+  CHECK(header("authorization") == "Bearer secret");
 }
 
 TEST_CASE("Scry bounds requested calls across batches and resets each turn") {
