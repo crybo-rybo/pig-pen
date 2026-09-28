@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cctype>
 #include <charconv>
+#include <exception>
 #include <limits>
 #include <system_error>
 #include <utility>
@@ -171,6 +172,19 @@ JobStream::JobStream(std::string prefix) : prefix_(std::move(prefix)) {}
 
 std::expected<WorkerJob, std::string>
 JobStream::accept(const std::string_view line, const std::size_t number) {
+  try {
+    return accept_or_throw(line, number);
+  } catch (const std::exception &error) {
+    // parse_job_spec() reports bad content itself; this is only a guard, so
+    // no line can ever abort a long-lived worker.
+    return std::unexpected(std::string{"could not read the job: "} +
+                           error.what());
+  }
+}
+
+std::expected<WorkerJob, std::string>
+JobStream::accept_or_throw(const std::string_view line,
+                           const std::size_t number) {
   auto spec = agent::parse_job_spec(line);
   if (!spec) {
     return std::unexpected(std::move(spec.error()));

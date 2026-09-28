@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <expected>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -19,10 +20,10 @@ namespace pigpen::cli {
 struct InputLine {
   /// One-based, counting every line read, blank ones included.
   std::size_t number{};
-  /// The line's bytes; only its first max_bytes when it was too long.
+  /// The line's bytes; empty when it was too long.
   std::string text{};
-  /// The line was longer than the reader's max_bytes; the rest was
-  /// discarded.
+  /// The line was longer than the reader's max_bytes and its bytes were
+  /// discarded, so a queue of long lines costs no more than short ones.
   bool truncated{};
 
   friend bool operator==(const InputLine &, const InputLine &) = default;
@@ -34,7 +35,8 @@ enum class LineStatus : std::uint8_t {
   line,
   /// Nothing yet; the input is still open.
   waiting,
-  /// The input has ended and every line was taken.
+  /// The input has ended, or failed (see LineReader::error()), and every
+  /// line was taken.
   closed,
 };
 
@@ -48,10 +50,13 @@ enum class LineStatus : std::uint8_t {
 class LineReader final {
 public:
   /// Reads up to `size` bytes into `data`, blocking until at least one is
-  /// available; returns how many, or 0 at the end of input or on an error.
-  using ReadBytes = std::function<std::size_t(char *data, std::size_t size)>;
+  /// available; returns how many, 0 at the end of input, or why the input
+  /// could not be read.
+  using ReadBytes = std::function<std::expected<std::size_t, std::string>(
+      char *data, std::size_t size)>;
 
-  /// @param read Called only on the reader's thread, until it returns 0.
+  /// @param read Called only on the reader's thread, until it returns 0 or
+  /// an error, or throws (an error with the exception's message).
   /// @param max_bytes Longest line kept whole; at least 1.
   /// @param capacity Most lines queued at once; at least 1.
   LineReader(ReadBytes read, std::size_t max_bytes, std::size_t capacity);
@@ -68,13 +73,20 @@ public:
   /// @brief Take the next line into @p line if there is one.
   [[nodiscard]] LineStatus poll(InputLine &line);
 
+  /// @brief Why reading stopped early, once poll() has said
+  /// LineStatus::closed; empty when the input simply ended. A partial last
+  /// line read before an error is still delivered.
+  [[nodiscard]] std::string error() const;
+
 private:
   /// Shared with the thread, which may outlive the reader.
   struct State {
-    std::mutex mutex{};
+    mutable std::mutex mutex{};
     std::condition_variable space{};
     std::deque<InputLine> lines{};
     bool closed{};
+    /// Why reading failed, or empty.
+    std::string error{};
     /// The thread is inside ReadBytes.
     bool reading{};
     bool abandoned{};
@@ -89,7 +101,9 @@ private:
 
 /// @brief Reads standard input with the operating system's read call, not
 /// through C stdio or iostreams, so a read left blocked when the process
-/// exits holds no lock that exit needs.
+/// exits holds no lock that exit needs. An interrupted read is retried; any
+/// other failure (a closed descriptor, a directory, an I/O error) is an
+/// error naming the system's reason.
 [[nodiscard]] LineReader::ReadBytes standard_input_bytes();
 
 } // namespace pigpen::cli

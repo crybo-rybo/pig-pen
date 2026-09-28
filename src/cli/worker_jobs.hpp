@@ -107,10 +107,14 @@ public:
   /// @return The job, or why the line is not one: the JSON error from
   /// agent::parse_job_spec(), a bad rollout id, or a rollout id already
   /// used, naming the line that used it. A rejected line reserves nothing.
+  /// Never throws: any failure is a message.
   [[nodiscard]] std::expected<WorkerJob, std::string>
   accept(std::string_view line, std::size_t number);
 
 private:
+  [[nodiscard]] std::expected<WorkerJob, std::string>
+  accept_or_throw(std::string_view line, std::size_t number);
+
   std::string prefix_;
   /// Every rollout id accepted so far, with its line number.
   std::unordered_map<std::string, std::size_t> rollout_ids_{};

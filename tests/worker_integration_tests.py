@@ -657,6 +657,9 @@ def test_jobs_from_stdin(executable: str) -> None:
         '{"seed": 54, "samples": 2}',
         '{"seed": 55, "sampling_seed": null}',
         '{"seed": 56, "rollout_id": "' + "x" * 70_000 + '"}',
+        '{"seed": 1e400}',
+        '{"seed": 57, "seed": 58}',
+        '{"seed": 59}\0garbage',
     ]
     with Stub(play_one_turn) as server:
         completed = subprocess.run(
@@ -695,6 +698,15 @@ def test_jobs_from_stdin(executable: str) -> None:
                 "line": 9,
                 "error": "line is longer than 65536 bytes",
             },
+            # Neither an out-of-range number nor anything else about a line's
+            # content can abort the batch.
+            {
+                "type": "job_error",
+                "line": 10,
+                "error": "invalid JSON: a number is out of range",
+            },
+            {"type": "job_error", "line": 11, "error": 'key "seed" appears twice'},
+            {"type": "job_error", "line": 12, "error": "NUL byte at byte 13"},
         ],
         f"job errors: {errors!r}",
     )
@@ -725,12 +737,12 @@ def test_jobs_from_stdin(executable: str) -> None:
         "valid": 4,
         "invalid": 0,
         "not_started": 0,
-        "job_errors": 4,
+        "job_errors": 7,
         "error": None,
         "exit_code": 6,
     }
     check(subset(batch, expected_batch) == expected_batch, f"batch: {batch!r}")
-    for number in (3, 5, 7, 9):
+    for number in (3, 5, 7, 9, 10, 11, 12):
         line = f"job line {number} rejected"
         check(line in completed.stderr, f"missing {line!r} on stderr\n{output}")
 
@@ -802,19 +814,43 @@ def test_slow_producer(executable: str) -> None:
 
 
 def test_signal_while_waiting_for_jobs(executable: str) -> None:
-    """A signal ends a worker blocked on stdin that is still open."""
+    """A signal ends a worker blocked on stdin that is still open.
+
+    The test holds the pipe's write end until the worker has exited, so the
+    worker's reader thread is inside a read that cannot return: a worker
+    that joined that thread instead of leaving it would never exit.
+    """
+    read_end, write_end = os.pipe()
     with Stub(play_one_turn) as server:
-        process = start_stdin_worker(executable, server)
         try:
-            send_job(process, {"seed": 71})
-            record = read_record(process)
-            check(record.get("rollout_id") == "rollout/71/0", f"{record!r}")
-            process.send_signal(signal.SIGINT)
-            stdout, stderr = process.communicate(timeout=30)
+            process = subprocess.Popen(
+                worker_command(executable, server, "--jobs", "-"),
+                stdin=read_end,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            os.close(read_end)
+            read_end = -1
+            try:
+                os.write(write_end, b'{"seed": 71}\n')
+                record = read_record(process)
+                check(record.get("rollout_id") == "rollout/71/0", f"{record!r}")
+                process.send_signal(signal.SIGINT)
+                # stdin is still open here: only the worker can end this.
+                process.wait(timeout=30)
+                stdout = process.stdout.read()
+                stderr = process.stderr.read()
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+                process.stdout.close()
+                process.stderr.close()
         finally:
-            if process.poll() is None:
-                process.kill()
-                process.communicate()
+            if read_end >= 0:
+                os.close(read_end)
+            os.close(write_end)
 
     output = f"stdout={stdout}\nstderr={stderr}"
     check(process.returncode == 130, f"exit {process.returncode}\n{output}")
@@ -831,6 +867,44 @@ def test_signal_while_waiting_for_jobs(executable: str) -> None:
     check(subset(batch, expected_batch) == expected_batch, f"batch: {batch!r}")
 
 
+def test_unreadable_stdin_exits_1(executable: str) -> None:
+    """A stdin that cannot be read is an error, not an empty stream."""
+    with (
+        Stub(play_one_turn) as server,
+        tempfile.TemporaryDirectory(prefix="pigpen-stdin-") as directory,
+    ):
+        # Reading a directory fails (EISDIR) rather than reaching its end.
+        descriptor = os.open(directory, os.O_RDONLY)
+        try:
+            completed = subprocess.run(
+                worker_command(executable, server, "--jobs", "-"),
+                stdin=descriptor,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+        finally:
+            os.close(descriptor)
+
+    output = f"stdout={completed.stdout}\nstderr={completed.stderr}"
+    check(completed.returncode == 1, f"exit {completed.returncode}\n{output}")
+    check("input error" in completed.stderr, f"no input diagnostic\n{output}")
+    batch = json.loads(completed.stdout)
+    expected_batch = {
+        "type": "batch",
+        "status": "aborted",
+        "jobs": 0,
+        "episodes": 0,
+        "exit_code": 1,
+    }
+    check(subset(batch, expected_batch) == expected_batch, f"batch: {batch!r}")
+    check(
+        batch["error"].startswith("could not read standard input: "),
+        f"batch error: {batch!r}",
+    )
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         raise SystemExit("usage: worker_integration_tests.py PIG_PEN_WORKER")
@@ -842,6 +916,7 @@ def main() -> int:
     test_slow_producer(executable)
     if os.name == "posix":
         test_signal_while_waiting_for_jobs(executable)
+        test_unreadable_stdin_exits_1(executable)
         test_closed_stdout_exits_1(executable)
         for signal_number in (signal.SIGINT, signal.SIGTERM):
             test_signal_cancels_in_flight(executable, signal_number)

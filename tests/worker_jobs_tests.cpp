@@ -270,6 +270,21 @@ TEST_CASE("job lines that are not jobs say why", "[worker][jobs]") {
   CHECK(error(R"({"seed":1} {"seed":2})") == "invalid JSON at byte 12");
   CHECK(error("{\"seed\":1,\"rollout_id\":\"r\xff\"}")
             .starts_with("invalid JSON at byte"));
+  // Numbers past a double's range are a message, never an exception, in
+  // any key.
+  for (const auto *const line :
+       {R"({"seed":1e400})", R"({"seed":1,"sample":1e400})",
+        R"({"seed":1,"sampling_seed":-1e400})"}) {
+    CHECK(error(line) == "invalid JSON: a number is out of range");
+  }
+  // A repeated key is refused rather than letting the last one win.
+  CHECK(error(R"({"seed":1,"seed":2})") == "key \"seed\" appears twice");
+  CHECK(error(R"({"seed":1,"sample":0,"sample":1})") ==
+        "key \"sample\" appears twice");
+  // So is a NUL byte anywhere, even after a complete object.
+  CHECK(error(std::string_view{"{\"seed\":10}\0garbage", 20}) ==
+        "NUL byte at byte 12");
+  CHECK(error(std::string_view{"\0", 1}) == "NUL byte at byte 1");
   CHECK(error("[1]") == "a job must be a JSON object");
   CHECK(error("7") == "a job must be a JSON object");
   CHECK(error(R"({"seed":1,"samples":2})") == "unknown key \"samples\"");
@@ -329,6 +344,8 @@ TEST_CASE("a job stream fills in defaults and keeps rollout ids unique",
           "spaces");
   }
   CHECK(accept("[]", 8).rollout_id == "error: a job must be a JSON object");
+  CHECK(accept(R"({"seed":1e400})", 8).rollout_id ==
+        "error: invalid JSON: a number is out of range");
 
   // A rejected line reserves nothing: its id is still free afterwards.
   CHECK(accept(R"({"seed":8,"rollout_id":"free","extra":1})", 9).rollout_id ==

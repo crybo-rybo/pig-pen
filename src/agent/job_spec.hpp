@@ -30,9 +30,12 @@ struct JobSpec {
 /// (0..2^64-1) and optional `sample` (0..2^32-1), `rollout_id` (a string),
 /// and `sampling_seed` (0..2^32-1 or null). Numbers must be written as
 /// whole numbers, not with a fraction or exponent.
-/// @return The fields, or a message: `invalid JSON at byte N`, `a job must
-/// be a JSON object`, `unknown key "K"`, `"seed" is required`, or `"K" must
-/// be ...` naming the expected type and range.
+/// @return The fields, or a message: `NUL byte at byte N`, `invalid JSON at
+/// byte N`, `invalid JSON: a number is out of range` (such as 1e400), `a job
+/// must be a JSON object`, `key "K" appears twice`, `unknown key "K"`,
+/// `"seed" is required`, or `"K" must be ...` naming the expected type and
+/// range. It reports every problem with the line's content as a message and
+/// never throws for one.
 [[nodiscard]] std::expected<JobSpec, std::string>
 parse_job_spec(std::string_view line);
 

@@ -48,7 +48,7 @@ struct EpisodeRecord {
 /// @brief What the worker reports once its batch has ended.
 struct BatchRecord {
   /// `completed`, `interrupted` (a signal), or `aborted` (a session could
-  /// not be created).
+  /// not be created, a report failed, or stdin could not be read).
   std::string status{};
   std::size_t jobs{};
   /// `episode` records written; every started job writes exactly one.

@@ -1,9 +1,10 @@
 /// @file line_reader_tests.cpp
 /// @brief Covers LineReader with scripted byte sources: lines split across
 /// reads of any size, `\r` kept, blank lines numbered, a last line without
-/// a terminator, over-long lines truncated and flagged, closing only once
-/// every line is taken, the queue capacity holding the source back, a
-/// throwing source ending the input, and destruction during a blocked read.
+/// a terminator, over-long lines flagged with their bytes dropped, closing
+/// only once every line is taken, the queue capacity holding the source
+/// back, a failing or throwing source ending the input with its error, and
+/// destruction during a blocked read.
 
 #include "cli/line_reader.hpp"
 
@@ -14,6 +15,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
+#include <expected>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -89,11 +91,11 @@ TEST_CASE("a trailing newline ends the last line, and no input is no lines",
   CHECK(drain(empty).empty());
 }
 
-TEST_CASE("a line past the byte limit keeps its start and is flagged",
+TEST_CASE("a line past the byte limit is flagged and its bytes dropped",
           "[lines]") {
   LineReader reader{text_source("abcdefgh\nabcd\nxy", 3), 4, 16};
   CHECK(drain(reader) == std::vector<InputLine>{
-                             {.number = 1, .text = "abcd", .truncated = true},
+                             {.number = 1, .text = "", .truncated = true},
                              {.number = 2, .text = "abcd"},
                              {.number = 3, .text = "xy"},
                          });
@@ -106,7 +108,7 @@ TEST_CASE("the reader stops reading while its queue is full", "[lines]") {
   LineReader reader{[source, handed_out](char *data, std::size_t size) {
                       const auto count =
                           source(data, std::min<std::size_t>(size, 1));
-                      *handed_out += count;
+                      *handed_out += count.value_or(0);
                       return count;
                     },
                     1024, 2};
@@ -141,6 +143,33 @@ TEST_CASE("a source that throws ends the input after the lines before it",
                     },
                     1024, 16};
   CHECK(drain(reader) == std::vector<InputLine>{{.number = 1, .text = "a"}});
+  CHECK(reader.error() == "gone");
+}
+
+TEST_CASE("a read error ends the input and is reported, after the lines "
+          "before it",
+          "[lines]") {
+  auto calls = std::make_shared<int>(0);
+  LineReader reader{
+      [calls](char *data,
+              std::size_t) -> std::expected<std::size_t, std::string> {
+        if (++*calls == 1) {
+          const std::string text = "a\npart";
+          std::copy(text.begin(), text.end(), data);
+          return text.size();
+        }
+        return std::unexpected("Input/output error");
+      },
+      1024, 16};
+  // The partial last line is still delivered, then the error.
+  CHECK(drain(reader) == std::vector<InputLine>{{.number = 1, .text = "a"},
+                                                {.number = 2, .text = "part"}});
+  CHECK(reader.error() == "Input/output error");
+
+  // The end of input is no error.
+  LineReader ended{text_source("x\n", 1), 1024, 16};
+  CHECK(drain(ended).size() == 1);
+  CHECK(ended.error().empty());
 }
 
 TEST_CASE("destroying a reader blocked in a read does not wait for it",

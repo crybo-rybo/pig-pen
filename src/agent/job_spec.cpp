@@ -5,6 +5,8 @@
 #include <nlohmann/json.hpp>
 
 #include <limits>
+#include <optional>
+#include <set>
 #include <string>
 
 namespace pigpen::agent {
@@ -33,12 +35,35 @@ std::expected<JobSpec, std::string>
 parse_job_spec(const std::string_view line) {
   constexpr auto u32_max = std::numeric_limits<std::uint32_t>::max();
   constexpr auto u64_max = std::numeric_limits<std::uint64_t>::max();
+  if (const auto nul = line.find('\0'); nul != std::string_view::npos) {
+    return std::unexpected("NUL byte at byte " + std::to_string(nul + 1));
+  }
   nlohmann::json object;
+  std::optional<std::string> repeated_key;
   try {
-    object = nlohmann::json::parse(line);
+    std::set<std::string> keys;
+    // Only the top-level object's keys matter: every known value is a
+    // scalar, and anything else is rejected below.
+    object = nlohmann::json::parse(
+        line, [&](const int depth, const nlohmann::json::parse_event_t event,
+                  const nlohmann::json &parsed) {
+          if (event == nlohmann::json::parse_event_t::key && depth == 1 &&
+              !keys.insert(parsed.get<std::string>()).second && !repeated_key) {
+            repeated_key = parsed.get<std::string>();
+          }
+          return true;
+        });
   } catch (const nlohmann::json::parse_error &error) {
     return std::unexpected("invalid JSON at byte " +
                            std::to_string(error.byte));
+  } catch (const nlohmann::json::out_of_range &) {
+    // A number too large for a double, such as 1e400.
+    return std::unexpected("invalid JSON: a number is out of range");
+  } catch (const nlohmann::json::exception &error) {
+    return std::unexpected(std::string{"invalid JSON: "} + error.what());
+  }
+  if (repeated_key) {
+    return std::unexpected("key \"" + *repeated_key + "\" appears twice");
   }
   if (!object.is_object()) {
     return std::unexpected("a job must be a JSON object");

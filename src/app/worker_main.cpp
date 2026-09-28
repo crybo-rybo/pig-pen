@@ -149,10 +149,10 @@ Values may also use --option=value. PIGPEN_API_KEY supplies an optional API key.
 Records go to stdout, diagnostics to stderr.
 
 Exit codes: 0 every episode valid, 1 a session could not be created (batch
-            aborted) or stdout failed, 2 invalid options, 6 at least one
-            episode invalid or job line rejected, 130 SIGINT, 143 SIGTERM.
-            Signals cancel in-flight episodes cooperatively and still write
-            their records.
+            aborted), stdout failed, or stdin could not be read, 2 invalid
+            options, 6 at least one episode invalid or job line rejected,
+            130 SIGINT, 143 SIGTERM. Signals cancel in-flight episodes
+            cooperatively and still write their records.
 )";
 }
 
@@ -291,6 +291,11 @@ public:
     return *std::exchange(ready_, std::nullopt);
   }
 
+  /// @brief Why stdin could not be read to its end, or empty.
+  [[nodiscard]] const std::string &input_error() const noexcept {
+    return input_error_;
+  }
+
 private:
   /// @brief Take stdin lines until one is a job, reporting each rejected
   /// line; never blocks.
@@ -301,6 +306,7 @@ private:
       case pigpen::cli::LineStatus::waiting:
         return pigpen::agent::JobStatus::pending;
       case pigpen::cli::LineStatus::closed:
+        input_error_ = reader_->error();
         return pigpen::agent::JobStatus::exhausted;
       case pigpen::cli::LineStatus::line:
         break;
@@ -338,6 +344,7 @@ private:
   RecordOutput *output_{};
   std::optional<pigpen::cli::LineReader> reader_{};
   std::optional<pigpen::cli::WorkerJob> ready_{};
+  std::string input_error_{};
 };
 
 /// @brief The `episode` record of a job whose drive just ended, while its
@@ -464,12 +471,20 @@ void report_episode(const pigpen::agent::Session &session,
 
   int exit_code = all_valid_exit;
   std::string status{"completed"};
+  auto error = result.error.value_or("");
   if (result.error) {
     std::cerr << "startup error: " << *result.error << '\n';
     exit_code = runtime_error_exit;
     status = "aborted";
   } else if (output.failed()) {
     exit_code = runtime_error_exit;
+  } else if (!feed->input_error().empty()) {
+    // Episodes already started finished normally; the rest of the stream is
+    // lost, so the batch did not complete.
+    error = "could not read standard input: " + feed->input_error();
+    std::cerr << "input error: " << error << '\n';
+    exit_code = runtime_error_exit;
+    status = "aborted";
   } else if (termination_signal != 0) {
     exit_code = signal_exit_base + termination_signal;
     status = "interrupted";
@@ -486,7 +501,7 @@ void report_episode(const pigpen::agent::Session &session,
       .job_errors = tally.job_errors,
       .duration = std::chrono::duration_cast<std::chrono::milliseconds>(
           result.duration),
-      .error = result.error.value_or(""),
+      .error = std::move(error),
       .exit_code = exit_code,
   };
   if (!output.write(pigpen::agent::to_json_line(record))) {

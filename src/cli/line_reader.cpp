@@ -4,7 +4,9 @@
 
 #include <algorithm>
 #include <array>
+#include <exception>
 #include <span>
+#include <system_error>
 #include <utility>
 
 #if defined(_WIN32)
@@ -45,6 +47,11 @@ LineReader::~LineReader() {
   }
 }
 
+std::string LineReader::error() const {
+  const std::lock_guard lock{state_->mutex};
+  return state_->error;
+}
+
 LineStatus LineReader::poll(InputLine &line) {
   bool taken = false;
   bool closed = false;
@@ -83,6 +90,7 @@ void LineReader::run(const ReadBytes &read, const std::size_t max_bytes,
   std::array<char, chunk_bytes> chunk{};
   InputLine line{.number = 1};
   bool started = false;
+  std::string error;
   try {
     while (true) {
       {
@@ -92,8 +100,7 @@ void LineReader::run(const ReadBytes &read, const std::size_t max_bytes,
         }
         state->reading = true;
       }
-      const auto count =
-          std::min(read(chunk.data(), chunk.size()), chunk.size());
+      const auto result = read(chunk.data(), chunk.size());
       {
         const std::lock_guard lock{state->mutex};
         state->reading = false;
@@ -101,6 +108,11 @@ void LineReader::run(const ReadBytes &read, const std::size_t max_bytes,
           return;
         }
       }
+      if (!result) {
+        error = result.error().empty() ? "read failed" : result.error();
+        break;
+      }
+      const auto count = std::min(*result, chunk.size());
       if (count == 0) {
         break;
       }
@@ -112,43 +124,50 @@ void LineReader::run(const ReadBytes &read, const std::size_t max_bytes,
             return;
           }
           started = false;
+        } else if (line.truncated) {
+          continue;
         } else if (line.text.size() < max_bytes) {
           line.text.push_back(character);
         } else {
           line.truncated = true;
+          line.text = std::string{};
         }
       }
     }
-    if (started && !queue(std::move(line))) {
-      return;
-    }
-  } catch (...) { // NOLINT(bugprone-empty-catch)
-    // A source that fails by throwing ends the input like any other error.
+  } catch (const std::exception &thrown) {
+    error = thrown.what();
+  } catch (...) {
+    error = "read failed";
+  }
+  // A partial last line still counts, whether the input ended or failed.
+  if (started && !queue(std::move(line))) {
+    return;
   }
   const std::lock_guard lock{state->mutex};
+  // Cleared here too: a source that threw left it set.
+  state->reading = false;
+  state->error = std::move(error);
   state->closed = true;
 }
 
 LineReader::ReadBytes standard_input_bytes() {
-#if defined(_WIN32)
-  return [](char *const data, const std::size_t size) -> std::size_t {
-    const auto count = _read(
-        0, data, static_cast<unsigned>(std::min<std::size_t>(size, INT_MAX)));
-    return count > 0 ? static_cast<std::size_t>(count) : 0;
-  };
-#else
-  return [](char *const data, const std::size_t size) -> std::size_t {
+  return [](char *const data,
+            const std::size_t size) -> std::expected<std::size_t, std::string> {
     while (true) {
+#if defined(_WIN32)
+      const auto count = _read(
+          0, data, static_cast<unsigned>(std::min<std::size_t>(size, INT_MAX)));
+#else
       const auto count = ::read(STDIN_FILENO, data, size);
+#endif
       if (count >= 0) {
         return static_cast<std::size_t>(count);
       }
       if (errno != EINTR) {
-        return 0;
+        return std::unexpected(std::system_category().message(errno));
       }
     }
   };
-#endif
 }
 
 } // namespace pigpen::cli
