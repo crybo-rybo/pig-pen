@@ -19,6 +19,8 @@ include(Catch)
 
 add_executable(
   pigpen_tests
+    tests/cli_options_tests.cpp
+    tests/episode_driver_tests.cpp
     tests/episode_runner_tests.cpp
     tests/episode_summary_tests.cpp
     tests/episode_turn_tests.cpp

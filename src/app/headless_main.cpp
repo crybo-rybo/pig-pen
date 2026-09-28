@@ -1,30 +1,31 @@
 /// @file headless_main.cpp
 /// @brief CLI entry point: run one bounded episode and exit.
 ///
-/// Everything here is argv parsing, SIGINT/SIGTERM handling, incremental
+/// Everything here is the usage text, the CLI's own options, incremental
 /// printing of the transcript and activity feed, and the exit-code policy
-/// from docs/running.md. Episode behavior itself lives in agent::Session.
+/// from docs/running.md. Shared flags and signal handling live in
+/// pigpen_cli, the deadline and cancellation grace in agent::EpisodeDriver,
+/// and episode behavior in agent::Session.
+#include "agent/episode_driver.hpp"
 #include "agent/episode_runner.hpp"
 #include "agent/episode_summary.hpp"
-#include "agent/reward.hpp"
 #include "agent/session.hpp"
+#include "agent/session_options.hpp"
+#include "cli/config_options.hpp"
+#include "cli/option_parser.hpp"
+#include "cli/termination_signal.hpp"
 
-#include <charconv>
 #include <chrono>
-#include <cmath>
-#include <csignal>
 #include <cstdint>
 #include <expected>
-#include <filesystem>
 #include <format>
 #include <iomanip>
 #include <iostream>
-#include <limits>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <thread>
-#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -38,52 +39,40 @@ constexpr int timeout_exit = 3;
 constexpr int metrics_error_exit = 4;
 constexpr int no_tools_exit = 5;
 constexpr int signal_exit_base = 128;
-constexpr auto cancellation_grace = 15s;
-
-/// Only a volatile sig_atomic_t store is async-signal-safe; the pump loop
-/// polls it and starts the cooperative cancellation itself.
-volatile std::sig_atomic_t requested_termination_signal = 0;
-
-extern "C" void request_termination(const int signal_number) noexcept {
-  requested_termination_signal = signal_number;
-}
 
 struct Options {
   pigpen::agent::Config config{};
-  pigpen::agent::RewardWeights reward_weights{};
-  std::filesystem::path log_directory{"logs"};
-  std::chrono::seconds timeout{300};
-  std::string prompt_variant{"default"};
+  pigpen::agent::SessionOptions session{.log_directory = "logs"};
+  std::uint32_t timeout_seconds{300};
   std::optional<std::string> user_input{};
   bool help{};
 };
 
+/// @brief The shared Config flags, then the four this CLI adds.
+[[nodiscard]] pigpen::cli::OptionParser option_parser(Options &options) {
+  pigpen::cli::OptionParser parser;
+  pigpen::cli::add_config_options(parser, options.config, options.session);
+  parser.text("--log-dir", "PATH", options.session.log_directory,
+              "JSONL output directory (default: logs)");
+  parser.integer("--timeout-seconds", "INTEGER", options.timeout_seconds, 1,
+                 86'400,
+                 std::format("Overall episode timeout, 1..86400 (default: {})",
+                             options.timeout_seconds));
+  parser.text("--input", "TEXT", options.user_input,
+              "Human guidance queued for the first turn");
+  parser.flag("--help", options.help, true, "Show this help and exit");
+  return parser;
+}
+
 void print_usage(std::ostream &output, const std::string_view program) {
+  Options defaults;
   output << "Usage: " << program << R"( --model NAME [options]
 
 Run a bounded pig-pen episode against an OpenAI-compatible model server.
 
 Options:
-  --base-url URL            Model endpoint (default: http://127.0.0.1:11434/v1)
-  --model NAME              Exact model identifier sent to the server (required)
-  --seed INTEGER            Deterministic world seed (default: 0)
-  --turns INTEGER           Episode turn budget, 1..10000 (default: 20)
-  --max-tool-rounds INTEGER Tool rounds per turn, 1..64 (default: 8)
-  --temperature NUMBER      Sampling temperature, 0.0..2.0 (default: 0.0)
-  --sampling-seed INTEGER   Provider sampling seed, 0..4294967295 (default: unset)
-  --log-dir PATH            JSONL output directory (default: logs)
-  --timeout-seconds INTEGER Overall episode timeout, 1..86400 (default: 300)
-  --hidden-values           Omit item values from the system prompt
-  --no-reward-feedback      Hide numeric reward and score from eat results
-  --opaque-look             Report occupied cells as 'something'
-  --prompt-variant NAME     Label recorded in the metrics header
-  --input TEXT              Human guidance queued for the first turn
-  --reward NAME=VALUE       Override one reward weight; repeatable. NAME is one
-                            of score, explored_cell, active_turn,
-                            zero_tool_turn, failed_action, invalid_call,
-                            budget_refused_call, objective, unused_turn
-  --help                    Show this help and exit
-
+)" << option_parser(defaults).help()
+         << R"(
 Values may also use --option=value. PIGPEN_API_KEY supplies an optional API key.
 
 Exit codes: 0 success, 1 runtime error, 2 invalid options, 3 timeout,
@@ -92,148 +81,22 @@ Exit codes: 0 success, 1 runtime error, 2 invalid options, 3 timeout,
 )";
 }
 
-/// @brief Parses `--option value` and `--option=value`; errors exit 2.
+/// @brief Parses the command line; errors exit 2.
 /// @note `--help` skips the required-value checks so it works on its own.
-[[nodiscard]] std::expected<Options, std::string> parse_options(const int argc,
-                                                                char **argv) {
-  using Result = std::expected<void, std::string>;
+[[nodiscard]] std::expected<Options, std::string>
+parse_options(const std::span<const std::string_view> arguments) {
   Options options;
-  auto &config = options.config;
-
-  for (int index = 1; index < argc; ++index) {
-    const std::string_view argument{argv[index]};
-    if (!argument.starts_with("--")) {
-      return std::unexpected("unexpected positional argument: " +
-                             std::string{argument});
-    }
-    const auto equals = argument.find('=');
-    const std::string name{argument.substr(0, equals)};
-    const auto inline_value = equals == std::string_view::npos
-                                  ? std::optional<std::string_view>{}
-                                  : argument.substr(equals + 1);
-
-    const auto value = [&]() -> std::expected<std::string_view, std::string> {
-      if (inline_value && !inline_value->empty()) {
-        return *inline_value;
-      }
-      if (!inline_value && index + 1 < argc &&
-          !std::string_view{argv[index + 1]}.starts_with("--")) {
-        return argv[++index];
-      }
-      return std::unexpected(name + " requires a value");
-    };
-    const auto flag = [&](bool &target, const bool setting) -> Result {
-      if (inline_value) {
-        return std::unexpected(name + " does not take a value");
-      }
-      target = setting;
-      return {};
-    };
-    const auto text = [&](auto &target) -> Result {
-      return value().transform(
-          [&](const std::string_view parsed) { target = std::string{parsed}; });
-    };
-    // from_chars rejects signs for unsigned targets, so "-1" cannot wrap.
-    const auto integer = [&](auto &target, const std::uint64_t minimum,
-                             const std::uint64_t maximum) -> Result {
-      const auto parsed = value();
-      if (!parsed) {
-        return std::unexpected(parsed.error());
-      }
-      std::uint64_t number{};
-      const auto *const end = parsed->data() + parsed->size();
-      if (const auto [last, error] =
-              std::from_chars(parsed->data(), end, number);
-          error != std::errc{} || last != end || number < minimum ||
-          number > maximum) {
-        return std::unexpected(name + " must be in the range " +
-                               std::to_string(minimum) + ".." +
-                               std::to_string(maximum));
-      }
-      target = static_cast<std::remove_cvref_t<decltype(target)>>(number);
-      return {};
-    };
-    const auto temperature = [&]() -> Result {
-      const auto parsed = value();
-      if (!parsed) {
-        return std::unexpected(parsed.error());
-      }
-      double number{};
-      const auto *const end = parsed->data() + parsed->size();
-      if (const auto [last, error] =
-              std::from_chars(parsed->data(), end, number);
-          error != std::errc{} || last != end || !std::isfinite(number) ||
-          number < 0.0 || number > 2.0) {
-        return std::unexpected(
-            "--temperature must be a finite number in the range 0.0..2.0");
-      }
-      config.temperature = number;
-      return {};
-    };
-
-    constexpr auto u32_max = std::numeric_limits<std::uint32_t>::max();
-    Result result;
-    if (name == "--help") {
-      result = flag(options.help, true);
-    } else if (name == "--hidden-values") {
-      result = flag(config.known_item_values, false);
-    } else if (name == "--no-reward-feedback") {
-      result = flag(config.reward_feedback, false);
-    } else if (name == "--opaque-look") {
-      result = flag(config.opaque_look, true);
-    } else if (name == "--base-url") {
-      result = text(config.base_url);
-    } else if (name == "--model") {
-      result = text(config.model);
-    } else if (name == "--log-dir") {
-      result = text(options.log_directory);
-    } else if (name == "--prompt-variant") {
-      result = text(options.prompt_variant);
-    } else if (name == "--input") {
-      result = text(options.user_input);
-    } else if (name == "--reward") {
-      result = value().and_then([&](const std::string_view assignment) {
-        return pigpen::agent::parse_reward_weight(assignment,
-                                                  options.reward_weights);
-      });
-    } else if (name == "--seed") {
-      result =
-          integer(config.seed, 0, std::numeric_limits<std::uint64_t>::max());
-    } else if (name == "--sampling-seed") {
-      result = integer(config.sampling_seed.emplace(), 0, u32_max);
-    } else if (name == "--turns") {
-      result = integer(config.turn_budget, 1, pigpen::agent::turn_budget_limit);
-    } else if (name == "--max-tool-rounds") {
-      result =
-          integer(config.max_tool_rounds, 1, pigpen::agent::tool_rounds_limit);
-    } else if (name == "--temperature") {
-      result = temperature();
-    } else if (name == "--timeout-seconds") {
-      std::uint32_t seconds{};
-      result = integer(seconds, 1, 86'400);
-      options.timeout = std::chrono::seconds{seconds};
-    } else {
-      result = std::unexpected("unknown option: " + name);
-    }
-    if (!result) {
-      return std::unexpected(std::move(result.error()));
-    }
+  auto parser = option_parser(options);
+  if (auto parsed = parser.parse(arguments); !parsed) {
+    return std::unexpected(std::move(parsed.error()));
   }
-
   if (options.help) {
     return options;
   }
-  if (config.base_url.empty()) {
-    return std::unexpected("--base-url cannot be empty");
-  }
-  if (config.model.empty()) {
-    return std::unexpected("--model is required");
-  }
-  if (options.log_directory.empty()) {
-    return std::unexpected("--log-dir cannot be empty");
-  }
-  if (options.prompt_variant.empty()) {
-    return std::unexpected("--prompt-variant cannot be empty");
+  if (auto valid =
+          pigpen::cli::validate_config_options(options.config, options.session);
+      !valid) {
+    return std::unexpected(std::move(valid.error()));
   }
   return options;
 }
@@ -309,10 +172,12 @@ void print_updates(const pigpen::agent::Session &session,
 
 /// @brief Pumps one session to completion and maps the outcome to an exit
 /// code.
-[[nodiscard]] int run(const Options &options) {
-  auto created = pigpen::agent::Session::create(
-      options.config, options.log_directory, options.prompt_variant,
-      options.reward_weights);
+[[nodiscard]] int run(const Options &options,
+                      const pigpen::cli::TerminationSignal &termination) {
+  auto session_options = options.session;
+  session_options.api_key = pigpen::cli::api_key_from_environment();
+  auto created = pigpen::agent::Session::create(options.config,
+                                                std::move(session_options));
   if (!created) {
     std::cerr << "startup error: " << created.error() << '\n';
     return runtime_error_exit;
@@ -333,8 +198,9 @@ void print_updates(const pigpen::agent::Session &session,
   } else {
     std::cout << "unset";
   }
-  std::cout << "\nlog_path=" << std::quoted(session->metrics_path().string())
-            << std::endl;
+  // This CLI always logs; the path is empty only if that ever changes.
+  const auto log_path = session->metrics_path().value_or("").string();
+  std::cout << "\nlog_path=" << std::quoted(log_path) << std::endl;
 
   if (options.user_input) {
     static_cast<void>(session->queue_user_input(*options.user_input));
@@ -344,48 +210,41 @@ void print_updates(const pigpen::agent::Session &session,
     return runtime_error_exit;
   }
 
-  // Cancellation is cooperative: after stop() we keep pumping until scry
-  // delivers the terminal callback, so the JSONL footer is still written. A
-  // signal waits for that indefinitely; a timeout allows a finite grace period
-  // so the command stays scriptable.
+  // Cancellation is cooperative: after stop() the driver keeps pumping until
+  // scry delivers the terminal callback, so the JSONL footer is still
+  // written. A signal waits for that indefinitely; a timeout allows a finite
+  // grace period so the command stays scriptable.
   OutputCursor cursor;
-  auto deadline = std::chrono::steady_clock::now() + options.timeout;
-  bool timed_out = false;
+  const std::chrono::seconds timeout{options.timeout_seconds};
+  pigpen::agent::EpisodeDriver driver{
+      *session,
+      timeout,
+      {
+          .on_pumped = [&] { print_updates(*session, cursor); },
+          .on_timeout =
+              [&] {
+                std::cerr << "timeout after " << timeout.count()
+                          << " seconds; cancelling active turn\n";
+              },
+      },
+  };
   int termination_signal = 0;
-  for (;;) {
-    if (termination_signal == 0 && requested_termination_signal != 0) {
-      termination_signal = requested_termination_signal;
+  const auto stop_requested = [&] {
+    if (termination_signal == 0 &&
+        (termination_signal = termination.received()) != 0) {
       std::cerr << "received signal " << termination_signal
                 << "; cancelling active turn and finalizing metrics\n";
-      static_cast<void>(session->stop());
     }
-
-    const auto pump = session->pump();
-    print_updates(*session, cursor);
-    if (session->runner().snapshot().state ==
-        pigpen::agent::RunState::finished) {
-      break;
-    }
-
-    if (const auto now = std::chrono::steady_clock::now(); now >= deadline) {
-      if (timed_out) {
-        if (termination_signal == 0) {
-          std::cerr << "timeout: cancellation did not finish within 15 "
-                       "seconds\n";
-          break;
-        }
-      } else {
-        timed_out = true;
-        deadline = now + cancellation_grace;
-        std::cerr << "timeout after " << options.timeout.count()
-                  << " seconds; cancelling active turn\n";
-        static_cast<void>(session->stop());
-      }
-    }
-
-    if (pump.callbacks_delivered == 0 && pump.events_remaining == 0) {
+    return termination_signal != 0;
+  };
+  while (!driver.step(std::chrono::steady_clock::now(), stop_requested())) {
+    if (driver.idle()) {
       std::this_thread::sleep_for(1ms);
     }
+  }
+  if (driver.outcome() == pigpen::agent::DriveOutcome::cancellation_stalled) {
+    std::cerr << "timeout: cancellation did not finish within "
+              << pigpen::agent::cancellation_grace.count() << " seconds\n";
   }
 
   const auto snapshot = session->runner().snapshot();
@@ -404,8 +263,7 @@ void print_updates(const pigpen::agent::Session &session,
             << (reward.valid ? std::format("{:.10g}", reward.total)
                              : std::string{"invalid"})
             << '\n'
-            << "log_path=" << std::quoted(session->metrics_path().string())
-            << std::endl;
+            << "log_path=" << std::quoted(log_path) << std::endl;
 
   if (!session->metrics_error().empty()) {
     std::cerr << "metrics error: " << session->metrics_error() << '\n';
@@ -414,7 +272,7 @@ void print_updates(const pigpen::agent::Session &session,
   if (termination_signal != 0) {
     return signal_exit_base + termination_signal;
   }
-  if (timed_out) {
+  if (driver.timed_out()) {
     return timeout_exit;
   }
   // Only the timeout path can leave the loop unfinished, so the reason is set.
@@ -437,13 +295,17 @@ void print_updates(const pigpen::agent::Session &session,
 } // namespace
 
 int main(const int argc, char **argv) {
-  if (std::signal(SIGINT, request_termination) == SIG_ERR ||
-      std::signal(SIGTERM, request_termination) == SIG_ERR) {
-    std::cerr << "runtime error: could not install SIGINT/SIGTERM handlers\n";
+  // Deliberately never destroyed: restoring the default handlers after main
+  // returns would let a late signal replace the exit code already computed.
+  auto &termination = *new pigpen::cli::TerminationSignal{};
+  if (auto installed = termination.install(); !installed) {
+    std::cerr << "runtime error: " << installed.error() << '\n';
     return runtime_error_exit;
   }
   const std::string_view program = argc > 0 ? argv[0] : "pig-pen-headless";
-  const auto options = parse_options(argc, argv);
+  const std::vector<std::string_view> arguments(argv + (argc > 0 ? 1 : 0),
+                                                argv + argc);
+  const auto options = parse_options(arguments);
   if (!options) {
     std::cerr << "option error: " << options.error() << "\n\n";
     print_usage(std::cerr, program);
@@ -453,5 +315,5 @@ int main(const int argc, char **argv) {
     print_usage(std::cout, program);
     return 0;
   }
-  return run(*options);
+  return run(*options, termination);
 }

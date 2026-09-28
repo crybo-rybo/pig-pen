@@ -58,8 +58,8 @@ function or TU scope.
 
 ## Architecture
 
-See `docs/architecture.md` for the layers (`src/world`, `src/agent`, `src/ui`,
-`src/app`). `Session` is the reset unit: there is no partial reset.
+See `docs/architecture.md` for the layers (`src/world`, `src/agent`, `src/cli`,
+`src/ui`, `src/app`). `Session` is the reset unit: there is no partial reset.
 
 Key invariants to preserve:
 
@@ -72,14 +72,27 @@ Key invariants to preserve:
   carries `-freflection` publicly, so every `pigpen_agent` TU (and
   `pigpen_reflection_tests`, which links scry directly) compiles with it;
   `pigpen_agent` links scry privately, which keeps the requirement out of
-  `pigpen_world`, `pigpen_ui`, and the front-end TUs — keep it that way.
+  `pigpen_world`, `pigpen_cli`, `pigpen_ui`, and the front-end TUs — keep it
+  that way (headers they include, such as `config.hpp`, `reward.hpp`, and
+  `session_options.hpp`, must not include scry).
 - **Application callbacks run on the pump thread.** Scry owns its I/O worker. Both front ends drive
-  `Session::pump()` from their own loop (GUI per frame, CLI in a sleep-1ms
-  loop). Cancellation is cooperative: an episode isn't finished until the
-  terminal callback arrives, which is what guarantees the JSONL footer is
-  written even on SIGINT/timeout.
-- **Two test seams**: `ITurnTransport` lets `EpisodeRunner` be driven by a
-  scripted transport; `WorldTools` accepts/returns only reflected C++ values.
+  `Session::pump()` from their own loop (GUI per frame; CLI via
+  `EpisodeDriver::step()` in a sleep-1ms-when-idle loop). Cancellation is
+  cooperative: an episode isn't finished until the terminal callback
+  arrives, which is what guarantees the JSONL footer is written even on
+  SIGINT/timeout. `EpisodeDriver` is the only copy of the deadline and 15 s
+  cancellation-grace policy; it takes time as a parameter and never sleeps.
+- **`Config` is the episode, `SessionOptions` is the host.** `Config` holds
+  what changes what the model sees or what the log header records;
+  `SessionOptions` holds the optional log directory (none means no JSONL at
+  all), prompt variant, API key, rollout id (sent as `X-Pigpen-Rollout`),
+  extra request headers, and reward weights. There is no mode enum in
+  `agent/`; `Session` never reads the environment (front ends pass
+  `PIGPEN_API_KEY`). Shared CLI flags are registered once in
+  `cli::add_config_options()`.
+- **Three test seams**: `ITurnTransport` lets `EpisodeRunner` be driven by a
+  scripted transport; `WorldTools` accepts/returns only reflected C++ values;
+  `IDrivableEpisode` lets `EpisodeDriver` be driven by a fake episode.
   New agent-layer code should stay testable through one of these.
 - The standalone tool registry captures stable world bindings that outlive the
   harness. Transport destruction cancels and disconnects delivery.

@@ -4,6 +4,7 @@
 #pragma once
 
 #include "agent/config.hpp"
+#include "agent/session_options.hpp"
 #include "agent/turn_transport.hpp"
 
 #include <scry/scry.hpp>
@@ -13,9 +14,11 @@
 namespace pigpen::agent {
 
 /// Pig Pen's provider and turn policies, shared with scripted integration
-/// tests.
+/// tests. The credential and request headers come from @p options: its
+/// request_headers in order, then rollout_header_name when rollout_id is
+/// set. Scry validates the headers when the harness is created.
 [[nodiscard]] scry::Config scry_config(const Config &config,
-                                       std::string api_key = {});
+                                       const SessionOptions &options = {});
 
 struct ScryToolObservers {
   std::function<std::optional<scry::ToolRejection>(const scry::ToolRequest &)>

@@ -48,6 +48,7 @@ pigpen_target(pigpen_world)
 # Every TU here compiles with -freflection (carried by scry::scry). Scry stays
 # PRIVATE so pigpen_world, pigpen_ui, and the front ends remain reflection-free.
 add_library(pigpen_agent STATIC
+  src/agent/episode_driver.cpp
   src/agent/episode_runner.cpp
   src/agent/episode_summary.cpp
   src/agent/episode_turn.cpp
@@ -67,15 +68,27 @@ target_link_libraries(
 )
 pigpen_target(pigpen_agent)
 
+# Command-line plumbing shared by every front end: the option parser, the
+# shared Config flags, and signal handling. It uses only scry-free agent
+# headers; pigpen_agent's scry link is link-only, so no -freflection here.
+add_library(
+  pigpen_cli STATIC
+    src/cli/config_options.cpp
+    src/cli/option_parser.cpp
+    src/cli/termination_signal.cpp
+)
+target_link_libraries(pigpen_cli PUBLIC pigpen_agent)
+pigpen_target(pigpen_cli)
+
 # ImGui-free UI logic shared by the GUI and the tests.
 if(PIGPEN_BUILD_GUI OR PIGPEN_BUILD_TESTS)
   add_library(pigpen_ui STATIC src/ui/gui_options.cpp src/ui/world_animation.cpp)
-  target_link_libraries(pigpen_ui PUBLIC pigpen_agent)
+  target_link_libraries(pigpen_ui PUBLIC pigpen_agent pigpen_cli)
   pigpen_target(pigpen_ui)
 endif()
 
 add_executable(pig-pen-headless src/app/headless_main.cpp)
-target_link_libraries(pig-pen-headless PRIVATE pigpen_agent)
+target_link_libraries(pig-pen-headless PRIVATE pigpen_agent pigpen_cli)
 pigpen_target(pig-pen-headless)
 
 if(PIGPEN_BUILD_GUI)

@@ -1,22 +1,28 @@
 # Architecture
 
-Pig Pen is a C++26 application in three layers plus two thin entry points. The
+Pig Pen is a C++26 application in four layers plus two thin entry points. The
 point of the layering is that everything except the final transport integration
 is testable without a window or a model server.
 
 ```
-src/app/main.cpp              src/app/headless_main.cpp
-        │  SDL3 + ImGui loop          │  argv parsing, signals, stdout
-        ▼                             ▼
-   src/ui/  ─────────────►  agent::Session  ◄─────────────
-   AppUi, WorldAnimation          │
+src/app/main.cpp                      src/app/headless_main.cpp
+  SDL3 + ImGui frame loop               usage, stdout, exit codes
+        │                                     │
+   src/ui/  AppUi, WorldAnimation        src/cli/  OptionParser, shared Config
+        │   (GUI options via src/cli)             flags, TerminationSignal
+        │                                     │
+        │                             agent::EpisodeDriver
+        │                               deadline, cancellation grace
+        ▼                                     ▼
+   agent::Session  (Config: the episode, SessionOptions: the host)
+                                  │
                                   ├── EpisodeRunner   turn loop, play/pause/stop
                                   ├── ScryTurnTransport ──► scry::Harness ──► HTTP
                                   ├── WorldTools      typed actions and visibility
                                   ├── WorldToolBinding reflected scry::ToolRegistry
                                   ├── ToolActivity    typed semantics + exact payloads
                                   ├── summarize_episode() → EpisodeSummary + reward
-                                  ├── MetricsWriter   JSONL
+                                  ├── MetricsWriter   JSONL, only with a log directory
                                   └── world::World    the simulation
 ```
 
@@ -32,27 +38,31 @@ serialisation used for determinism tests. Details in [World and tools](world.md)
 
 | unit | responsibility |
 |---|---|
-| `config.hpp` | `Config`: endpoint, model, seed, budgets, and the three model-visibility flags shared by both front ends |
+| `config.hpp` | `Config`, the episode contract: endpoint, model, seed, budgets, sampling, and the three model-visibility flags; everything that changes what the model sees or that the log header records |
+| `session_options.hpp` | `SessionOptions`, host plumbing: the optional log directory, `prompt_variant` label, API key, rollout id, extra request headers, and reward weights. A front end's mode is expressed only through these and through which loop it owns; there is no mode enum in `agent/` |
 | `prompt.cpp` | builds the system prompt from `Config` and per-turn instructions from feedback and optional human guidance |
 | `tool_contract.hpp` | reflected argument and flat response declarations, including world outcome fields; these C++ types are the model-facing contract |
 | `world_tools.cpp` | typed world actions and scenario visibility; it contains no JSON parsing, budgets, or schema code |
 | `world_tool_binding.cpp` | standalone reflected registry, world-action admission policy (counting its own refusals per turn), and correlation of typed transitions with Scry dispatch observations |
 | `events.hpp` | `ToolActivity` and its append-only feed: typed application semantics plus exact canonical argument/result text from Scry |
 | `turn_transport.hpp` | `ITurnTransport`, the interface a "send one turn, get callbacks" implementation must satisfy |
-| `scry_transport.cpp` | the real implementation, over `scry::Harness` / `scry::Conversation` |
+| `scry_transport.cpp` | the real implementation, over `scry::Harness` / `scry::Conversation`; `scry_config()` maps a `Config` and `SessionOptions` (credential, request headers, `X-Pigpen-Rollout`) to scry's provider configuration |
 | `episode_runner.cpp` | the state machine: `idle → playing ⇄ paused → finished`, turn budget, cooperative cancellation, transcript, and observers for turn/episode completion |
 | `episode_turn.cpp` | `EpisodeTurn` (a `TurnRecord` plus its optional `TurnCallTally`) and the pure `tally_turn_calls()` that splits Scry's call count into executed, invalid, budget-refused, and host-refused |
 | `reward.cpp` | `RewardWeights`, `EpisodeFacts`, and the pure `compute_reward()` returning a `RewardBreakdown` (validity, raw counts, per-term contributions); `parse_reward_weight()` for `NAME=VALUE` overrides. No scry, JSON, or `Session` |
 | `episode_summary.cpp` | `episode_facts()` and `summarize_episode()`: an episode's outcome (finish reason, turns, score, items eaten, tool counts, summed call tally, duration, reward) from a world, activity feed, turns, and runner snapshot, or from a `Session` |
 | `summary_json.cpp` | `to_json_line()`, the only serialisation of a summary, its reward, and its weights |
 | `metrics_writer.cpp` | JSONL header/tool/turn/footer; a finished episode's footer is its serialised summary, and a footer is guaranteed even on abnormal shutdown |
-| `session.cpp` | composes all of the above into one owned object |
+| `episode_driver.cpp` | `IDrivableEpisode` (`pump`, `finished`, `stop`) and `EpisodeDriver`, the one copy of the drive-to-completion policy: overall deadline, cooperative cancellation, the 15 s grace, and a stop request that waits without limit. Time is a parameter, so it is tested with a fake episode |
+| `session.cpp` | composes all of the above into one owned object, and implements `IDrivableEpisode` |
 
-Two seams make this testable. `ITurnTransport` lets `EpisodeRunner` be driven
+Three seams make this testable. `ITurnTransport` lets `EpisodeRunner` be driven
 by a scripted transport in `tests/episode_runner_tests.cpp`, so the whole turn
 loop — including stop-cancels-in-flight-turn — is covered without a model.
 `WorldTools` accepts and returns only reflected C++ values, so world behavior,
 fixed response shapes, and scenario visibility are tested without JSON or a registry.
+`IDrivableEpisode` lets `EpisodeDriver`'s deadline and cancellation policy be
+tested with a fake episode and hand-driven time.
 The public `scry::testing` component exercises the real bindings, transport, tool
 budgets, and transactional history with scripted provider streams.
 
@@ -94,7 +104,12 @@ are absent.
 ### `Session` is the reset unit
 
 A `Session` owns the world, the conversation, the scry harness with its
-registered tools, the runner, and the metrics writer. There is no partial
+registered tools, the runner, and the metrics writer. It is created from a
+`Config` (the episode) and `SessionOptions` (the host's choices). Without
+`SessionOptions::log_directory` no `MetricsWriter` exists at all:
+`metrics_path()` is empty, `metrics_error()` stays empty, and every fact
+below is still recorded. The session never reads the environment; the front
+ends pass `PIGPEN_API_KEY` in as `SessionOptions::api_key`. There is no partial
 reset: to start over, you destroy the session and create a new one, which is
 exactly what the GUI's **Reset** button does. That is why connection and
 scenario edits show "Pending settings apply on Reset" instead of mutating a
@@ -114,20 +129,32 @@ The session owns the bindings and world at stable addresses. They outlive the
 harness that adopts their registry. Destruction flushes pending world activity
 while the runner and log are alive, then cancels and disconnects the transport.
 Clients inspect the runner through a const view and control it through `Session`.
-Scry validates provider configuration before a log is opened; Pig Pen adds only
-its episode-budget and tool-round upper bounds.
+Scry validates provider configuration, including request headers that collide
+with its own, before a log is opened; Pig Pen adds only its episode-budget and
+tool-round upper bounds and reserves `X-Pigpen-Rollout`, which it sets itself
+from `SessionOptions::rollout_id` (and records as the log header's
+`rollout_id`).
 
 ### Everything is pumped, nothing blocks
 
 `Session::pump()` gives the scry harness a 2 ms time budget and at most 32
 callbacks, then ticks the runner. Both front ends call it from their own loop —
-the GUI once per frame, the CLI in a tight loop that sleeps 1 ms when there is
-nothing to do. Scry owns its I/O worker; application callbacks and tools run
-only on the pump thread, with no blocking waits in either front end.
+the GUI once per frame, the CLI through `EpisodeDriver::step()` in a loop that
+sleeps 1 ms when the last pump had nothing to do. Scry owns its I/O worker;
+application callbacks and tools run only on the pump thread, with no blocking
+waits in either front end.
 
 Cancellation is cooperative for the same reason: `stop()` asks the transport to
 cancel and the episode is not finished until the terminal callback comes back,
-which is what lets the footer be written before exit.
+which is what lets the footer be written before exit. `EpisodeDriver` owns
+that policy for a loop that must end: each `step(now, stop_requested)` honours
+a new stop request, pumps, reports a finished episode, then checks the
+deadline (measured from the first step). A passed deadline requests `stop()`
+once and allows 15 s more; if cancellation outlasts that, the drive ends
+`cancellation_stalled` with the episode unfinished. A stop request (a signal)
+calls `stop()` and then waits without limit. The outcomes are `finished`,
+`timed_out`, `cancellation_stalled`, and `interrupted`; the driver never
+sleeps or reads a clock, so one thread can drive several episodes.
 
 ## `src/ui` — the ImGui layer
 
@@ -139,24 +166,39 @@ parameter. That keeps it free of any ImGui or wall-clock dependency, which is
 why `tests/world_animation_tests.cpp` can test animation without a window —
 `pigpen_ui` compiles it once and is shared by the GUI and the test binary.
 
+## `src/cli` — shared command-line plumbing
+
+`pigpen_cli` holds what every command line needs and nothing that needs scry
+or JSON. `OptionParser` is table-driven: `flag`, `text`, `integer`, `real`, and
+free-form `value` registrations bind an option to the variable it fills, accept
+`--option value` and `--option=value`, report every problem in one fixed
+wording, and generate the help text. `add_config_options()` registers every
+`Config` flag plus `--prompt-variant` and `--reward` (whose help lists
+`reward_weight_fields`), and `validate_config_options()` rejects the values a
+parse can leave empty. `TerminationSignal` installs the `SIGINT`/`SIGTERM`
+handlers, which only write a `volatile sig_atomic_t` for the loop to poll.
+
 ## `src/app` — the entry points
 
 `main.cpp` is SDL3/OpenGL/ImGui setup and the frame loop, nothing else.
-`headless_main.cpp` is argument parsing, `SIGINT`/`SIGTERM` handling (the
-handler only writes a `volatile sig_atomic_t`), incremental printing of the
-transcript and activity feed, and the exit-code policy described in
-[Running](running.md#exit-codes).
+`headless_main.cpp` is the usage text, its four own options (`--log-dir`,
+`--timeout-seconds`, `--input`, `--help`), incremental printing of the
+transcript and activity feed, a `while (!driver.step(...))` loop, and the
+exit-code policy described in [Running](running.md#exit-codes). Both read
+`PIGPEN_API_KEY` and pass it to the session.
 
 ## Build layout
 
 `CMakeLists.txt` describes Pig Pen's own targets; `cmake/dependencies.cmake`
 pins and fetches the runtime dependencies and `cmake/testing.cmake` adds Catch2
-and the suite. The static libraries are `pigpen_world`, `pigpen_agent`, and,
-when the GUI or tests are enabled, `pigpen_ui`. `pigpen_agent` links
+and the suite. The static libraries are `pigpen_world`, `pigpen_agent`,
+`pigpen_cli`, and, when the GUI or tests are enabled, `pigpen_ui` (which uses
+`pigpen_cli` for the GUI's options). `pigpen_agent` links
 `scry::scry` privately: scry carries `-freflection`, so every `pigpen_agent`
 translation unit (and `pigpen_reflection_tests`, which links scry directly)
-compiles with it, while `pigpen_world`, `pigpen_ui`, and both entry points stay
-reflection-free. nlohmann/json is likewise private to `pigpen_agent`, used
+compiles with it, while `pigpen_world`, `pigpen_cli`, `pigpen_ui`, and both
+entry points stay reflection-free: they include only scry-free agent headers,
+and a private link dependency of a static library is link-only. nlohmann/json is likewise private to `pigpen_agent`, used
 only by the metrics writer and `summary_json.cpp`. The `pigpen_target()` helper applies C++26 and the warning flags to
 pig-pen's own targets only; fetched dependencies are `SYSTEM`. See
 [Building](building.md).

@@ -133,7 +133,9 @@ episode immediately with finish reason `error` and exit 4.
 
 `--model NAME` populates **Model (required)** under **Controls** and starts the
 episode automatically. `--base-url URL` similarly overrides the initial
-endpoint. Both accept `--option=value` syntax. If `--model` is omitted, the
+endpoint. `--reward NAME=VALUE` overrides a reward weight exactly as it does
+for the CLI; the weights apply to every session the window creates, including
+after **Reset**. All accept `--option=value` syntax. If `--model` is omitted, the
 window opens without an episode and waits for manual model selection. Panels
 are dockable; the layout is remembered in `imgui.ini` next to the working
 directory.

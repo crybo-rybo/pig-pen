@@ -1,6 +1,6 @@
 # Logs
 
-Every session — CLI or GUI — writes one JSONL file:
+Every session the CLI or GUI creates writes one JSONL file:
 
 ```
 logs/<timestamp>-<model>-<seed>.jsonl
@@ -10,7 +10,9 @@ for example `logs/20260807-064512-538-acme_pig-model_Q4_K_M-42.jsonl`. The times
 local time down to the millisecond, and characters that are awkward in
 filenames are replaced with `_`. If the name somehow collides, a `-1`, `-2`, …
 suffix is appended; an existing log is never overwritten. Use `--log-dir` to
-write somewhere other than `logs/`.
+write somewhere other than `logs/`. (A session created without a log
+directory, which neither front end does, writes no file; its summary and
+reward are still available in memory.)
 
 A file always has exactly one `header` line first and one `footer` line last,
 with `tool` and `turn` records in between, in the order they happened. Object
@@ -23,7 +25,7 @@ Written when the session is created, before the model is contacted.
 
 ```json
 {"type":"header","model":"acme/pig-model:Q4_K_M","base_url":"http://127.0.0.1:11434/v1",
- "temperature":0.2,"max_output_tokens":8192,"seed":42,"sampling_seed":null,"started_at":"2026-08-07T06:45:12-0400","prompt_variant":"default",
+ "temperature":0.2,"max_output_tokens":8192,"seed":42,"sampling_seed":null,"started_at":"2026-08-07T06:45:12-0400","prompt_variant":"default","rollout_id":null,
  "scenario":{"grid":{"width":10,"height":10},"spawn":{"x":5,"y":5},
    "items":{"berry":6,"apple":3,"truffle":1,"toadstool":3},
    "turn_budget":2,"max_tool_rounds":8,"max_world_tool_calls_per_turn":4,
@@ -31,7 +33,10 @@ Written when the session is created, before the model is contacted.
 ```
 
 `prompt_variant` is whatever you passed to `--prompt-variant`, or the GUI
-preset name. `temperature` records model sampling separately from the
+preset name. `rollout_id` is the session's rollout identifier, which is also
+sent to the model server as the `X-Pigpen-Rollout` request header, or `null`
+when the session has none (the CLI and GUI never set one), so the key is
+always present. `temperature` records model sampling separately from the
 deterministic world `seed`. `sampling_seed` is the provider sampling seed from
 `--sampling-seed` or the GUI, or `null` when none was sent. `max_output_tokens` records the per-request
 limit Pig Pen asks the provider to apply. `max_world_tool_calls_per_turn`
