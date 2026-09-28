@@ -32,13 +32,14 @@ covering:
 
 | file | covers |
 |---|---|
-| `tests/world_tests.cpp` | grid constants, seeded placement, movement and wall failures, `look` rays, eating and scoring, positive-item exhaustion, and seed determinism via `World::dump()` |
+| `tests/world_tests.cpp` | grid constants, seeded placement, movement and wall failures, `look` rays, the observed-cell count, eating and scoring, positive-item exhaustion, and seed determinism via `World::dump()` |
 | `tests/world_tools_tests.cpp` | compile-time reflected schemas, flat typed responses, Scry's public encoder, and the `opaque_look` / `reward_feedback` toggles |
-| `tests/scry_transport_tests.cpp` | standalone registry manifests, native call budgets across batches and turns, model-visible decode errors, exact dispatch payloads and identity, side effects on dispatch failure and shutdown, objective/logging admission, round-limit history preservation, cancellation, and transport lifetime using `scry::testing` |
+| `tests/scry_transport_tests.cpp` | standalone registry manifests, native call budgets across batches and turns, model-visible decode errors, exact dispatch payloads and identity, side effects on dispatch failure and shutdown, objective/logging admission, per-turn call tallies for batches mixing executed, invalid, over-budget, and post-objective requests, round-limit history preservation, cancellation, and transport lifetime using `scry::testing` |
 | `tests/prompt_tests.cpp` | config defaults and that each prompt flag says what it claims — including hidden rewards and keeping automatic recovery instructions separate from human guidance |
+| `tests/episode_turn_tests.cpp` | the call tally arithmetic on plain records, its absence without Scry statistics, and its refusal to fabricate a tally from inconsistent counts |
 | `tests/episode_runner_tests.cpp` | the turn loop against a scripted transport: budget exhaustion, pause/resume, stop cancelling an in-flight turn, objective completion, terminal/logging errors, and queued human input |
-| `tests/metrics_writer_tests.cpp` | header/tool/turn/footer reconciliation, the incomplete footer on destruction, and footer finality |
-| `tests/session_tests.cpp` | config rejection and that a session owns a seeded world plus a registered tool harness atomically |
+| `tests/metrics_writer_tests.cpp` | header/tool/turn/footer reconciliation, the turn `calls` tally as an object or `null`, the incomplete footer on destruction, and footer finality |
+| `tests/session_tests.cpp` | config rejection and that a session owns a seeded world plus a registered tool harness atomically, starting with no retained turns |
 | `tests/world_animation_tests.cpp` | the typed activity feed becoming an ordered visual timeline, with caller-supplied time |
 | `tests/gui_options_tests.cpp` | GUI startup parsing for model and endpoint arguments, including both value syntaxes and invalid input |
 
@@ -47,8 +48,9 @@ covering:
 - `pigpen_headless_integration` — `tests/headless_integration_tests.py` runs
   the CLI against a loopback OpenAI-compatible stub through the real Scry/Curl
   path: argv wiring (including `--sampling-seed`), the tool result posted back
-  to the provider, stdout, the JSONL log on disk, and exit codes `0` (a valid
-  `move`) and `5` (only a schema-invalid call)
+  to the provider, stdout, the JSONL log on disk (including each turn's call
+  tally), and exit codes `0` (a valid `move`) and `5` (only a schema-invalid
+  call)
 - `pigpen_headless_help` — `--help` exits 0
 - `pigpen_headless_requires_model`, `pigpen_headless_rejects_invalid_bounds`
   (`--max-tool-rounds 65`), `pigpen_headless_rejects_invalid_temperature`

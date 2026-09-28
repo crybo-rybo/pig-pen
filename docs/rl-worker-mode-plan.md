@@ -1,6 +1,6 @@
 # Plan: RL worker mode
 
-Status: proposal. Nothing in this document is implemented yet.
+Status: phase 0 (episode facts) is implemented; later phases are proposals.
 
 Pig Pen today runs one episode at a time under a front end that owns the pump
 loop (the GUI once per frame, `pig-pen-headless` in a sleep-1 ms loop) and
@@ -267,8 +267,9 @@ needs. No new behaviour visible to users except two additive log fields.
   budget_refused, host_refused}` (or `null`).
 - Tests: `world_tests` (observed count), `scry_transport_tests` (tally for a
   batch mixing valid, invalid, over-budget, and post-objective calls; the
-  existing "bounds requested calls" fixture already produces all four),
-  `metrics_writer_tests` (new field), `docs/logs.md`.
+  existing "bounds requested calls" fixture covers the first three, the
+  objective fixture the fourth), `metrics_writer_tests` (new field),
+  `docs/logs.md`.
 
 ### Phase 1: reward and summary
 
