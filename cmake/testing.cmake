@@ -1,5 +1,5 @@
 # Two Catch2 binaries (the reflection one links scry directly), CLI checks
-# against the headless binary, and Python loopback tests. No model server or
+# against the headless and worker binaries, and Python loopback tests. No model server or
 # network needed.
 
 include(CTest)
@@ -20,6 +20,7 @@ include(Catch)
 add_executable(
   pigpen_tests
     tests/cli_options_tests.cpp
+    tests/episode_batch_tests.cpp
     tests/episode_driver_tests.cpp
     tests/episode_runner_tests.cpp
     tests/episode_summary_tests.cpp
@@ -30,6 +31,7 @@ add_executable(
     tests/reward_tests.cpp
     tests/session_tests.cpp
     tests/world_animation_tests.cpp
+    tests/worker_jobs_tests.cpp
     tests/world_tests.cpp
 )
 target_link_libraries(
@@ -102,6 +104,83 @@ add_test(
     "$<TARGET_FILE:pig-pen-headless>"
 )
 set_tests_properties(pigpen_headless_integration PROPERTIES TIMEOUT 45)
+
+add_test(NAME pigpen_worker_help COMMAND pig-pen-worker --help)
+
+# Pass only when the worker binary prints the expected diagnostic.
+function(pigpen_worker_rejects name diagnostic)
+  add_test(NAME pigpen_worker_${name} COMMAND pig-pen-worker ${ARGN})
+  set_tests_properties(
+    pigpen_worker_${name}
+    PROPERTIES PASS_REGULAR_EXPRESSION "${diagnostic}"
+  )
+endfunction()
+pigpen_worker_rejects(requires_model "--model is required" --seeds 1)
+pigpen_worker_rejects(requires_seeds "--seeds is required" --model m)
+pigpen_worker_rejects(
+  rejects_world_seed_flag
+  "--seed is not accepted by the worker"
+  --model m --seeds 1 --seed 2
+)
+pigpen_worker_rejects(
+  rejects_malformed_seeds
+  "--seeds entry \"1x\" is not a seed or an A-B range"
+  --model m --seeds 1x
+)
+pigpen_worker_rejects(
+  rejects_descending_seed_range
+  "--seeds range \"9-3\" must not descend"
+  --model m --seeds 9-3
+)
+pigpen_worker_rejects(
+  rejects_duplicate_seed
+  "--seeds lists seed 4 more than once"
+  --model m --seeds 3-5 --seeds 4
+)
+pigpen_worker_rejects(
+  rejects_zero_samples
+  "--samples must be in the range 1..10000"
+  --model m --seeds 1 --samples 0
+)
+pigpen_worker_rejects(
+  rejects_zero_parallel
+  "--parallel must be in the range 1..256"
+  --model m --seeds 1 --parallel 0
+)
+pigpen_worker_rejects(
+  rejects_sampling_seed_overflow
+  "--sampling-seed-base 4294967295 leaves no room for 2 samples"
+  --model m --seeds 1 --samples 2 --sampling-seed-base 4294967295
+)
+pigpen_worker_rejects(
+  rejects_two_sampling_seeds
+  "--sampling-seed and --sampling-seed-base cannot both be given"
+  --model m --seeds 1 --sampling-seed 1 --sampling-seed-base 2
+)
+pigpen_worker_rejects(
+  rejects_bad_rollout_prefix
+  "--rollout-prefix must be visible ASCII without spaces"
+  --model m --seeds 1 "--rollout-prefix=run 42"
+)
+pigpen_worker_rejects(
+  rejects_reserved_header
+  "--header X-Pigpen-Seed is set by the worker itself"
+  --model m --seeds 1 --header X-Pigpen-Seed=1
+)
+pigpen_worker_rejects(
+  rejects_unknown_reward_weight
+  "unknown reward weight \"bogus\""
+  --model m --seeds 1 --reward bogus=1
+)
+
+add_test(
+  NAME pigpen_worker_integration
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/worker_integration_tests.py"
+    "$<TARGET_FILE:pig-pen-worker>"
+)
+set_tests_properties(pigpen_worker_integration PROPERTIES TIMEOUT 90)
 
 if(UNIX)
   foreach(signal IN ITEMS SIGINT SIGTERM)

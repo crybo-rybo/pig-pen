@@ -29,7 +29,8 @@ namespace pigpen::agent {
 class MetricsWriter final {
 public:
   /// @brief Create the log directory and file, then write the header line.
-  /// @param rollout_id Recorded in the header; empty is written as null.
+  /// @param rollout_id Recorded in the header and the abandoned footer;
+  /// empty is written as null.
   /// @return The writer, or a message when the directory or file cannot be
   /// created or the header cannot be written.
   [[nodiscard]] static std::expected<std::unique_ptr<MetricsWriter>,
@@ -61,7 +62,8 @@ public:
 
 private:
   MetricsWriter(std::filesystem::path path, std::ofstream stream,
-                std::chrono::steady_clock::time_point started);
+                std::chrono::steady_clock::time_point started,
+                std::string rollout_id);
 
   /// @brief The incomplete footer the destructor writes.
   [[nodiscard]] std::expected<void, std::string> write_abandoned_footer();
@@ -69,6 +71,8 @@ private:
   std::filesystem::path path_{};
   std::ofstream stream_{};
   std::chrono::steady_clock::time_point started_{};
+  /// Repeated in the abandoned footer; empty is written as null.
+  std::string rollout_id_{};
   // Abandoned-footer counts, pre-seeded so every tool and item is listed.
   std::map<std::string, std::size_t> tool_counts_{
       {"move", 0}, {"look", 0}, {"eat", 0}};

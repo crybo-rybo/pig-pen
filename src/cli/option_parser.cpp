@@ -126,6 +126,17 @@ void OptionParser::value(std::string name, std::string metavar,
   });
 }
 
+void OptionParser::rejected(std::string name, std::string message) {
+  options_.push_back({
+      .name = std::move(name),
+      .metavar = {},
+      .description = {},
+      .on_value = {},
+      .on_flag = {},
+      .rejection = std::move(message),
+  });
+}
+
 const OptionParser::Option *
 OptionParser::find(const std::string_view name) const {
   const auto found = std::ranges::find(options_, name, &Option::name);
@@ -149,6 +160,9 @@ OptionParser::parse(const std::span<const std::string_view> arguments) {
     const auto *const option = find(name);
     if (option == nullptr) {
       return std::unexpected("unknown option: " + name);
+    }
+    if (option->rejection) {
+      return std::unexpected(*option->rejection);
     }
     if (!option->on_value) {
       if (inline_value) {
@@ -177,6 +191,9 @@ OptionParser::parse(const std::span<const std::string_view> arguments) {
 std::string OptionParser::help() const {
   std::string output;
   for (const auto &option : options_) {
+    if (option.rejection) {
+      continue;
+    }
     auto label = "  " + option.name;
     if (!option.metavar.empty()) {
       label += ' ' + option.metavar;

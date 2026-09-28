@@ -19,6 +19,10 @@ run-headless profile="dev" *args: (configure profile)
     cmake --build --preset {{profile}} --target pig-pen-headless
     ./build/{{profile}}/pig-pen-headless {{args}}
 
+run-worker profile="dev" *args: (configure profile)
+    cmake --build --preset {{profile}} --target pig-pen-worker
+    ./build/{{profile}}/pig-pen-worker {{args}}
+
 # Same pinned versions as .github/workflows/ci.yml.
 clang_format := "uvx clang-format@22.1.8"
 ruff := "uvx ruff@0.16.1"

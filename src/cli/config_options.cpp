@@ -29,16 +29,19 @@ void add_reward_option(OptionParser &parser, agent::RewardWeights &weights) {
 }
 
 void add_config_options(OptionParser &parser, agent::Config &config,
-                        agent::SessionOptions &options) {
+                        agent::SessionOptions &options,
+                        const WorldSeedOption world_seed) {
   constexpr auto u32_max = std::numeric_limits<std::uint32_t>::max();
   parser.text("--base-url", "URL", config.base_url,
               std::format("Model endpoint (default: {})", config.base_url));
   parser.text("--model", "NAME", config.model,
               "Exact model identifier sent to the server (required)");
-  parser.integer(
-      "--seed", "INTEGER", config.seed, 0,
-      std::numeric_limits<std::uint64_t>::max(),
-      std::format("Deterministic world seed (default: {})", config.seed));
+  if (world_seed == WorldSeedOption::registered) {
+    parser.integer(
+        "--seed", "INTEGER", config.seed, 0,
+        std::numeric_limits<std::uint64_t>::max(),
+        std::format("Deterministic world seed (default: {})", config.seed));
+  }
   parser.integer("--turns", "INTEGER", config.turn_budget, 1,
                  agent::turn_budget_limit,
                  std::format("Episode turn budget, 1..{} (default: {})",

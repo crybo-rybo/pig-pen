@@ -2,6 +2,7 @@
 /// @brief MetricsWriter implementation; the contract is in the header.
 #include "agent/metrics_writer.hpp"
 
+#include "agent/record_json.hpp"
 #include "agent/summary_json.hpp"
 #include "world/world.hpp"
 
@@ -68,11 +69,6 @@ iso_timestamp(const std::chrono::system_clock::time_point now) {
   return result.str();
 }
 
-/// @brief Project a grid position into the log's {"x", "y"} shape.
-[[nodiscard]] nlohmann::json position_json(const world::Position position) {
-  return {{"x", position.x}, {"y", position.y}};
-}
-
 /// @brief Append one serialised JSONL line and flush so a crash loses
 /// nothing.
 [[nodiscard]] std::expected<void, std::string>
@@ -136,41 +132,17 @@ MetricsWriter::create(const std::filesystem::path &log_directory,
     return std::unexpected("could not open metrics log: " + path.string());
   }
 
-  auto writer = std::unique_ptr<MetricsWriter>{new MetricsWriter{
-      std::move(path), std::move(stream), std::chrono::steady_clock::now()}};
-  const nlohmann::json header = {
-      {"type", "header"},
-      {"model", config.model},
-      {"base_url", config.base_url},
-      {"temperature", config.temperature},
-      {"max_output_tokens", config.max_output_tokens},
-      {"seed", config.seed},
-      {"sampling_seed", config.sampling_seed
-                            ? nlohmann::json(*config.sampling_seed)
-                            : nlohmann::json(nullptr)},
-      {"started_at", iso_timestamp(wall_started)},
-      {"prompt_variant", std::move(prompt_variant)},
-      {"rollout_id", rollout_id.empty()
-                         ? nlohmann::json(nullptr)
-                         : nlohmann::json(std::move(rollout_id))},
-      {"scenario",
-       {
-           {"grid",
-            {{"width", world::World::width}, {"height", world::World::height}}},
-           {"spawn", position_json(world::World::spawn)},
-           {"items",
-            {{"berry", world::World::default_berry_count},
-             {"apple", world::World::default_apple_count},
-             {"truffle", world::World::default_truffle_count},
-             {"toadstool", world::World::default_toadstool_count}}},
-           {"turn_budget", config.turn_budget},
-           {"max_tool_rounds", config.max_tool_rounds},
-           {"max_world_tool_calls_per_turn", max_world_tool_calls_per_turn},
-           {"known_item_values", config.known_item_values},
-           {"reward_feedback", config.reward_feedback},
-           {"opaque_look", config.opaque_look},
-       }},
-  };
+  auto writer = std::unique_ptr<MetricsWriter>{
+      new MetricsWriter{std::move(path), std::move(stream),
+                        std::chrono::steady_clock::now(), rollout_id}};
+  // The Config fields are shared with the worker's episode record.
+  auto header = config_json(config);
+  header["type"] = "header";
+  header["started_at"] = iso_timestamp(wall_started);
+  header["prompt_variant"] = std::move(prompt_variant);
+  header["rollout_id"] = rollout_id.empty()
+                             ? nlohmann::json(nullptr)
+                             : nlohmann::json(std::move(rollout_id));
   if (auto status = write_line(writer->stream_, writer->path_, header);
       !status) {
     return std::unexpected(std::move(status.error()));
@@ -180,8 +152,9 @@ MetricsWriter::create(const std::filesystem::path &log_directory,
 
 MetricsWriter::MetricsWriter(
     std::filesystem::path path, std::ofstream stream,
-    const std::chrono::steady_clock::time_point started)
-    : path_(std::move(path)), stream_(std::move(stream)), started_(started) {}
+    const std::chrono::steady_clock::time_point started, std::string rollout_id)
+    : path_(std::move(path)), stream_(std::move(stream)), started_(started),
+      rollout_id_(std::move(rollout_id)) {}
 
 MetricsWriter::~MetricsWriter() {
   if (!finalized_ && stream_) {
@@ -286,18 +259,21 @@ MetricsWriter::finish(const EpisodeSummary &summary) {
 std::expected<void, std::string> MetricsWriter::write_abandoned_footer() {
   const auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
       std::chrono::steady_clock::now() - started_);
-  auto status = write_line(stream_, path_,
-                           {
-                               {"type", "footer"},
-                               {"complete", false},
-                               {"finish_reason", "abandoned"},
-                               {"error", "episode ended before finalization"},
-                               {"final_score", last_score_},
-                               {"items_eaten", eaten_counts_},
-                               {"tool_call_counts", tool_counts_},
-                               {"turns_used", turns_recorded_},
-                               {"duration_ms", duration.count()},
-                           });
+  auto status = write_line(
+      stream_, path_,
+      {
+          {"type", "footer"},
+          {"rollout_id", rollout_id_.empty() ? nlohmann::json(nullptr)
+                                             : nlohmann::json(rollout_id_)},
+          {"complete", false},
+          {"finish_reason", "abandoned"},
+          {"error", "episode ended before finalization"},
+          {"final_score", last_score_},
+          {"items_eaten", eaten_counts_},
+          {"tool_call_counts", tool_counts_},
+          {"turns_used", turns_recorded_},
+          {"duration_ms", duration.count()},
+      });
   if (status) {
     finalized_ = true;
   }

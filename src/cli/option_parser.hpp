@@ -122,6 +122,11 @@ public:
   void value(std::string name, std::string metavar, std::string description,
              ValueHandler handler);
 
+  /// @brief `NAME`, with or without a value, is always the error
+  /// @p message. The option is left out of help(); a front end uses this
+  /// to point a familiar flag it does not take at the one it does.
+  void rejected(std::string name, std::string message);
+
   /// @brief Apply @p arguments (without the program name) in order.
   /// @return The first error; targets set before it keep their values.
   [[nodiscard]] ParseResult parse(std::span<const std::string_view> arguments);
@@ -139,6 +144,8 @@ private:
     /// Absent for a flag.
     ValueHandler on_value;
     std::function<void()> on_flag;
+    /// Set for a rejected() option, which help() leaves out.
+    std::optional<std::string> rejection{};
   };
 
   [[nodiscard]] const Option *find(std::string_view name) const;

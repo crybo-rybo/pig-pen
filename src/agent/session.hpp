@@ -76,6 +76,8 @@ public:
   /// @brief Wall time since the session was created, on a steady clock;
   /// frozen once the episode finishes, so it is then the episode duration.
   [[nodiscard]] std::chrono::milliseconds elapsed() const;
+  /// @brief SessionOptions::rollout_id from create(), or empty.
+  [[nodiscard]] const std::string &rollout_id() const noexcept;
   /// @brief SessionOptions::reward_weights from create(), used for the
   /// footer's reward.
   [[nodiscard]] const RewardWeights &reward_weights() const noexcept;

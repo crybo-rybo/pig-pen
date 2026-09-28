@@ -246,6 +246,19 @@ TEST_CASE("shared config options keep the headless CLI's diagnostics") {
         "--hidden-values does not take a value");
 }
 
+TEST_CASE("shared config options can leave --seed to the front end") {
+  pigpen::agent::Config config;
+  pigpen::agent::SessionOptions options;
+  pigpen::cli::OptionParser parser;
+  pigpen::cli::add_config_options(parser, config, options,
+                                  pigpen::cli::WorldSeedOption::omitted);
+  CHECK(parse_error(parser, {"--seed", "4"}) == "unknown option: --seed");
+  CHECK_FALSE(parser.help().contains("--seed "));
+  CHECK(parse_error(parser, {"--turns", "3", "--model", "m"}).empty());
+  CHECK(config.turn_budget == 3);
+  CHECK(config.seed == 0);
+}
+
 TEST_CASE("shared config validation reports the first empty value in order") {
   pigpen::agent::Config config;
   pigpen::agent::SessionOptions options{.log_directory = ""};

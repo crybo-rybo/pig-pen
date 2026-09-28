@@ -37,12 +37,14 @@ namespace {
 } // namespace
 
 struct Session::Impl {
-  Impl(Config initial_config, RewardWeights initial_reward_weights,
+  Impl(Config initial_config, std::string initial_rollout_id,
+       RewardWeights initial_reward_weights,
        std::unique_ptr<MetricsWriter> initial_metrics,
        std::unique_ptr<world::World> initial_world,
        std::unique_ptr<WorldToolBinding> initial_tools,
        scry::Harness initial_harness, scry::Conversation initial_conversation)
       : config(std::move(initial_config)),
+        rollout_id(std::move(initial_rollout_id)),
         reward_weights(initial_reward_weights), world(std::move(initial_world)),
         metrics(std::move(initial_metrics)),
         metrics_path(metrics ? std::optional{metrics->path()} : std::nullopt),
@@ -90,9 +92,10 @@ struct Session::Impl {
                         return;
                       }
                       // The runner's snapshot already carries the result.
-                      const auto summary = summarize_episode(
+                      auto summary = summarize_episode(
                           *world, activities, turns, runner.snapshot(),
                           elapsed(), reward_weights);
+                      summary.rollout_id = rollout_id;
                       if (auto status = metrics->finish(summary); !status) {
                         metrics_error = std::move(status.error());
                       }
@@ -118,6 +121,7 @@ struct Session::Impl {
   }
 
   Config config;
+  std::string rollout_id;
   RewardWeights reward_weights;
   std::chrono::steady_clock::time_point created{
       std::chrono::steady_clock::now()};
@@ -180,7 +184,7 @@ Session::create(Config config, SessionOptions options) {
   if (options.log_directory) {
     auto created = MetricsWriter::create(*options.log_directory, config,
                                          std::move(options.prompt_variant),
-                                         std::move(options.rollout_id));
+                                         options.rollout_id);
     if (!created) {
       return std::unexpected(std::move(created.error()));
     }
@@ -188,9 +192,9 @@ Session::create(Config config, SessionOptions options) {
   }
 
   return std::shared_ptr<Session>{new Session{std::make_unique<Impl>(
-      std::move(config), options.reward_weights, std::move(metrics),
-      std::move(world), std::move(tools), std::move(*harness),
-      std::move(*conversation))}};
+      std::move(config), std::move(options.rollout_id), options.reward_weights,
+      std::move(metrics), std::move(world), std::move(tools),
+      std::move(*harness), std::move(*conversation))}};
 }
 
 Session::Session(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
@@ -246,6 +250,10 @@ const std::vector<EpisodeTurn> &Session::turns() const noexcept {
 }
 
 std::chrono::milliseconds Session::elapsed() const { return impl_->elapsed(); }
+
+const std::string &Session::rollout_id() const noexcept {
+  return impl_->rollout_id;
+}
 
 const RewardWeights &Session::reward_weights() const noexcept {
   return impl_->reward_weights;

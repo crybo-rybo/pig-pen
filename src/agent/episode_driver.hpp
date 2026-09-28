@@ -18,7 +18,8 @@
 
 namespace pigpen::agent {
 
-/// @brief What one pump() pass accomplished; both front ends surface this.
+/// @brief What one pump() pass accomplished; drivers use it to decide
+/// whether their caller may idle.
 struct PumpStats {
   std::size_t callbacks_delivered{};
   std::size_t events_remaining{};
