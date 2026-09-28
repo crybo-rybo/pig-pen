@@ -9,7 +9,7 @@
 #include <charconv>
 #include <limits>
 #include <system_error>
-#include <unordered_set>
+#include <utility>
 
 namespace pigpen::cli {
 namespace {
@@ -101,20 +101,20 @@ ParseResult validate_rollout_prefix(const std::string_view prefix) {
   return {};
 }
 
-std::expected<std::vector<WorkerJob>, std::string>
-expand_jobs(const std::span<const std::uint64_t> seeds,
-            const std::uint32_t samples, const std::string_view prefix,
-            const std::optional<std::uint32_t> sampling_seed_base) {
+std::expected<WorkerJobs, std::string>
+WorkerJobs::create(std::vector<std::uint64_t> seeds,
+                   const std::uint32_t samples, std::string prefix,
+                   const std::optional<std::uint32_t> sampling_seed_base) {
   if (seeds.empty()) {
     return std::unexpected("--seeds is required");
   }
-  std::unordered_set<std::uint64_t> seen;
-  seen.reserve(seeds.size());
-  for (const auto seed : seeds) {
-    if (!seen.insert(seed).second) {
-      return std::unexpected("--seeds lists seed " + std::to_string(seed) +
-                             " more than once");
-    }
+  // Sorting a copy costs one more seed list, not a hash node per seed.
+  auto sorted = seeds;
+  std::ranges::sort(sorted);
+  if (const auto repeated = std::ranges::adjacent_find(sorted);
+      repeated != sorted.end()) {
+    return std::unexpected("--seeds lists seed " + std::to_string(*repeated) +
+                           " more than once");
   }
   if (samples == 0 || seeds.size() > max_worker_jobs / samples) {
     return std::unexpected("--seeds and --samples must give 1.." +
@@ -130,24 +130,34 @@ expand_jobs(const std::span<const std::uint64_t> seeds,
                            " samples: the last sampling seed must not exceed " +
                            std::to_string(u32_max));
   }
+  return WorkerJobs{std::move(seeds), samples, std::move(prefix),
+                    sampling_seed_base};
+}
 
-  std::vector<WorkerJob> jobs;
-  jobs.reserve(seeds.size() * samples);
-  for (const auto seed : seeds) {
-    for (std::uint32_t sample = 0; sample < samples; ++sample) {
-      jobs.push_back({
-          .seed = seed,
-          .sample = sample,
-          .rollout_id = std::string{prefix} + '/' + std::to_string(seed) + '/' +
-                        std::to_string(sample),
-          .sampling_seed =
-              sampling_seed_base
-                  ? std::optional<std::uint32_t>{*sampling_seed_base + sample}
-                  : std::nullopt,
-      });
-    }
-  }
-  return jobs;
+WorkerJobs::WorkerJobs(std::vector<std::uint64_t> seeds,
+                       const std::uint32_t samples, std::string prefix,
+                       const std::optional<std::uint32_t> sampling_seed_base)
+    : seeds_(std::move(seeds)), samples_(samples), prefix_(std::move(prefix)),
+      sampling_seed_base_(sampling_seed_base) {}
+
+std::size_t WorkerJobs::size() const noexcept {
+  return seeds_.size() * samples_;
+}
+
+WorkerJob WorkerJobs::at(const std::size_t index) const {
+  const auto seed = seeds_[index / samples_];
+  const auto sample = static_cast<std::uint32_t>(index % samples_);
+  return {
+      .seed = seed,
+      .sample = sample,
+      .rollout_id =
+          prefix_ + '/' + std::to_string(seed) + '/' + std::to_string(sample),
+      // create() checked that the last sample's seed fits.
+      .sampling_seed =
+          sampling_seed_base_
+              ? std::optional<std::uint32_t>{*sampling_seed_base_ + sample}
+              : std::nullopt,
+  };
 }
 
 ParseResult parse_request_header(

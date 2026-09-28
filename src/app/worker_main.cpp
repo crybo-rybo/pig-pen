@@ -20,8 +20,10 @@
 #include "cli/worker_jobs.hpp"
 
 #include <chrono>
+#include <csignal>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <expected>
 #include <format>
 #include <iostream>
@@ -120,19 +122,20 @@ Values may also use --option=value. PIGPEN_API_KEY supplies an optional API key.
 Records go to stdout, diagnostics to stderr.
 
 Exit codes: 0 every episode valid, 1 a session could not be created (batch
-            aborted), 2 invalid options, 6 at least one episode invalid,
-            130 SIGINT, 143 SIGTERM. Signals cancel in-flight episodes
-            cooperatively and still write their records.
+            aborted) or stdout failed, 2 invalid options, 6 at least one
+            episode invalid, 130 SIGINT, 143 SIGTERM. Signals cancel
+            in-flight episodes cooperatively and still write their records.
 )";
 }
 
 /// @brief The parsed options and the jobs they describe.
 struct Plan {
   Options options{};
-  std::vector<pigpen::cli::WorkerJob> jobs{};
+  /// Absent only for `--help`.
+  std::optional<pigpen::cli::WorkerJobs> jobs{};
 };
 
-/// @brief Parses the command line and expands the jobs; errors exit 2.
+/// @brief Parses the command line and describes the jobs; errors exit 2.
 /// @note `--help` skips the required-value checks so it works on its own.
 [[nodiscard]] std::expected<Plan, std::string>
 parse_plan(const std::span<const std::string_view> arguments) {
@@ -158,9 +161,9 @@ parse_plan(const std::span<const std::string_view> arguments) {
     return std::unexpected(
         "--sampling-seed and --sampling-seed-base cannot both be given");
   }
-  auto jobs = pigpen::cli::expand_jobs(options.seeds, options.samples,
-                                       options.rollout_prefix,
-                                       options.sampling_seed_base);
+  auto jobs = pigpen::cli::WorkerJobs::create(
+      std::move(options.seeds), options.samples, options.rollout_prefix,
+      options.sampling_seed_base);
   if (!jobs) {
     return std::unexpected(std::move(jobs.error()));
   }
@@ -168,20 +171,36 @@ parse_plan(const std::span<const std::string_view> arguments) {
   return plan;
 }
 
-/// @brief Writes one record line and flushes it, so a consumer reading the
-/// pipe sees each episode as soon as it ends.
-/// @return false once stdout has failed.
-bool write_record(const std::string &line) {
-  std::cout << line << '\n' << std::flush;
-  return static_cast<bool>(std::cout);
-}
+/// @brief stdout as the record stream: one line per record, flushed so a
+/// consumer reading the pipe sees each episode as soon as it ends. After
+/// the first failed write it writes nothing more.
+class RecordOutput final {
+public:
+  /// @return false when stdout has failed, now or earlier.
+  bool write(const std::string &line) {
+    if (failed_) {
+      return false;
+    }
+    std::cout << line << '\n' << std::flush;
+    if (!std::cout) {
+      failed_ = true;
+      std::cerr << "output error: could not write records to stdout; "
+                   "cancelling in-flight episodes\n";
+    }
+    return !failed_;
+  }
 
-/// @brief Tallies across the episode records the batch has written.
+  [[nodiscard]] bool failed() const noexcept { return failed_; }
+
+private:
+  bool failed_{};
+};
+
+/// @brief Tallies across the episode records the batch has reported.
 struct RecordTally {
   std::size_t written{};
   std::size_t valid{};
   std::size_t invalid{};
-  bool output_failed{};
 };
 
 /// @brief The `episode` record of a job whose drive just ended, while its
@@ -204,17 +223,50 @@ episode_record(const pigpen::agent::Session &session,
   };
 }
 
+/// @brief Writes one job's record and its stderr diagnostics.
+void report_episode(const pigpen::agent::Session &session,
+                    const pigpen::cli::WorkerJob &job,
+                    const pigpen::agent::EpisodeEnd &end, RecordTally &tally,
+                    RecordOutput &output) {
+  const auto record = episode_record(session, job, end);
+  const auto line = pigpen::agent::to_json_line(record);
+  const auto &reward = record.summary.reward;
+  if (!reward.valid) {
+    std::cerr << "episode " << job.rollout_id << " invalid ("
+              << reward.invalid_reason << ")";
+    if (!record.summary.error.empty()) {
+      std::cerr << ": " << record.summary.error;
+    }
+    std::cerr << '\n';
+  }
+  if (end.outcome == pigpen::agent::DriveOutcome::cancellation_stalled) {
+    std::cerr << "episode " << job.rollout_id
+              << ": cancellation did not finish within "
+              << pigpen::agent::cancellation_grace.count() << " seconds\n";
+  }
+  if (!session.metrics_error().empty()) {
+    std::cerr << "episode " << job.rollout_id
+              << " metrics error: " << session.metrics_error() << '\n';
+  }
+  // Counted only once the record exists, so a throw above counts nothing.
+  ++tally.written;
+  ++(reward.valid ? tally.valid : tally.invalid);
+  static_cast<void>(output.write(line));
+}
+
 /// @brief Runs the batch, writes every record, and maps the result to an
 /// exit code.
 [[nodiscard]] int run(const Plan &plan,
                       const pigpen::cli::TerminationSignal &termination) {
   const auto &options = plan.options;
+  const auto &jobs = *plan.jobs;
   const auto api_key = pigpen::cli::api_key_from_environment();
   RecordTally tally;
+  RecordOutput output;
 
   const auto create_job = [&](const std::size_t index)
       -> std::expected<pigpen::agent::BatchEntry, std::string> {
-    const auto &job = plan.jobs[index];
+    auto job = jobs.at(index);
     auto config = options.config;
     config.seed = job.seed;
     if (job.sampling_seed) {
@@ -242,43 +294,16 @@ episode_record(const pigpen::agent::Session &session,
     return pigpen::agent::BatchEntry{
         .episode = std::move(session),
         .on_end =
-            [&tally, &job, borrowed](const pigpen::agent::EpisodeEnd &end) {
-              const auto record = episode_record(*borrowed, job, end);
-              const auto &reward = record.summary.reward;
-              ++tally.written;
-              if (reward.valid) {
-                ++tally.valid;
-              } else {
-                ++tally.invalid;
-                std::cerr << "episode " << job.rollout_id << " invalid ("
-                          << reward.invalid_reason << ")";
-                if (!record.summary.error.empty()) {
-                  std::cerr << ": " << record.summary.error;
-                }
-                std::cerr << '\n';
-              }
-              if (end.outcome ==
-                  pigpen::agent::DriveOutcome::cancellation_stalled) {
-                std::cerr << "episode " << job.rollout_id
-                          << ": cancellation did not finish within "
-                          << pigpen::agent::cancellation_grace.count()
-                          << " seconds\n";
-              }
-              if (!borrowed->metrics_error().empty()) {
-                std::cerr << "episode " << job.rollout_id
-                          << " metrics error: " << borrowed->metrics_error()
-                          << '\n';
-              }
-              if (!write_record(pigpen::agent::to_json_line(record))) {
-                tally.output_failed = true;
-              }
+            [&tally, &output, job = std::move(job),
+             borrowed](const pigpen::agent::EpisodeEnd &end) {
+              report_episode(*borrowed, job, end, tally, output);
             },
     };
   };
 
   int termination_signal = 0;
   pigpen::agent::EpisodeBatch batch{
-      plan.jobs.size(), options.parallel,
+      jobs.size(), options.parallel,
       std::chrono::seconds{options.timeout_seconds}, create_job};
   const auto result = batch.run({
       .now = [] { return std::chrono::steady_clock::now(); },
@@ -286,6 +311,7 @@ episode_record(const pigpen::agent::Session &session,
           [](const std::chrono::steady_clock::duration pause) {
             std::this_thread::sleep_for(pause);
           },
+      // A signal and a failed stdout both stop the batch cooperatively.
       .stop_requested =
           [&] {
             if (termination_signal == 0 &&
@@ -293,7 +319,7 @@ episode_record(const pigpen::agent::Session &session,
               std::cerr << "received signal " << termination_signal
                         << "; cancelling in-flight episodes\n";
             }
-            return termination_signal != 0;
+            return termination_signal != 0 || output.failed();
           },
   });
 
@@ -303,11 +329,11 @@ episode_record(const pigpen::agent::Session &session,
     std::cerr << "startup error: " << *result.error << '\n';
     exit_code = runtime_error_exit;
     status = "aborted";
+  } else if (output.failed()) {
+    exit_code = runtime_error_exit;
   } else if (termination_signal != 0) {
     exit_code = signal_exit_base + termination_signal;
     status = "interrupted";
-  } else if (tally.output_failed) {
-    exit_code = runtime_error_exit;
   } else if (tally.invalid > 0) {
     exit_code = invalid_episode_exit;
   }
@@ -323,12 +349,8 @@ episode_record(const pigpen::agent::Session &session,
       .error = result.error.value_or(""),
       .exit_code = exit_code,
   };
-  if (!write_record(pigpen::agent::to_json_line(record)) ||
-      tally.output_failed) {
-    std::cerr << "output error: could not write records to stdout\n";
-    if (exit_code == all_valid_exit || exit_code == invalid_episode_exit) {
-      exit_code = runtime_error_exit;
-    }
+  if (!output.write(pigpen::agent::to_json_line(record))) {
+    exit_code = runtime_error_exit;
   }
   return exit_code;
 }
@@ -336,6 +358,12 @@ episode_record(const pigpen::agent::Session &session,
 } // namespace
 
 int main(const int argc, char **argv) {
+#ifdef SIGPIPE
+  // A consumer that closes the pipe must surface as a failed write, which
+  // cancels in-flight episodes cooperatively, not as a fatal signal that
+  // loses their log footers.
+  std::signal(SIGPIPE, SIG_IGN);
+#endif
   // Deliberately never destroyed: restoring the default handlers after main
   // returns would let a late signal replace the exit code already computed.
   auto &termination = *new pigpen::cli::TerminationSignal{};
@@ -356,5 +384,12 @@ int main(const int argc, char **argv) {
     print_usage(std::cout, program);
     return 0;
   }
-  return run(*plan, termination);
+  try {
+    return run(*plan, termination);
+  } catch (const std::exception &error) {
+    // Only pumping an episode can get here; the batch turns factory and
+    // report exceptions into an abort. Unwinding closes every session.
+    std::cerr << "runtime error: " << error.what() << '\n';
+    return runtime_error_exit;
+  }
 }

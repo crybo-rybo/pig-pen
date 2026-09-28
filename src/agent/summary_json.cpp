@@ -87,6 +87,10 @@ sampling_seed_json(const std::optional<std::uint32_t> &seed) {
 
 } // namespace
 
+std::string dump_line(const nlohmann::json &record) {
+  return record.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+}
+
 nlohmann::json position_json(const world::Position position) {
   return {{"x", position.x}, {"y", position.y}};
 }
@@ -121,7 +125,7 @@ nlohmann::json config_json(const Config &config) {
 
 std::string to_json_line(const EpisodeSummary &summary,
                          const std::string_view record_type) {
-  return summary_json(summary, record_type).dump();
+  return dump_line(summary_json(summary, record_type));
 }
 
 std::string to_json_line(const EpisodeRecord &record) {
@@ -130,7 +134,7 @@ std::string to_json_line(const EpisodeRecord &record) {
   line["sample"] = record.sample;
   line["sampling_seed"] = sampling_seed_json(record.config.sampling_seed);
   line["config"] = config_json(record.config);
-  return line.dump();
+  return dump_line(line);
 }
 
 std::string to_json_line(const BatchRecord &record) {
@@ -146,7 +150,7 @@ std::string to_json_line(const BatchRecord &record) {
       {"error", nullable(record.error)},
       {"exit_code", record.exit_code},
   };
-  return line.dump();
+  return dump_line(line);
 }
 
 } // namespace pigpen::agent

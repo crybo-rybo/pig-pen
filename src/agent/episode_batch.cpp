@@ -3,9 +3,26 @@
 #include "agent/episode_batch.hpp"
 
 #include <algorithm>
+#include <exception>
+#include <string>
 #include <utility>
 
 namespace pigpen::agent {
+namespace {
+
+/// @brief @p context and the in-flight exception's message; call only from
+/// a catch block.
+[[nodiscard]] std::string exception_message(std::string context) {
+  try {
+    throw;
+  } catch (const std::exception &error) {
+    return context + ": " + error.what();
+  } catch (...) {
+    return context + ": unknown exception";
+  }
+}
+
+} // namespace
 
 EpisodeBatch::Slot::Slot(const std::size_t job_index, BatchEntry started,
                          const Clock::duration timeout)
@@ -29,19 +46,24 @@ std::optional<BatchResult> EpisodeBatch::step(const Clock::time_point now,
   progressed_ = false;
   stop_requested_ = stop_requested_ || stop_requested;
 
-  // A factory failure stops the batch exactly as a stop request does.
+  // An error stops the batch exactly as a stop request does.
   const auto stopping = [this] { return stop_requested_ || error_; };
   while (!stopping() && slots_.size() < parallel_ && next_job_ < job_count_) {
     const auto job = next_job_++;
     progressed_ = true;
-    auto entry = factory_(job);
-    if (!entry) {
-      error_ = std::move(entry.error());
-    } else if (!entry->episode) {
-      error_ = "the episode factory returned no episode";
-    } else {
-      slots_.emplace_back(job, std::move(*entry), timeout_);
-      ++started_;
+    try {
+      auto entry = factory_(job);
+      if (!entry) {
+        error_ = std::move(entry.error());
+      } else if (!entry->episode) {
+        error_ = "the episode factory returned no episode";
+      } else {
+        slots_.emplace_back(job, std::move(*entry), timeout_);
+        ++started_;
+      }
+    } catch (...) {
+      // Nothing was started, so there is nothing to report.
+      error_ = exception_message("could not start job " + std::to_string(job));
     }
   }
 
@@ -56,11 +78,19 @@ std::optional<BatchResult> EpisodeBatch::step(const Clock::time_point now,
     }
     progressed_ = true;
     if (slot->entry.on_end) {
-      slot->entry.on_end({
-          .job = slot->job,
-          .outcome = *outcome,
-          .timed_out = slot->driver.timed_out(),
-      });
+      try {
+        slot->entry.on_end({
+            .job = slot->job,
+            .outcome = *outcome,
+            .timed_out = slot->driver.timed_out(),
+        });
+      } catch (...) {
+        // The report was attempted; it is never retried. Stop the rest.
+        if (!error_) {
+          error_ = exception_message("could not report job " +
+                                     std::to_string(slot->job));
+        }
+      }
     }
     // Destroys the driver, then the entry and with it the episode.
     slot = slots_.erase(slot);

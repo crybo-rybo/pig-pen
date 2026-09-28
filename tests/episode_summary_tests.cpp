@@ -384,3 +384,21 @@ TEST_CASE("a batch record serialises every count", "[summary][json]") {
   CHECK(aborted.at("error") == "rollout/1/0: bad header");
   CHECK(aborted.at("not_started") == 3);
 }
+
+TEST_CASE("records never throw on text that is not UTF-8", "[summary][json]") {
+  pigpen::agent::EpisodeRecord record{
+      .summary = {.error = "bad \xff byte", .rollout_id = "r/1/0"},
+  };
+  record.config.model = "pig\xc3";
+  std::string line;
+  REQUIRE_NOTHROW(line = pigpen::agent::to_json_line(record));
+  const auto parsed = nlohmann::json::parse(line);
+  // Each invalid byte becomes U+FFFD; the rest of the text survives.
+  CHECK(parsed.at("error") == "bad \xef\xbf\xbd byte");
+  CHECK(parsed.at("config").at("model") == "pig\xef\xbf\xbd");
+  REQUIRE_NOTHROW(line = pigpen::agent::to_json_line(record.summary));
+  CHECK(nlohmann::json::parse(line).at("error") == "bad \xef\xbf\xbd byte");
+  REQUIRE_NOTHROW(line = pigpen::agent::to_json_line(
+                      pigpen::agent::BatchRecord{.error = "x\xff"}));
+  CHECK(nlohmann::json::parse(line).at("error") == "x\xef\xbf\xbd");
+}

@@ -49,6 +49,17 @@ parse_unsigned(std::string_view name, std::string_view value,
 parse_real(std::string_view name, std::string_view value, double minimum,
            double maximum);
 
+/// @brief Whether @p text is well-formed UTF-8: no stray continuation
+/// bytes, truncated or overlong sequences, surrogates, or code points past
+/// U+10FFFF.
+[[nodiscard]] bool is_valid_utf8(std::string_view text) noexcept;
+
+/// @brief Reject a value that is not well-formed UTF-8, for text that ends
+/// up in a request or a JSON record.
+/// @return `NAME must be valid UTF-8` when it is not.
+[[nodiscard]] ParseResult require_utf8(std::string_view name,
+                                       std::string_view value);
+
 /// @brief Registered options plus the loop that applies them.
 ///
 /// A value is the rest of the argument after `=` (which must not be empty)

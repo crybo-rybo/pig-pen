@@ -26,6 +26,16 @@ using pigpen::cli::WorkerJob;
 constexpr auto u64_max = std::numeric_limits<std::uint64_t>::max();
 constexpr auto u32_max = std::numeric_limits<std::uint32_t>::max();
 
+/// @brief Every job of @p jobs, in index order.
+[[nodiscard]] std::vector<WorkerJob>
+all_jobs(const pigpen::cli::WorkerJobs &jobs) {
+  std::vector<WorkerJob> result;
+  for (std::size_t index = 0; index < jobs.size(); ++index) {
+    result.push_back(jobs.at(index));
+  }
+  return result;
+}
+
 /// @brief The seeds of one --seeds value, or its diagnostic.
 [[nodiscard]] std::pair<std::vector<std::uint64_t>, std::string>
 seeds_of(const std::string_view value) {
@@ -98,35 +108,37 @@ TEST_CASE("rollout prefixes are visible ASCII", "[worker]") {
 TEST_CASE("jobs are seed-major with rollout ids and sampling seeds",
           "[worker]") {
   const std::vector<std::uint64_t> seeds{1003, 7};
-  const auto jobs = pigpen::cli::expand_jobs(seeds, 2, "run42", 10);
+  const auto jobs = pigpen::cli::WorkerJobs::create(seeds, 2, "run42", 10);
   REQUIRE(jobs);
-  CHECK(*jobs == std::vector<WorkerJob>{
-                     {.seed = 1003,
-                      .sample = 0,
-                      .rollout_id = "run42/1003/0",
-                      .sampling_seed = 10},
-                     {.seed = 1003,
-                      .sample = 1,
-                      .rollout_id = "run42/1003/1",
-                      .sampling_seed = 11},
-                     {.seed = 7,
-                      .sample = 0,
-                      .rollout_id = "run42/7/0",
-                      .sampling_seed = 10},
-                     {.seed = 7,
-                      .sample = 1,
-                      .rollout_id = "run42/7/1",
-                      .sampling_seed = 11},
-                 });
+  CHECK(jobs->size() == 4);
+  CHECK(all_jobs(*jobs) == std::vector<WorkerJob>{
+                               {.seed = 1003,
+                                .sample = 0,
+                                .rollout_id = "run42/1003/0",
+                                .sampling_seed = 10},
+                               {.seed = 1003,
+                                .sample = 1,
+                                .rollout_id = "run42/1003/1",
+                                .sampling_seed = 11},
+                               {.seed = 7,
+                                .sample = 0,
+                                .rollout_id = "run42/7/0",
+                                .sampling_seed = 10},
+                               {.seed = 7,
+                                .sample = 1,
+                                .rollout_id = "run42/7/1",
+                                .sampling_seed = 11},
+                           });
 
   // Without a base the sampling seed stays unset (server-random).
-  const auto unseeded = pigpen::cli::expand_jobs(seeds, 1, "rollout", {});
+  const auto unseeded =
+      pigpen::cli::WorkerJobs::create(seeds, 1, "rollout", {});
   REQUIRE(unseeded);
   REQUIRE(unseeded->size() == 2);
-  CHECK((*unseeded)[1] == WorkerJob{.seed = 7,
-                                    .sample = 0,
-                                    .rollout_id = "rollout/7/0",
-                                    .sampling_seed = std::nullopt});
+  CHECK(unseeded->at(1) == WorkerJob{.seed = 7,
+                                     .sample = 0,
+                                     .rollout_id = "rollout/7/0",
+                                     .sampling_seed = std::nullopt});
 }
 
 TEST_CASE("job expansion rejects what would make rollouts ambiguous or "
@@ -135,7 +147,7 @@ TEST_CASE("job expansion rejects what would make rollouts ambiguous or "
   const auto error = [](const std::vector<std::uint64_t> &seeds,
                         const std::uint32_t samples,
                         const std::optional<std::uint32_t> base) {
-    auto jobs = pigpen::cli::expand_jobs(seeds, samples, "p", base);
+    auto jobs = pigpen::cli::WorkerJobs::create(seeds, samples, "p", base);
     return jobs ? std::string{} : jobs.error();
   };
   CHECK(error({}, 1, {}) == "--seeds is required");
@@ -159,10 +171,24 @@ TEST_CASE("job expansion rejects what would make rollouts ambiguous or "
   CHECK(error({1}, 2, u32_max) ==
         "--sampling-seed-base 4294967295 leaves no room for 2 samples: the "
         "last sampling seed must not exceed 4294967295");
-  const auto last = pigpen::cli::expand_jobs(std::vector<std::uint64_t>{1}, 3,
-                                             "p", u32_max - 2);
+  const auto last = pigpen::cli::WorkerJobs::create(
+      std::vector<std::uint64_t>{1}, 3, "p", u32_max - 2);
   REQUIRE(last);
-  CHECK(last->back().sampling_seed == u32_max);
+  CHECK(last->at(2).sampling_seed == u32_max);
+
+  // A full-size batch is described, not materialised: the last job is
+  // built from its index alone.
+  std::vector<std::uint64_t> seeds(pigpen::cli::max_worker_jobs / 4);
+  for (std::uint64_t seed = 0; seed < seeds.size(); ++seed) {
+    seeds[seed] = seed * 3;
+  }
+  const auto full = pigpen::cli::WorkerJobs::create(seeds, 4, "big", {});
+  REQUIRE(full);
+  CHECK(full->size() == pigpen::cli::max_worker_jobs);
+  CHECK(full->at(full->size() - 1) == WorkerJob{.seed = (seeds.size() - 1) * 3,
+                                                .sample = 3,
+                                                .rollout_id = "big/749997/3",
+                                                .sampling_seed = std::nullopt});
 }
 
 TEST_CASE("request headers take NAME=VALUE and keep the worker's own names",

@@ -34,6 +34,14 @@ parse_gui_options(const std::span<const std::string_view> arguments) {
   if (auto parsed = parser.parse(arguments); !parsed) {
     return std::unexpected(std::move(parsed.error()));
   }
+  // Both end up in the log header, which must be valid JSON.
+  if (auto valid = cli::require_utf8("--model", options.config.model); !valid) {
+    return std::unexpected(std::move(valid.error()));
+  }
+  if (auto valid = cli::require_utf8("--base-url", options.config.base_url);
+      !valid) {
+    return std::unexpected(std::move(valid.error()));
+  }
   return options;
 }
 

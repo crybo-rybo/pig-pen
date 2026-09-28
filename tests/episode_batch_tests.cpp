@@ -4,7 +4,8 @@
 /// exactly once while the episode is alive, per-episode timeouts (including
 /// a stalled cancellation), a stop request cancelling every live episode
 /// and starting nothing more, a factory failure aborting the batch the same
-/// way, and run() sleeping only after a pass with no progress.
+/// way, an exception from the factory or a report aborting it without
+/// double reports, and run() sleeping only after a pass with no progress.
 
 #include "agent/episode_batch.hpp"
 
@@ -16,8 +17,10 @@
 #include <expected>
 #include <map>
 #include <memory>
+#include <new>
 #include <optional>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -459,4 +462,82 @@ TEST_CASE("run passes a stop request through and ends", "[batch][run]") {
   CHECK(result.not_started == 2);
   REQUIRE(harness.reports.size() == 1);
   CHECK(harness.reports[0].end.outcome == DriveOutcome::interrupted);
+}
+
+TEST_CASE("a factory that throws aborts the batch like a factory failure",
+          "[batch][abort]") {
+  Harness harness;
+  harness.scripts[0] = {.finish_pumps_after_stop = 2};
+  int calls = 0;
+  // Job 0 comes from the fake; job 1 throws.
+  EpisodeBatch batch{
+      3, 2, 10s,
+      [&](const std::size_t job) -> std::expected<BatchEntry, std::string> {
+        ++calls;
+        if (job == 1) {
+          throw std::runtime_error{"out of sessions"};
+        }
+        auto episode = std::make_shared<FakeEpisode>(job, harness.scripts[job],
+                                                     harness.observed);
+        return BatchEntry{
+            .episode = std::move(episode),
+            .on_end =
+                [&harness](const EpisodeEnd &end) {
+                  harness.reports.push_back({.end = end});
+                },
+        };
+      }};
+  CHECK_FALSE(batch.step(start, false));
+  CHECK(calls == 2);
+  const auto result = batch.step(start + 1ms, false);
+  REQUIRE(result);
+  CHECK(result->error == "could not start job 1: out of sessions");
+  CHECK(result->started == 1);
+  CHECK(result->not_started == 2);
+  REQUIRE(harness.reports.size() == 1);
+  CHECK(harness.reports[0].end.outcome == DriveOutcome::interrupted);
+  CHECK(harness.observed.alive == 0);
+  CHECK(calls == 2);
+}
+
+TEST_CASE("a report that throws is not retried and aborts the batch",
+          "[batch][abort]") {
+  Observed observed;
+  std::vector<std::size_t> reports;
+  EpisodeBatch batch{
+      4, 2, 10s,
+      [&](const std::size_t job) -> std::expected<BatchEntry, std::string> {
+        auto episode = std::make_shared<FakeEpisode>(
+            job,
+            Script{.finish_on_pump =
+                       job == 0 ? std::optional<int>{1} : std::nullopt,
+                   .finish_pumps_after_stop = 2},
+            observed);
+        return BatchEntry{
+            .episode = std::move(episode),
+            .on_end =
+                [&reports](const EpisodeEnd &end) {
+                  reports.push_back(end.job);
+                  if (end.job == 0) {
+                    throw std::bad_alloc{};
+                  }
+                },
+        };
+      }};
+  // Job 0 ends and its report throws; job 1, stepped later in the same
+  // pass, is asked to stop at once.
+  CHECK_FALSE(batch.step(start, false));
+  CHECK(reports == std::vector<std::size_t>{0});
+  CHECK(observed.destroyed == std::vector<std::size_t>{0});
+  CHECK(observed.stops == std::map<std::size_t, int>{{1, 1}});
+  const auto result = batch.step(start + 1ms, false);
+  REQUIRE(result);
+  CHECK(result->error == "could not report job 0: std::bad_alloc");
+  CHECK(reports == std::vector<std::size_t>{0, 1});
+  CHECK(result->started == 2);
+  CHECK(result->not_started == 2);
+  CHECK(observed.alive == 0);
+  // The ended batch never reports again.
+  CHECK(batch.step(start + 2ms, false));
+  CHECK(reports.size() == 2);
 }

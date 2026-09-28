@@ -42,9 +42,11 @@ void add_config_options(
     OptionParser &parser, agent::Config &config, agent::SessionOptions &options,
     WorldSeedOption world_seed = WorldSeedOption::registered);
 
-/// @brief Reject what a parse can leave empty, in this order: `--base-url`,
-/// `--model` (required), `--log-dir` (only when a log directory is set),
-/// and `--prompt-variant`.
+/// @brief Reject what a parse can leave empty or malformed, in this order:
+/// `--base-url` (empty, then not UTF-8), `--model` (required, then not
+/// UTF-8), `--log-dir` (only when a log directory is set, and empty), and
+/// `--prompt-variant` (empty, then not UTF-8). The UTF-8 checks keep every
+/// string the log and records write serialisable.
 [[nodiscard]] ParseResult
 validate_config_options(const agent::Config &config,
                         const agent::SessionOptions &options);

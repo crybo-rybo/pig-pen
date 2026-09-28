@@ -10,7 +10,6 @@
 #include <cstdint>
 #include <expected>
 #include <optional>
-#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -55,15 +54,35 @@ struct WorkerJob {
 /// ASCII (0x21..0x7E), so every rollout id is a valid header value.
 [[nodiscard]] ParseResult validate_rollout_prefix(std::string_view prefix);
 
-/// @brief The jobs for @p seeds × @p samples, seed-major in the order the
-/// seeds were given.
-/// @return A message when @p seeds is empty, lists a seed twice (rollout ids
-/// must be unique), gives more than max_worker_jobs jobs, or when
-/// @p sampling_seed_base plus the last sample index exceeds 2^32-1.
-[[nodiscard]] std::expected<std::vector<WorkerJob>, std::string>
-expand_jobs(std::span<const std::uint64_t> seeds, std::uint32_t samples,
-            std::string_view prefix,
-            std::optional<std::uint32_t> sampling_seed_base);
+/// @brief The jobs for seeds × samples, seed-major in the order the seeds
+/// were given. Each job is built on demand from its index, so a large batch
+/// holds only its seed list, never a million rollout ids.
+class WorkerJobs final {
+public:
+  /// @return The job list, or a message when @p seeds is empty, lists a
+  /// seed twice (rollout ids must be unique; the smallest repeated seed is
+  /// named), gives more than max_worker_jobs jobs, or when
+  /// @p sampling_seed_base plus the last sample index exceeds 2^32-1.
+  [[nodiscard]] static std::expected<WorkerJobs, std::string>
+  create(std::vector<std::uint64_t> seeds, std::uint32_t samples,
+         std::string prefix, std::optional<std::uint32_t> sampling_seed_base);
+
+  /// @brief seeds × samples.
+  [[nodiscard]] std::size_t size() const noexcept;
+  /// @brief Job @p index: seed `index / samples`, sample `index % samples`.
+  /// @pre index < size().
+  [[nodiscard]] WorkerJob at(std::size_t index) const;
+
+private:
+  WorkerJobs(std::vector<std::uint64_t> seeds, std::uint32_t samples,
+             std::string prefix,
+             std::optional<std::uint32_t> sampling_seed_base);
+
+  std::vector<std::uint64_t> seeds_;
+  std::uint32_t samples_;
+  std::string prefix_;
+  std::optional<std::uint32_t> sampling_seed_base_;
+};
 
 /// @brief Parse one `--header NAME=VALUE` and append it to @p headers.
 /// @return A message when `=` or the name is missing, or when the name is

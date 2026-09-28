@@ -12,7 +12,14 @@
 
 #include <nlohmann/json.hpp>
 
+#include <string>
+
 namespace pigpen::agent {
+
+/// @brief @p record as one compact line. Invalid UTF-8 anywhere in it is
+/// written as U+FFFD rather than thrown, so a bad byte from any source
+/// cannot abort a log or a worker record.
+[[nodiscard]] std::string dump_line(const nlohmann::json &record);
 
 /// @brief @p position in the logs' `{"x", "y"}` shape.
 [[nodiscard]] nlohmann::json position_json(world::Position position);

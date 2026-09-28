@@ -183,6 +183,22 @@ add_test(
 set_tests_properties(pigpen_worker_integration PROPERTIES TIMEOUT 90)
 
 if(UNIX)
+  # Raw non-UTF-8 argv bytes cannot be spelled portably, hence Python.
+  foreach(flavour IN ITEMS headless worker)
+    add_test(
+      NAME pigpen_${flavour}_rejects_invalid_utf8
+      COMMAND
+        "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/invalid_utf8_tests.py"
+        "$<TARGET_FILE:pig-pen-${flavour}>"
+        ${flavour}
+    )
+    set_tests_properties(
+      pigpen_${flavour}_rejects_invalid_utf8
+      PROPERTIES TIMEOUT 60
+    )
+  endforeach()
+
   foreach(signal IN ITEMS SIGINT SIGTERM)
     string(TOLOWER "${signal}" suffix)
     add_test(

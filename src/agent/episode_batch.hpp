@@ -54,8 +54,9 @@ struct BatchResult {
   std::size_t not_started{};
   /// A stop request was honoured.
   bool stopped{};
-  /// The factory's message when a job could not be started, which aborts
-  /// the batch; otherwise absent.
+  /// Why the batch was aborted, otherwise absent: the factory's message
+  /// when a job could not be started, or the message of an exception the
+  /// factory or an on_end threw.
   std::optional<std::string> error{};
   /// From the first step's time to the last step's.
   std::chrono::steady_clock::duration duration{};
@@ -87,6 +88,11 @@ inline constexpr std::chrono::milliseconds idle_pause{1};
 /// starts, and every live driver is stepped with a stop request, which
 /// cancels its episode cooperatively and waits for it to finish, so every
 /// started job is still reported. Jobs never started are only counted.
+///
+/// An exception from the factory counts as a factory failure, and one from
+/// an on_end aborts the batch the same way; that job counts as reported and
+/// its episode is still released, so nothing is reported twice. Exceptions
+/// from pumping an episode propagate to the caller.
 class EpisodeBatch final {
 public:
   using Clock = EpisodeDriver::Clock;

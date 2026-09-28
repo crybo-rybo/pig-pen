@@ -2,7 +2,8 @@
 
 Covers what the C++ suite cannot: parallel sessions over the real curl/HTTP
 path, the rollout and seed headers on every request, the JSONL records on
-stdout, per-episode logs, and exit codes 0, 2, 6, and 130/143.
+stdout, per-episode logs, and exit codes 0, 1 (stdout closed), 2, 6, and
+130/143.
 
 The stub is a ThreadingHTTPServer: a single-threaded one would serialise the
 worker's parallel sessions and hide scheduling bugs. It scripts each rollout
@@ -61,7 +62,8 @@ class Request:
     body: dict[str, Any]
 
 
-# A scripted reply: ("stream", bytes), ("status", code), or ("hang",).
+# A scripted reply: ("stream", bytes), ("status", code), ("hang",), or
+# ("gated", bytes), which streams once the stub's gate opens.
 Reply = tuple[Any, ...]
 Script = Callable[[str, int], Reply]
 
@@ -112,6 +114,7 @@ class StubServer(ThreadingHTTPServer):
         self.peak_rollouts = 0
         self.overlapped = threading.Event()
         self.release = threading.Event()
+        self.gate = threading.Event()
 
     def wait_for_rollouts(self, count: int, timeout: float) -> bool:
         with self.condition:
@@ -166,6 +169,8 @@ class StubHandler(BaseHTTPRequestHandler):
             self.server.release.wait(timeout=60)
             self.close_connection = True
             return
+        if kind == "gated":
+            self.server.gate.wait(timeout=60)
         if kind == "status":
             body = b'{"error":{"message":"scripted failure"}}'
             self.send_response(reply[1])
@@ -197,6 +202,7 @@ class Stub:
 
     def __exit__(self, *_: object) -> None:
         self.server.release.set()
+        self.server.gate.set()
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(timeout=5)
@@ -276,7 +282,7 @@ def test_parallel_batch(executable: str) -> None:
     """3 seeds x 2 samples, 3 in flight: headers, records, determinism."""
     seeds = [11, 12, 13]
     weights = DEFAULT_REWARD_WEIGHTS | {"invalid_call": -2.0}
-    with Stub(play_one_turn, overlap=2) as server:
+    with Stub(play_one_turn, overlap=3) as server:
         with tempfile.TemporaryDirectory(prefix="pigpen-worker-") as log_dir:
             completed = subprocess.run(
                 worker_command(
@@ -302,7 +308,9 @@ def test_parallel_batch(executable: str) -> None:
 
     output = f"stdout={completed.stdout}\nstderr={completed.stderr}"
     check(completed.returncode == 0, f"exit {completed.returncode}\n{output}")
-    check(peak >= 2, f"rollouts never overlapped (peak {peak})\n{output}")
+    # The stub held each first request until three rollouts were in flight:
+    # the cap was reached, and never exceeded.
+    check(peak == 3, f"expected 3 rollouts in flight at the peak, got {peak}")
     episodes, batch = split_records(parse_output(completed.stdout, output), output)
 
     expected_ids = {f"{PREFIX}/{seed}/{sample}" for seed in seeds for sample in (0, 1)}
@@ -410,7 +418,7 @@ def test_invalid_episodes_exit_6(executable: str) -> None:
                 executable,
                 server,
                 *("--seeds", "21-23", "--parallel", "3"),
-                *("--timeout-seconds", "2"),
+                *("--timeout-seconds", "5"),
             ),
             capture_output=True,
             text=True,
@@ -457,6 +465,78 @@ def test_invalid_episodes_exit_6(executable: str) -> None:
     check(subset(batch, expected_batch) == expected_batch, f"batch: {batch!r}")
     for line in ("rollout/21/0 invalid (error)", "rollout/22/0 invalid (timeout)"):
         check(line in completed.stderr, f"missing {line!r} on stderr\n{output}")
+
+
+def gated_script(rollout: str, index: int) -> Reply:
+    """Seed 41 plays at once, 42 once the gate opens, the rest never."""
+    seed = rollout.split("/")[1]
+    if seed == "41":
+        return play_one_turn(rollout, index)
+    if seed == "42":
+        return ("gated", MOVE_AND_EAT) if index == 0 else play_one_turn(rollout, 1)
+    return ("hang",)
+
+
+def test_closed_stdout_exits_1(executable: str) -> None:
+    """A consumer that closes stdout stops the batch cooperatively."""
+    with (
+        Stub(gated_script) as server,
+        tempfile.TemporaryDirectory(prefix="pigpen-worker-logs-") as log_dir,
+    ):
+        process = subprocess.Popen(
+            worker_command(
+                executable,
+                server,
+                *("--seeds", "41-44", "--parallel", "2"),
+                *("--timeout-seconds", "60", "--log-dir", log_dir),
+            ),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        watchdog = threading.Timer(45, process.kill)
+        watchdog.start()
+        try:
+            first = json.loads(process.stdout.readline())
+            check(first.get("rollout_id") == "rollout/41/0", f"first: {first!r}")
+            # 42 waits at the gate and 43 hangs: two episodes in flight.
+            check(server.wait_for_rollouts(3, timeout=15), "43 never started")
+            process.stdout.close()
+            server.gate.set()
+            stderr = process.stderr.read()
+            process.wait(timeout=30)
+        finally:
+            watchdog.cancel()
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+        logs = [
+            [json.loads(line) for line in path.read_text().splitlines()]
+            for path in pathlib.Path(log_dir).glob("*.jsonl")
+        ]
+        rollouts = set(server.counts)
+
+    check(process.returncode == 1, f"exit {process.returncode}\nstderr={stderr}")
+    check("output error" in stderr, f"no output diagnostic\nstderr={stderr}")
+    expected = {"rollout/41/0", "rollout/42/0", "rollout/43/0"}
+    check(rollouts == expected, f"44 must not start: {sorted(rollouts)}")
+    # Every started episode, including the one cancelled because stdout
+    # failed, still finished and wrote its footer.
+    footers = {records[0]["rollout_id"]: records[-1] for records in logs}
+    check(footers.keys() == expected, f"logs: {sorted(footers)}")
+    reasons = {
+        rollout: footer.get("finish_reason") for rollout, footer in footers.items()
+    }
+    check(
+        reasons
+        == {
+            "rollout/41/0": "turn_budget",
+            "rollout/42/0": "turn_budget",
+            "rollout/43/0": "stopped",
+        },
+        f"footers: {reasons!r}",
+    )
+    check(all(f.get("complete") is True for f in footers.values()), f"{footers!r}")
 
 
 def test_usage_errors_exit_2(executable: str) -> None:
@@ -535,6 +615,7 @@ def main() -> int:
     test_invalid_episodes_exit_6(executable)
     test_usage_errors_exit_2(executable)
     if os.name == "posix":
+        test_closed_stdout_exits_1(executable)
         for signal_number in (signal.SIGINT, signal.SIGTERM):
             test_signal_cancels_in_flight(executable, signal_number)
     return 0

@@ -65,6 +65,13 @@ TEST_CASE("GUI options populate startup configuration and reject bad input") {
   const std::array positional{"pig-model"sv};
   CHECK(pigpen::ui::parse_gui_options(positional).error() ==
         "unexpected positional argument: pig-model");
+  // Both values reach the log header, which must be valid JSON.
+  const std::array bad_model{"--model"sv, "pig\xff"sv};
+  CHECK(pigpen::ui::parse_gui_options(bad_model).error() ==
+        "--model must be valid UTF-8");
+  const std::array bad_base_url{"--base-url=http://h\xc3/v1"sv};
+  CHECK(pigpen::ui::parse_gui_options(bad_base_url).error() ==
+        "--base-url must be valid UTF-8");
   // The episode flags belong to the Controls panel, not the command line.
   const std::array turns{"--turns"sv, "4"sv};
   CHECK(pigpen::ui::parse_gui_options(turns).error() ==

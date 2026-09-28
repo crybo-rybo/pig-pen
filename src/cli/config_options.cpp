@@ -76,8 +76,14 @@ ParseResult validate_config_options(const agent::Config &config,
   if (config.base_url.empty()) {
     return std::unexpected("--base-url cannot be empty");
   }
+  if (auto valid = require_utf8("--base-url", config.base_url); !valid) {
+    return valid;
+  }
   if (config.model.empty()) {
     return std::unexpected("--model is required");
+  }
+  if (auto valid = require_utf8("--model", config.model); !valid) {
+    return valid;
   }
   if (options.log_directory && options.log_directory->empty()) {
     return std::unexpected("--log-dir cannot be empty");
@@ -85,7 +91,7 @@ ParseResult validate_config_options(const agent::Config &config,
   if (options.prompt_variant.empty()) {
     return std::unexpected("--prompt-variant cannot be empty");
   }
-  return {};
+  return require_utf8("--prompt-variant", options.prompt_variant);
 }
 
 } // namespace pigpen::cli

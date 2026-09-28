@@ -334,3 +334,27 @@ TEST_CASE("the header and the worker's episode record share one Config "
   std::error_code ignored;
   std::filesystem::remove_all(directory, ignored);
 }
+
+TEST_CASE("a log survives text that is not UTF-8") {
+  const auto directory = test_directory();
+  pigpen::agent::Config config;
+  config.model = "pig\xff";
+  auto created =
+      pigpen::agent::MetricsWriter::create(directory, config, "variant\xc3");
+  REQUIRE(created.has_value());
+  const auto path = (*created)->path();
+  REQUIRE((*created)->record_turn({
+      .record = {.turn = 1, .assistant_text = "said \xff"},
+  }));
+  created->reset();
+
+  const auto records = read_records(path);
+  REQUIRE(records.size() == 3);
+  CHECK(records[0].at("model") == "pig\xef\xbf\xbd");
+  CHECK(records[0].at("prompt_variant") == "variant\xef\xbf\xbd");
+  CHECK(records[1].at("assistant_text") == "said \xef\xbf\xbd");
+  CHECK(records[2].at("finish_reason") == "abandoned");
+
+  std::error_code ignored;
+  std::filesystem::remove_all(directory, ignored);
+}

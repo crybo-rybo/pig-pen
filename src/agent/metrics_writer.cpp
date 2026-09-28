@@ -85,7 +85,7 @@ write_raw_line(std::ofstream &stream, const std::filesystem::path &path,
 [[nodiscard]] std::expected<void, std::string>
 write_line(std::ofstream &stream, const std::filesystem::path &path,
            const nlohmann::json &record) {
-  return write_raw_line(stream, path, record.dump());
+  return write_raw_line(stream, path, dump_line(record));
 }
 
 /// @brief Stable lowercase name recorded in turn lines.

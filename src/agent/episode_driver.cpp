@@ -35,6 +35,9 @@ std::optional<DriveOutcome> EpisodeDriver::step(const Clock::time_point now,
   }
   if (stop_requested && !interrupted_) {
     interrupted_ = true;
+    // Only a stop that precedes any timeout waits without limit; one that
+    // arrives during the grace period keeps the grace deadline.
+    waits_without_limit_ = !timed_out_;
     static_cast<void>(episode_.stop());
   }
 
@@ -57,9 +60,10 @@ std::optional<DriveOutcome> EpisodeDriver::step(const Clock::time_point now,
         observers_.on_timeout();
       }
       static_cast<void>(episode_.stop());
-    } else if (!interrupted_) {
-      // A requested stop waits for its footer indefinitely; a timeout alone
-      // gives up so the caller stays scriptable.
+    } else if (!waits_without_limit_) {
+      // A stop requested first waits for its footer indefinitely; a timeout
+      // gives up after the grace period so the caller stays scriptable, even
+      // if a stop request arrives during it.
       outcome_ = DriveOutcome::cancellation_stalled;
     }
   }
