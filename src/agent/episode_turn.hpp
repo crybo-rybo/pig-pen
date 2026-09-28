@@ -15,7 +15,7 @@ namespace pigpen::agent {
 struct TurnCallTally {
   /// Decoded, admitted, ran a world action (TurnRecord::tool_calls).
   std::uint32_t executed{};
-  /// Unknown tool or schema-rejected arguments.
+  /// Admitted, but an unknown tool or schema-rejected arguments.
   std::uint32_t invalid{};
   /// Past max_world_tool_calls_per_turn.
   std::uint32_t budget_refused{};
@@ -36,8 +36,8 @@ struct EpisodeTurn {
 ///
 /// Scry counts every request it dispatched in TurnToolStats::calls and the
 /// subset refused before a handler ran (the per-turn limit, then the host's
-/// admission hook) in TurnToolStats::rejected_calls. Unknown tools and
-/// undecodable arguments are neither refused nor executed. So:
+/// admission hook) in TurnToolStats::rejected_calls. Once admitted, unknown
+/// tools and undecodable arguments are neither refused nor executed. So:
 /// invalid = calls - rejected_calls - executed and
 /// budget_refused = rejected_calls - host_refused.
 /// @param host_refused_calls Refusals the admission hook returned this turn.

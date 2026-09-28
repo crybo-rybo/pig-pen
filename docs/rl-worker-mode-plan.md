@@ -107,7 +107,7 @@ These are folded into one struct attached to each retained turn:
 /// TurnToolStats::calls. Absent when scry produced no Completion.
 struct TurnCallTally {
   std::uint32_t executed{};        // decoded, admitted, ran a world action
-  std::uint32_t invalid{};         // unknown tool or schema-rejected arguments
+  std::uint32_t invalid{};         // admitted, but unknown tool or bad arguments
   std::uint32_t budget_refused{};  // past max_world_tool_calls_per_turn
   std::uint32_t host_refused{};    // refused by admit(): objective done / log failed
 };
@@ -255,7 +255,8 @@ stdout and JSONL assertions stay untouched).
 ### Phase 0: episode facts
 
 Goal: `Session` becomes the single source of everything a summary or reward
-needs. No new behaviour visible to users except two additive log fields.
+needs. No new behaviour visible to users except one additive log field (`calls` on
+turn records).
 
 - `World::observed_count()`.
 - `WorldToolBinding`: count `admit()` refusals per turn; expose and reset

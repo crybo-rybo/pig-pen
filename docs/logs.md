@@ -99,7 +99,7 @@ counts always sum to it:
 | key | meaning | derived as |
 |---|---|---|
 | `executed` | decoded, admitted, and ran a world action | `tool_calls` |
-| `invalid` | unknown tool or schema-rejected arguments | `calls − rejected_calls − executed` |
+| `invalid` | admitted, but an unknown tool or schema-rejected arguments | `calls − rejected_calls − executed` |
 | `budget_refused` | past the four-request limit, checked before admission | `rejected_calls − host_refused` |
 | `host_refused` | refused by Pig Pen's admission hook after the objective was completed or the log failed | counted by Pig Pen |
 
