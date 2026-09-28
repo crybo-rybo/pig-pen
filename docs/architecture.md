@@ -6,11 +6,12 @@ is testable without a window or a model server.
 
 ```
 src/app/main.cpp          src/app/headless_main.cpp       src/app/worker_main.cpp
-  SDL3 + ImGui frame loop   eval CLI: one episode,          RL worker: seeds × samples,
-                            transcript, exit codes          P in flight, JSONL records
+  SDL3 + ImGui frame loop   eval CLI: one episode,          RL worker: seeds × samples
+                            transcript, exit codes          or stdin jobs, P in flight,
+                                                            JSONL records
         │                         │                               │
    src/ui/  AppUi,           src/cli/  OptionParser, shared Config flags,
-   WorldAnimation            TerminationSignal, worker job expansion
+   WorldAnimation            TerminationSignal, worker jobs, LineReader
    (GUI options via src/cli)      │                               │
         │                         │                     agent::EpisodeBatch
         │                         │                       job queue, P drivers
@@ -58,10 +59,11 @@ serialisation used for determinism tests. Details in [World and tools](world.md)
 | `episode_turn.cpp` | `EpisodeTurn` (a `TurnRecord` plus its optional `TurnCallTally`) and the pure `tally_turn_calls()` that splits Scry's call count into executed, invalid, budget-refused, and host-refused |
 | `reward.cpp` | `RewardWeights`, `EpisodeFacts`, and the pure `compute_reward()` returning a `RewardBreakdown` (validity, raw counts, per-term contributions); `parse_reward_weight()` for `NAME=VALUE` overrides. No scry, JSON, or `Session` |
 | `episode_summary.cpp` | `episode_facts()` and `summarize_episode()`: an episode's outcome (finish reason, turns, score, items eaten, tool counts, summed call tally, duration, reward) from a world, activity feed, turns, and runner snapshot, or from a `Session` |
-| `summary_json.cpp` | `to_json_line()`, the only serialisation of a summary, its reward, and its weights, and of the worker's `EpisodeRecord` (the summary plus seed, sample, and `Config`) and `BatchRecord`. `record_json.hpp`, internal to `pigpen_agent`, shares `config_json()` so the log header and the worker record write `Config` one way |
+| `summary_json.cpp` | `to_json_line()`, the only serialisation of a summary, its reward, and its weights, and of the worker's `EpisodeRecord` (the summary plus seed, sample, and `Config`), `BatchRecord`, and `JobErrorRecord`. `record_json.hpp`, internal to `pigpen_agent`, shares `config_json()` so the log header and the worker record write `Config` one way |
+| `job_spec.cpp` | `parse_job_spec()`: one `--jobs -` line into a plain `JobSpec` (seed, optional sample, rollout id, and sampling seed), rejecting anything else with a message; it lives here only because nlohmann/json does. Defaults and uniqueness are the worker's |
 | `metrics_writer.cpp` | JSONL header/tool/turn/footer; a finished episode's footer is its serialised summary, and a footer is guaranteed even on abnormal shutdown |
 | `episode_driver.cpp` | `IDrivableEpisode` (`pump`, `finished`, `stop`) and `EpisodeDriver`, the one copy of the drive-to-completion policy: overall deadline, cooperative cancellation, the 15 s grace, and a stop request that waits without limit unless a timeout's grace period is already running. Time is a parameter, so it is tested with a fake episode |
-| `episode_batch.cpp` | `EpisodeBatch`: jobs by index, a `std::function` factory that turns a job into a `BatchEntry` (an owned `IDrivableEpisode` plus its `on_end` report), and up to P `EpisodeDriver`s pumped round-robin on one thread. Reports come exactly once, in completion order, while the episode is alive; a stop request or a factory failure stops starting jobs and cancels every live one. `run()` takes the clock and the idle sleep, so it is tested with fakes |
+| `episode_batch.cpp` | `EpisodeBatch`: jobs by index, either a known count or a job source asked only while a slot is free (`ready`, `pending`, or `exhausted`, so a stream is pulled lazily), a `std::function` factory that turns a job into a `BatchEntry` (an owned `IDrivableEpisode` plus its `on_end` report), and up to P `EpisodeDriver`s pumped round-robin on one thread. Reports come exactly once, in completion order, while the episode is alive; a stop request or a factory failure stops starting jobs and cancels every live one. `run()` takes the clock and the idle sleep, so it is tested with fakes |
 | `session.cpp` | composes all of the above into one owned object, and implements `IDrivableEpisode` |
 
 Three seams make this testable. `ITurnTransport` lets `EpisodeRunner` be driven
@@ -170,8 +172,12 @@ episode stuck in cancellation cannot hold the process forever. The outcomes are 
 sleeps or reads a clock, so one thread can drive several episodes.
 
 `EpisodeBatch` is that one thread's loop for the worker: each pass starts
-queued jobs while fewer than P episodes are live, then steps every live
-driver once. A finished drive is reported, then its driver and session are
+jobs while fewer than P episodes are live and its job source has one ready,
+then steps every live driver once. With `--jobs -` the source is stdin: a
+`LineReader` thread does the only blocking read and queues lines, and the
+source takes them without waiting, so a quiet stdin never stalls live
+episodes; a pending source counts as no progress, so the batch idles as
+usual, and an exhausted one ends the batch once the live episodes finish. A finished drive is reported, then its driver and session are
 destroyed (driver first, since it borrows the episode), which finalises any
 log and releases the harness before the next job starts. `run()` sleeps
 1 ms only after a pass in which no job started, no drive ended, and every
@@ -185,6 +191,12 @@ batch the same way, and the slot is released regardless, so nothing is
 reported twice. The worker also ignores `SIGPIPE` and treats a failed stdout
 write as a stop request, so a closed pipe still cancels cooperatively.
 
+The pump budget and per-job session creation were measured rather than
+made configurable: with 128 sessions against an instant loopback server the
+pump thread is under 20 % busy and the worst pass is about 13 ms, and a
+session costs about 0.3 ms to create and destroy. The numbers are in
+[Training](training.md#performance-notes).
+
 ## `src/ui` — the ImGui layer
 
 `AppUi` owns the `shared_ptr<Session>`, the control widgets, and the panel
@@ -197,8 +209,9 @@ why `tests/world_animation_tests.cpp` can test animation without a window —
 
 ## `src/cli` — shared command-line plumbing
 
-`pigpen_cli` holds what every command line needs and nothing that needs scry
-or JSON. `OptionParser` is table-driven: `flag`, `text`, `integer`, `real`, and
+`pigpen_cli` holds what every command line needs and compiles against
+neither scry nor a JSON library (job lines are parsed by `pigpen_agent`'s
+`parse_job_spec()`). `OptionParser` is table-driven: `flag`, `text`, `integer`, `real`, and
 free-form `value` registrations bind an option to the variable it fills, accept
 `--option value` and `--option=value`, report every problem in one fixed
 wording, and generate the help text. `add_config_options()` registers every
@@ -208,8 +221,13 @@ parse can leave empty. `TerminationSignal` installs the `SIGINT`/`SIGTERM`
 handlers, which only write a `volatile sig_atomic_t` for the loop to poll.
 `worker_jobs.cpp` is the worker's pure job arithmetic: `--seeds` lists and
 ranges, seed-major expansion into `WorkerJob`s with rollout ids and sampling
-seeds, and `--header` parsing that keeps `X-Pigpen-Rollout` and
-`X-Pigpen-Seed` for the worker. A front end that chooses world seeds itself
+seeds, `--header` parsing that keeps `X-Pigpen-Rollout` and
+`X-Pigpen-Seed` for the worker, and `JobStream`, which turns `--jobs -`
+lines into jobs (defaults, rollout-id checks, and uniqueness across the
+stream). `LineReader` reads lines on its own thread and queues them for a
+pump loop to poll; the worker gives it standard input through the operating
+system's read call rather than stdio, so a read still blocked when the
+process exits holds no lock that exit needs. A front end that chooses world seeds itself
 registers the shared flags without `--seed` and points `--seed` at its own
 flag with `OptionParser::rejected()`.
 
@@ -220,8 +238,9 @@ flag with `OptionParser::rejected()`.
 `--timeout-seconds`, `--input`, `--help`), incremental printing of the
 transcript and activity feed, a `while (!driver.step(...))` loop, and the
 exit-code policy described in [Running](running.md#exit-codes).
-`worker_main.cpp` is the usage text, the worker's own options, the factory
-that turns a job into a `Session` (world seed, sampling seed, rollout id, and
+`worker_main.cpp` is the usage text, the worker's own options, where jobs
+come from (the command line's seeds × samples or stdin), the factory that
+turns a job into a `Session` (world seed, sampling seed, rollout id, and
 the `X-Pigpen-Seed` header), the records on stdout, and the exit-code policy
 described in [Training](training.md#exit-codes). All three read
 `PIGPEN_API_KEY` and pass it to the session.
@@ -238,7 +257,7 @@ translation unit (and `pigpen_reflection_tests`, which links scry directly)
 compiles with it, while `pigpen_world`, `pigpen_cli`, `pigpen_ui`, and all
 three entry points stay reflection-free: they include only scry-free agent headers,
 and a private link dependency of a static library is link-only. nlohmann/json is likewise private to `pigpen_agent`, used
-only by the metrics writer and `summary_json.cpp` (through the internal
-`record_json.hpp`). The `pigpen_target()` helper applies C++26 and the warning flags to
+only by the metrics writer, `summary_json.cpp` (through the internal
+`record_json.hpp`), and `job_spec.cpp`. The `pigpen_target()` helper applies C++26 and the warning flags to
 pig-pen's own targets only; fetched dependencies are `SYSTEM`. See
 [Building](building.md).

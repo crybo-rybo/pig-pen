@@ -1,7 +1,10 @@
 # Plan: RL worker mode
 
-Status: phases 0 (episode facts), 1 (reward and summary), 2 (the seams),
-and 3 (`pig-pen-worker`) are implemented; phase 4 is a proposal.
+Status: every phase is implemented: 0 (episode facts), 1 (reward and
+summary), 2 (the seams), 3 (`pig-pen-worker`), and 4 (follow-ups). Phase 4
+added `--jobs -` and the reference rollout consumer; its two conditional
+items were measured and deliberately not built, because the measurements
+did not call for them (see [Phase 4](#phase-4-optional-follow-ups)).
 
 Pig Pen today runs one episode at a time under a front end that owns the pump
 loop (the GUI once per frame, `pig-pen-headless` in a sleep-1 ms loop) and
@@ -237,7 +240,8 @@ Sessions are created per job. Harness creation starts a worker thread and
 initialises libcurl, which is milliseconds against episodes that take seconds
 of inference; reusing a harness across episodes would also mean rebinding the
 tool registry's captured world, so it is not worth doing until profiling says
-otherwise (§6).
+otherwise (§6). Phase 4 profiled it: about 0.3 ms per episode to create and
+destroy a session, so sessions stay per job.
 
 ### 3.4 Train/eval discipline
 
@@ -340,12 +344,36 @@ turn records).
 
 - `--jobs -`: read job specs (`{"seed":..,"sample":..,"rollout_id":..}`) as
   JSONL from stdin so a trainer can drive a long-lived worker without
-  respawning.
+  respawning. **Done.** `seed` is required; `sample` defaults to 0,
+  `rollout_id` to `<prefix>/<seed>/<sample>` (visible ASCII, unique within
+  the stream), and an optional `sampling_seed` (number or null) overrides
+  `--sampling-seed`; unknown keys are rejected. `--jobs -` excludes
+  `--seeds`, `--samples`, and `--sampling-seed-base`. A malformed line
+  gets a `job_error` record (`line`, `error`) on stdout, is counted in the
+  batch record's new `job_errors`, and makes the exit code 6; the worker
+  keeps going. `EpisodeBatch` gained a job source (`ready`, `pending`,
+  `exhausted`), asked only while a slot is free, so jobs are pulled lazily;
+  a `LineReader` thread does the only blocking read (with the OS read call,
+  not stdio, whose lock would otherwise block exit on a signal) and the
+  pump thread polls its queue. JSON parsing is `agent::parse_job_spec()`,
+  behind a plain struct, since nlohmann stays private to `pigpen_agent`.
 - A tiny reference consumer (`examples/rollout_consumer.py`) showing how a
   server-side request log keyed by `X-Pigpen-Rollout` joins with worker
-  records.
+  records. **Done**, standard library only: it joins records with a JSONL
+  request log into (trajectory, reward) pairs, drops invalid rewards and
+  unmatched rollouts, and computes seed-group advantages. It is run by
+  `tests/rollout_consumer_tests.py` (including against a real worker
+  batch), and ruff covers `examples/` in the justfile and CI.
 - `Session::pump()` budget parameters if P sessions × 2 ms ever matters.
+  **Measured; not added.** Against an instant loopback server, a pass over
+  32 sessions takes 0.07–0.13 ms at p50 and at most 5 ms, and over 128
+  sessions at most 13 ms with the pump thread under 20 % busy: the budget
+  only binds on a backlog, and the added latency is negligible next to
+  inference. Numbers in [Training](training.md#performance-notes).
 - Harness reuse across episodes, only if profiling shows creation cost.
+  **Measured; not added.** Creating a session takes about 0.06–0.13 ms and
+  destroying one after an episode about 0.2 ms, under 1 % of even a
+  one-turn episode against the loopback stub.
 
 ## 5. Testing strategy
 

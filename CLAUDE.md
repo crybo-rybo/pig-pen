@@ -13,8 +13,9 @@ Detailed docs live in `docs/` — consult them before re-deriving anything:
 `building.md` (prerequisites, presets, CMake options, local scry override),
 `testing.md` (what the suite covers, manual real-model check), `world.md`
 (rules, tool schemas, call budget and round limit, reward), `logs.md`,
-`running.md`, `training.md` (the worker: flags, records, exit codes, seed
-discipline), and `architecture.md` (layers and ownership).
+`running.md`, `training.md` (the worker: flags, `--jobs -`, records, exit
+codes, seed discipline, joining rollouts, performance notes), and
+`architecture.md` (layers and ownership).
 
 ## Build & test
 
@@ -29,9 +30,9 @@ just run dev --model NAME  # build + launch GUI
 just run-headless dev --model NAME --turns 4 --seed 42
 just run-worker dev --model NAME --seeds 1-4 --samples 2 --parallel 2
 just ci                    # everything GitHub runs on a PR: fmt-check + lint + dev/release/headless builds & tests
-just fmt                   # clang-format all C++ + ruff format the Python tests
+just fmt                   # clang-format all C++ + ruff format the Python tests and examples
 just fmt-check             # the CI format check
-just lint                  # ruff check on the Python tests
+just lint                  # ruff check on the Python tests and examples
 ```
 
 Gotcha: `run`/`run-headless`/`run-worker` take the preset as the **first**
@@ -101,15 +102,17 @@ Key invariants to preserve:
 - **Three test seams**: `ITurnTransport` lets `EpisodeRunner` be driven by a
   scripted transport; `WorldTools` accepts/returns only reflected C++ values;
   `IDrivableEpisode` lets `EpisodeDriver` and `EpisodeBatch` be driven by
-  fake episodes (the batch through a `std::function` factory).
+  fake episodes (the batch through a `std::function` factory and, for
+  streamed jobs, a `JobSource` answering ready / pending / exhausted).
   New agent-layer code should stay testable through one of these.
-- **Records have one serialisation.** Footer, worker `episode` record, and
-  worker `batch` record all come from `summary_json.cpp`; the log header and
+- **Records have one serialisation.** Footer, worker `episode` record,
+  worker `batch` record, and `job_error` record all come from
+  `summary_json.cpp`; the log header and
   the episode record's `config` share `config_json()` via the internal
   `record_json.hpp` (nlohmann stays private to `pigpen_agent`). Worker stdout
   is pure JSONL, one flushed line per record, diagnostics on stderr. A worker
   timeout forces the reward invalid with reason `timeout`. Worker exit codes:
-  0 all valid, 6 some invalid, 1 a session could not be created (batch
+  0 all valid, 6 some invalid or a job line rejected, 1 a session could not be created (batch
   aborted, in-flight episodes still reported; also a failed stdout, which
   is a stop request, with `SIGPIPE` ignored), 2 usage, 130/143 signal.
   User text that reaches JSON is checked for UTF-8 at the CLI boundary
@@ -123,6 +126,12 @@ Key invariants to preserve:
 - `Config::sampling_seed` maps to scry's `SamplingConfig::seed` (sent as the
   OpenAI-compatible `seed` only when set). It is independent of the world
   `seed`, 32-bit by scry's contract, and best-effort on the server side.
+- The worker's `--jobs -` reads stdin on a `LineReader` thread with the OS
+  read call (never stdio, whose lock would block exit); the pump thread only
+  polls it through `EpisodeBatch`'s job source and must never block on input.
+- `examples/rollout_consumer.py` is a stdlib-only reference kept under test
+  (`tests/rollout_consumer_tests.py`); keep it in step with the worker's
+  record format.
 - The three scenario flags (`--hidden-values`, `--no-reward-feedback`,
   `--opaque-look`) change only what the model is told — the world, scoring,
   and log always record the truth.

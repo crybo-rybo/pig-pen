@@ -14,7 +14,7 @@ Three front ends share the same world, prompt, tools, episode runner, and logger
 |---|---|
 | `pig-pen` | Dear ImGui desktop app — grid, animation, transcript, event log, controls |
 | `pig-pen-headless` | scriptable CLI that runs one bounded episode and exits |
-| `pig-pen-worker` | RL rollout worker: plays seeds × samples episodes in parallel against a trainer's server and prints one reward record per episode |
+| `pig-pen-worker` | RL rollout worker: plays seeds × samples episodes (or jobs streamed on stdin) in parallel against a trainer's server and prints one reward record per episode |
 
 ## The pen
 

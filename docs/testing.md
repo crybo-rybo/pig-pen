@@ -38,13 +38,14 @@ covering:
 | `tests/prompt_tests.cpp` | config defaults and that each prompt flag says what it claims — including hidden rewards and keeping automatic recovery instructions separate from human guidance |
 | `tests/episode_turn_tests.cpp` | the call tally arithmetic on plain records, its absence without Scry statistics, and its refusal to fabricate a tally from inconsistent counts |
 | `tests/reward_tests.cpp` | the default weights, each reward term in isolation, the total as the sum of terms, validity for every finish reason (and an unfinished episode), and `NAME=VALUE` weight parsing with each error |
-| `tests/episode_summary_tests.cpp` | reward facts and summaries built from a plain world, activity feed, turns, and snapshot (no `Session`), the summary's single JSON serialisation with valid, invalid, and unfinished rewards, the worker's `episode` record (exactly the summary's line plus seed, sample, sampling seed, and `config`) and `batch` record, and that no record throws on text that is not UTF-8 (it is written as U+FFFD) |
+| `tests/episode_summary_tests.cpp` | reward facts and summaries built from a plain world, activity feed, turns, and snapshot (no `Session`), the summary's single JSON serialisation with valid, invalid, and unfinished rewards, the worker's `episode` record (exactly the summary's line plus seed, sample, sampling seed, and `config`), `batch` record (including `job_errors`), and `job_error` record, and that no record throws on text that is not UTF-8 (it is written as U+FFFD) |
 | `tests/episode_runner_tests.cpp` | the turn loop against a scripted transport: budget exhaustion, pause/resume, stop cancelling an in-flight turn, objective completion, terminal/logging errors, and queued human input |
 | `tests/metrics_writer_tests.cpp` | header/tool/turn/footer reconciliation, the turn `calls` tally as an object or `null`, the footer's `calls`, `reward`, `reward_version`, `reward_weights`, and `rollout_id`, the incomplete footer on destruction, footer finality, that the header's Config fields are exactly the worker record's `config`, and that a log survives text that is not UTF-8 |
 | `tests/session_tests.cpp` | config rejection, request-header rejection (Scry-managed names, malformed names and values, and the reserved `X-Pigpen-Rollout`) before any log is opened, that a session owns a seeded world plus a registered tool harness atomically, starting with no retained turns, the header's `rollout_id`, that its summary, duration, and footer use the reward weights it was created with, and that a session without a log directory writes nothing yet still summarises itself |
 | `tests/episode_driver_tests.cpp` | `EpisodeDriver` against a fake episode with hand-driven time: finishing on its own, the deadline measured from the first step, a timeout whose cancellation finishes within the 15 s grace, a stalled cancellation, a stop request before the first pump waiting without limit, a stop request during the grace period keeping the grace deadline (stalling, or `interrupted` when the episode finishes in time), and idleness |
-| `tests/episode_batch_tests.cpp` | `EpisodeBatch` against a fake episode factory with hand-driven time: start order and the parallel cap, reports in completion order exactly once while the episode is alive (and destruction right after), a per-episode deadline from each episode's first step, a stalled cancellation reported before the batch moves on, a stop request cancelling every live episode once and starting nothing more (never-started jobs are only counted), a stop winning over a timeout, factory failures aborting the batch the same way, a throwing factory or report aborting it without a double report, and `run()` sleeping 1 ms only after a pass without progress |
-| `tests/worker_jobs_tests.cpp` | the worker's `--seeds` lists and ranges with each diagnostic and the job cap, rollout prefixes, seed-major jobs built on demand from their index (rollout ids and sampling seeds, including the 32-bit ceiling and a full-size batch), duplicate seeds, `--header` parsing with the worker's reserved names, and `OptionParser::rejected()` |
+| `tests/episode_batch_tests.cpp` | `EpisodeBatch` against a fake episode factory with hand-driven time: start order and the parallel cap, reports in completion order exactly once while the episode is alive (and destruction right after), a per-episode deadline from each episode's first step, a stalled cancellation reported before the batch moves on, a stop request cancelling every live episode once and starting nothing more (never-started jobs are only counted), a stop winning over a timeout, factory failures aborting the batch the same way, a throwing factory or report aborting it without a double report, and `run()` sleeping 1 ms only after a pass without progress; with a job source, jobs pulled only while a slot is free, idling while the source is pending, ending once it is exhausted and live episodes finish, a stop while waiting for input, and a throwing source aborting the batch |
+| `tests/worker_jobs_tests.cpp` | the worker's `--seeds` lists and ranges with each diagnostic and the job cap, rollout prefixes, seed-major jobs built on demand from their index (rollout ids and sampling seeds, including the 32-bit ceiling and a full-size batch), duplicate seeds, `--header` parsing with the worker's reserved names, `OptionParser::rejected()`, `--jobs -` job lines (every field, `null` sampling seeds, and each rejection with its message), and `JobStream`'s defaults, rollout-id checks, and uniqueness naming the earlier line |
+| `tests/line_reader_tests.cpp` | `LineReader` over scripted byte sources: lines split across reads of any size, `\r` kept, blank lines numbered, a last line without a terminator, over-long lines truncated and flagged, the queue capacity holding the source back, a throwing source ending the input, and destruction while a read is blocked |
 | `tests/cli_options_tests.cpp` | the shared `OptionParser` (both value syntaxes for flag, text, integer, real, and free-form options, and each diagnostic's exact text), UTF-8 validation (truncated, overlong, surrogate, and out-of-range sequences), the shared Config flags (with or without `--seed`) and their validation order including the UTF-8 checks, the generated help (including every reward weight name), and `TerminationSignal` |
 | `tests/world_animation_tests.cpp` | the typed activity feed becoming an ordered visual timeline, with caller-supplied time |
 | `tests/gui_options_tests.cpp` | GUI startup parsing for model, endpoint, and reward arguments, including both value syntaxes, the GUI's refusal of an empty or non-UTF-8 model or endpoint, and its help text |
@@ -86,15 +87,31 @@ covering:
   diagnostic, no further job started, and every started episode's log ending
   in a complete footer), and `SIGINT` and `SIGTERM` while two rollouts are in
   flight (two `stopped` records, an `interrupted` batch record with two jobs
-  not started, exit 130 / 143)
+  not started, exit 130 / 143). With `--jobs -`: job lines on stdin with
+  defaults, an explicit rollout id, per-job and `null` sampling seeds (which
+  fall back to `--sampling-seed`), a blank line, and four rejected lines
+  (invalid JSON, a repeated rollout id, an unknown key, an over-long line),
+  asserting the `job_error` records with their line numbers, the headers and
+  request bodies, the batch record's `job_errors`, and exit 6; a producer that
+  writes one job, waits for its record while stdin stays open, then writes the
+  next (the worker is long-lived and does not wait for end of input); and, on
+  UNIX, `SIGINT` while the worker waits on an open stdin (exit 130, an
+  `interrupted` batch record)
 - `pigpen_worker_help`, and `pigpen_worker_requires_model`, `_requires_seeds`,
   `_rejects_world_seed_flag`, `_rejects_malformed_seeds`,
   `_rejects_descending_seed_range`, `_rejects_duplicate_seed`,
   `_rejects_zero_samples`, `_rejects_zero_parallel`,
   `_rejects_sampling_seed_overflow`, `_rejects_two_sampling_seeds`,
-  `_rejects_bad_rollout_prefix`, `_rejects_reserved_header`, and
-  `_rejects_unknown_reward_weight` — each passes only if the worker prints
-  the matching option diagnostic
+  `_rejects_bad_rollout_prefix`, `_rejects_reserved_header`,
+  `_rejects_unknown_reward_weight`, `_rejects_jobs_with_seeds`,
+  `_rejects_jobs_with_samples`, and `_rejects_jobs_file` — each passes only
+  if the worker prints the matching option diagnostic
+- `pigpen_rollout_consumer` — `tests/rollout_consumer_tests.py` runs
+  `examples/rollout_consumer.py` on canned worker records and a canned
+  request log (every drop reason, trajectory order, plain and normalised
+  group advantages, the stderr summary), through a fake worker command
+  (including a failing one), and on a real `pig-pen-worker` batch joined
+  against the requests the threaded loopback stub logged
 - `pigpen_headless_rejects_invalid_utf8` / `pigpen_worker_rejects_invalid_utf8`
   (UNIX) — `tests/invalid_utf8_tests.py` passes raw non-UTF-8 bytes for
   `--model`, `--base-url`, `--prompt-variant` (and the headless `--input`)
