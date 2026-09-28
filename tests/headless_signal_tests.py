@@ -10,9 +10,10 @@ import socket
 import subprocess
 import sys
 import tempfile
+from typing import NoReturn
 
 
-def fail(message: str, process: subprocess.Popen[str] | None = None) -> None:
+def fail(message: str, process: subprocess.Popen[str] | None = None) -> NoReturn:
     if process is not None and process.poll() is None:
         process.kill()
         process.communicate()
@@ -22,17 +23,14 @@ def fail(message: str, process: subprocess.Popen[str] | None = None) -> None:
 def main() -> int:
     if len(sys.argv) != 3:
         raise RuntimeError(
-            "usage: headless_signal_test.py PIGPEN_HEADLESS SIGINT|SIGTERM"
+            "usage: headless_signal_tests.py PIGPEN_HEADLESS SIGINT|SIGTERM"
         )
 
     executable = pathlib.Path(sys.argv[1])
     signal_number = getattr(signal, sys.argv[2])
     expected_exit = 128 + signal_number
 
-    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    listener.bind(("127.0.0.1", 0))
-    listener.listen(1)
+    listener = socket.create_server(("127.0.0.1", 0))
     listener.settimeout(10)
     port = listener.getsockname()[1]
     expected_model = "registry.example/pig-model:Q4_K_M"
@@ -61,11 +59,11 @@ def main() -> int:
         try:
             connection, _ = listener.accept()
         except TimeoutError as error:
-            stdout, stderr = process.communicate(timeout=2)
+            process.kill()
+            stdout, stderr = process.communicate()
             fail(
                 f"headless process never connected: {error}\nstdout={stdout}\n"
-                f"stderr={stderr}",
-                process,
+                f"stderr={stderr}"
             )
 
         # Read far enough to prove that --model reached the server byte-for-byte,

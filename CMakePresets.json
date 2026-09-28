@@ -2,7 +2,7 @@
   "version": 6,
   "cmakeMinimumRequired": {
     "major": 3,
-    "minor": 28,
+    "minor": 31,
     "patch": 0
   },
   "configurePresets": [
@@ -21,7 +21,7 @@
     {
       "name": "dev",
       "displayName": "Development",
-      "description": "GCC 16 C++26 reflection build with tests, GUI, and warnings as errors",
+      "description": "Debug build with GUI and tests",
       "inherits": "base",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug"
@@ -30,7 +30,7 @@
     {
       "name": "release",
       "displayName": "Release",
-      "description": "Optimized GCC 16 C++26 reflection build with tests, GUI, and warnings as errors",
+      "description": "Release build with GUI and tests",
       "inherits": "base",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release"
@@ -39,7 +39,7 @@
     {
       "name": "headless",
       "displayName": "Headless only",
-      "description": "Debug build with tests and no SDL3/ImGui/OpenGL",
+      "description": "Debug build with tests and no GUI",
       "inherits": "base",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
@@ -63,25 +63,29 @@
   ],
   "testPresets": [
     {
-      "name": "dev",
-      "configurePreset": "dev",
+      "name": "base",
+      "hidden": true,
       "output": {
         "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
       }
+    },
+    {
+      "name": "dev",
+      "inherits": "base",
+      "configurePreset": "dev"
     },
     {
       "name": "release",
-      "configurePreset": "release",
-      "output": {
-        "outputOnFailure": true
-      }
+      "inherits": "base",
+      "configurePreset": "release"
     },
     {
       "name": "headless",
-      "configurePreset": "headless",
-      "output": {
-        "outputOnFailure": true
-      }
+      "inherits": "base",
+      "configurePreset": "headless"
     }
   ]
 }

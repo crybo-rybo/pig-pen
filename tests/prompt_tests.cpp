@@ -9,15 +9,6 @@
 
 #include <string>
 
-namespace {
-
-[[nodiscard]] bool contains(const std::string &text,
-                            const std::string &needle) {
-  return text.find(needle) != std::string::npos;
-}
-
-} // namespace
-
 TEST_CASE("Agent configuration requires callers to select a model") {
   const pigpen::agent::Config config;
 
@@ -26,7 +17,7 @@ TEST_CASE("Agent configuration requires callers to select a model") {
   CHECK(config.seed == 0);
   CHECK(config.turn_budget == 20);
   CHECK(config.max_tool_rounds == 8);
-  CHECK(config.max_output_tokens == 8'096);
+  CHECK(config.max_output_tokens == 8'192);
   CHECK(pigpen::agent::max_world_tool_calls_per_turn == 4);
   CHECK(config.temperature == 0.0);
   CHECK(config.known_item_values);
@@ -41,27 +32,27 @@ TEST_CASE(
   config.max_tool_rounds = 6;
   const auto prompt = pigpen::agent::build_system_prompt(config);
 
-  CHECK(contains(prompt, "autonomous blob"));
-  CHECK(contains(prompt, "Act on your own immediately"));
-  CHECK(contains(prompt, "do not wait for the human"));
-  CHECK(contains(prompt, "south-west corner is (0,0)"));
-  CHECK(contains(prompt, "x grows east and y grows north"));
-  CHECK(contains(prompt, "begin at (5,5)"));
-  CHECK(contains(prompt, "look(direction)"));
-  CHECK(contains(prompt, "move(direction)"));
-  CHECK(contains(prompt, "eat()"));
-  CHECK(contains(prompt, "at most 11 conversation turns"));
-  CHECK(contains(prompt, "at most 6 tool rounds per turn"));
-  CHECK(contains(prompt, "allows at most 4 world-tool requests"));
-  CHECK(contains(prompt, "including invalid requests"));
-  CHECK(contains(prompt, "followed by a short final action summary"));
-  CHECK(contains(prompt, "Prioritize calling the registered world tools"));
-  CHECK(contains(prompt, "over extended thinking"));
-  CHECK(contains(prompt, "Use look and move calls proactively"));
-  CHECK(contains(prompt, "move never collects or consumes an item"));
-  CHECK(contains(prompt, "Only eat can consume one"));
-  CHECK(contains(prompt, "call eat while still on that cell"));
-  CHECK(contains(prompt, "Do not provide hidden chain-of-thought"));
+  CHECK(prompt.contains("autonomous blob"));
+  CHECK(prompt.contains("Act on your own immediately"));
+  CHECK(prompt.contains("do not wait for the human"));
+  CHECK(prompt.contains("south-west corner is (0,0)"));
+  CHECK(prompt.contains("x grows east and y grows north"));
+  CHECK(prompt.contains("begin at (5,5)"));
+  CHECK(prompt.contains("look(direction)"));
+  CHECK(prompt.contains("move(direction)"));
+  CHECK(prompt.contains("eat()"));
+  CHECK(prompt.contains("at most 11 conversation turns"));
+  CHECK(prompt.contains("at most 6 tool rounds per turn"));
+  CHECK(prompt.contains("allows at most 4 world-tool requests"));
+  CHECK(prompt.contains("including invalid requests"));
+  CHECK(prompt.contains("followed by a short final action summary"));
+  CHECK(prompt.contains("Prioritize calling the registered world tools"));
+  CHECK(prompt.contains("over extended thinking"));
+  CHECK(prompt.contains("Use look and move calls proactively"));
+  CHECK(prompt.contains("move never collects or consumes an item"));
+  CHECK(prompt.contains("Only eat can consume one"));
+  CHECK(prompt.contains("call eat while still on that cell"));
+  CHECK(prompt.contains("Do not provide hidden chain-of-thought"));
 }
 
 TEST_CASE("Known-values prompt states the complete reward table") {
@@ -69,13 +60,13 @@ TEST_CASE("Known-values prompt states the complete reward table") {
   config.known_item_values = true;
   const auto prompt = pigpen::agent::build_system_prompt(config);
 
-  CHECK(contains(prompt, "berry = +1"));
-  CHECK(contains(prompt, "apple = +3"));
-  CHECK(contains(prompt, "truffle = +10"));
-  CHECK(contains(prompt, "toadstool = -5"));
-  CHECK(contains(prompt, "Avoid eating negative-value food"));
-  CHECK(contains(prompt, "Walking across a toadstool cell is safe"));
-  CHECK(contains(prompt, "avoid eating the toadstool, not traversing"));
+  CHECK(prompt.contains("berry = +1"));
+  CHECK(prompt.contains("apple = +3"));
+  CHECK(prompt.contains("truffle = +10"));
+  CHECK(prompt.contains("toadstool = -5"));
+  CHECK(prompt.contains("Avoid eating negative-value food"));
+  CHECK(prompt.contains("Walking across a toadstool cell is safe"));
+  CHECK(prompt.contains("avoid eating the toadstool, not traversing"));
 }
 
 TEST_CASE("Hidden-values prompt does not leak the reward table") {
@@ -83,51 +74,51 @@ TEST_CASE("Hidden-values prompt does not leak the reward table") {
   config.known_item_values = false;
   const auto prompt = pigpen::agent::build_system_prompt(config);
 
-  CHECK(contains(prompt, "Item values are hidden"));
-  CHECK(contains(prompt, "Different foods can have different values"));
-  CHECK_FALSE(contains(prompt, "berry ="));
-  CHECK_FALSE(contains(prompt, "apple ="));
-  CHECK_FALSE(contains(prompt, "truffle ="));
-  CHECK_FALSE(contains(prompt, "toadstool ="));
-  CHECK_FALSE(contains(prompt, "+10"));
-  CHECK_FALSE(contains(prompt, "-5"));
+  CHECK(prompt.contains("Item values are hidden"));
+  CHECK(prompt.contains("Different foods can have different values"));
+  CHECK_FALSE(prompt.contains("berry ="));
+  CHECK_FALSE(prompt.contains("apple ="));
+  CHECK_FALSE(prompt.contains("truffle ="));
+  CHECK_FALSE(prompt.contains("toadstool ="));
+  CHECK_FALSE(prompt.contains("+10"));
+  CHECK_FALSE(prompt.contains("-5"));
 }
 
 TEST_CASE("Prompt accurately describes observation and feedback toggles") {
   pigpen::agent::Config transparent;
   const auto default_prompt = pigpen::agent::build_system_prompt(transparent);
-  CHECK(contains(default_prompt, "look identifies the item type"));
-  CHECK(contains(default_prompt, "numeric reward and your cumulative score"));
+  CHECK(default_prompt.contains("look identifies the item type"));
+  CHECK(default_prompt.contains("numeric reward and your cumulative score"));
 
   auto opaque = transparent;
   opaque.opaque_look = true;
   opaque.reward_feedback = false;
   const auto experimental_prompt = pigpen::agent::build_system_prompt(opaque);
-  CHECK(contains(experimental_prompt, "as 'something'"));
-  CHECK(contains(experimental_prompt, "without revealing its item type"));
-  CHECK(contains(experimental_prompt, "withholds numeric reward"));
+  CHECK(experimental_prompt.contains("as 'something'"));
+  CHECK(experimental_prompt.contains("without revealing its item type"));
+  CHECK(experimental_prompt.contains("withholds numeric reward"));
 }
 
 TEST_CASE("Turn prompts sustain exploration and carry optional human input") {
   const auto automatic = pigpen::agent::build_turn_prompt(7, 20);
-  CHECK(contains(automatic, "Continue exploring autonomously"));
-  CHECK(contains(automatic, "up to 4 world-tool calls"));
-  CHECK(contains(automatic, "brief action summary"));
-  CHECK(contains(automatic, "move never eats an item"));
-  CHECK(contains(automatic, "call eat explicitly"));
-  CHECK(contains(automatic, "Turn 7 of 20."));
-  CHECK(contains(automatic, "Automatic turn instructions:"));
+  CHECK(automatic.contains("Continue exploring autonomously"));
+  CHECK(automatic.contains("up to 4 world-tool calls"));
+  CHECK(automatic.contains("brief action summary"));
+  CHECK(automatic.contains("move never eats an item"));
+  CHECK(automatic.contains("call eat explicitly"));
+  CHECK(automatic.contains("Turn 7 of 20."));
+  CHECK(automatic.contains("Automatic turn instructions:"));
 
   const auto guided =
       pigpen::agent::build_turn_prompt(8, 20, "Please inspect the north wall.");
-  CHECK(contains(guided, "Turn 8 of 20."));
-  CHECK(contains(guided, "Human guidance:\nPlease inspect the north wall."));
-  CHECK(contains(guided, "up to 4 world-tool calls"));
+  CHECK(guided.contains("Turn 8 of 20."));
+  CHECK(guided.contains("Human guidance:\nPlease inspect the north wall."));
+  CHECK(guided.contains("up to 4 world-tool calls"));
 
   const auto corrective = pigpen::agent::build_turn_prompt(9, 20, {}, true);
-  CHECK(contains(corrective, "previous turn executed zero world tools"));
-  CHECK(contains(corrective, "Model narration is not an action"));
-  CHECK(contains(corrective, "Begin this turn with a valid"));
+  CHECK(corrective.contains("previous turn executed zero world tools"));
+  CHECK(corrective.contains("Model narration is not an action"));
+  CHECK(corrective.contains("Begin this turn with a valid"));
 }
 
 TEST_CASE("turn recovery instructions remain separate from human guidance") {
@@ -137,6 +128,6 @@ TEST_CASE("turn recovery instructions remain separate from human guidance") {
   REQUIRE(notice != std::string::npos);
   CHECK(notice < prompt.find("Human guidance:"));
   CHECK(prompt.ends_with("Human guidance:\nPlease inspect the north wall."));
-  CHECK_FALSE(contains(pigpen::agent::build_turn_prompt(3, 20),
-                       "requested tool calls were not executed"));
+  CHECK_FALSE(pigpen::agent::build_turn_prompt(3, 20).contains(
+      "requested tool calls were not executed"));
 }

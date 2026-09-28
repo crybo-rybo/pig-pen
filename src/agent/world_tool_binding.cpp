@@ -4,6 +4,7 @@
 
 #include <scry/reflection.hpp>
 
+#include <functional>
 #include <type_traits>
 #include <utility>
 
@@ -32,24 +33,21 @@ template <typename Arguments, typename Invoke>
 scry::Status WorldToolBinding::add(scry::ToolRegistry &registry,
                                    const ToolKind kind, std::string description,
                                    Invoke invoke) {
-  using Execution = std::invoke_result_t<Invoke &, WorldTools &, Arguments>;
-  using Response = typename Execution::response_type;
   return scry::reflection::add<Arguments>(
       registry,
       {.name = std::string{tool_kind_name(kind)},
        .description = std::move(description)},
       [this, kind, invoke](const scry::ToolCallContext &context,
-                           Arguments arguments) -> Response {
-        auto execution = std::invoke(invoke, tools_, std::move(arguments));
+                           const Arguments arguments) {
+        const auto before = world_.position();
+        auto response = std::invoke(invoke, tools_, arguments);
         pending_ = ToolActivity{
             .kind = kind,
-            .outcome = tool_outcome(execution.response),
+            .outcome = tool_outcome(response),
             .arguments_json = "null",
             .result_json = "null",
-            .before = execution.before,
-            .after = execution.after,
-            .direction = execution.direction,
-            .eaten = execution.eaten,
+            .before = before,
+            .after = world_.position(),
             .score_after = world_.score(),
             .scry_turn_id = context.turn_id.value,
             .call_id = std::string{context.call_id},
@@ -57,29 +55,36 @@ scry::Status WorldToolBinding::add(scry::ToolRegistry &registry,
             .index = context.index,
             .result_dispatched = false,
         };
-        return std::move(execution.response);
+        if constexpr (std::is_same_v<Arguments, DirectionArguments>) {
+          pending_->direction = arguments.direction;
+        }
+        if constexpr (std::is_same_v<decltype(response), EatToolResponse>) {
+          pending_->eaten = response.ate;
+        }
+        return response;
       });
 }
 
 scry::Result<scry::ToolRegistry> WorldToolBinding::registry() {
   scry::ToolRegistry registry;
-  if (auto status = add<DirectionArguments>(
-          registry, ToolKind::move,
-          "Move one cell north, south, east, or west.", &WorldTools::move);
-      !status) {
-    return std::unexpected(std::move(status.error()));
-  }
-  if (auto status = add<DirectionArguments>(
-          registry, ToolKind::look,
-          "Scan every cell in one direction to the wall.", &WorldTools::look);
-      !status) {
-    return std::unexpected(std::move(status.error()));
-  }
-  if (auto status = add<EatArguments>(
-          registry, ToolKind::eat,
-          "Eat the item on the current cell, if present.", &WorldTools::eat);
-      !status) {
-    return std::unexpected(std::move(status.error()));
+  auto added =
+      add<DirectionArguments>(registry, ToolKind::move,
+                              "Move one cell north, south, east, or west.",
+                              &WorldTools::move)
+          .and_then([&] {
+            return add<DirectionArguments>(
+                registry, ToolKind::look,
+                "Scan every cell in one direction to the wall.",
+                &WorldTools::look);
+          })
+          .and_then([&] {
+            return add<EatArguments>(
+                registry, ToolKind::eat,
+                "Eat the item on the current cell, if present.",
+                &WorldTools::eat);
+          });
+  if (!added) {
+    return std::unexpected(std::move(added.error()));
   }
   return registry;
 }
@@ -111,13 +116,9 @@ void WorldToolBinding::observe(const scry::ToolCall &call) {
 }
 
 void WorldToolBinding::flush_pending_activity() {
-  if (!pending_) {
-    return;
-  }
-  auto activity = std::move(*pending_);
-  pending_.reset();
-  if (on_activity) {
-    on_activity(std::move(activity));
+  auto activity = std::exchange(pending_, std::nullopt);
+  if (activity && on_activity) {
+    on_activity(std::move(*activity));
   }
 }
 

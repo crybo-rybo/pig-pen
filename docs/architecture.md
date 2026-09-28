@@ -13,7 +13,7 @@ src/app/main.cpp              src/app/headless_main.cpp
                                   ├── EpisodeRunner   turn loop, play/pause/stop
                                   ├── ScryTurnTransport ──► scry::Harness ──► HTTP
                                   ├── WorldTools      typed actions and visibility
-                                  ├── Scry reflection schemas and marshalling
+                                  ├── WorldToolBinding reflected scry::ToolRegistry
                                   ├── ToolActivity    typed semantics + exact payloads
                                   ├── MetricsWriter   JSONL
                                   └── world::World    the simulation
@@ -130,22 +130,14 @@ transcript and activity feed, and the exit-code policy described in
 
 ## Build layout
 
-`CMakeLists.txt` requires GCC 16+, C++26, and Scry's reflection capability
-probe; it describes Pig Pen's own targets only, with runtime dependency fetching
-and upstream option pinning in `cmake/dependencies.cmake` and the test-only
-Catch2 dependency plus the suite in `cmake/testing.cmake`. It builds
-`pigpen_world`, `pigpen_reflected_tools`, `pigpen_agent`, and, when needed,
-`pigpen_ui` as focused static libraries, then the GUI, headless program, and test
-executables from explicit source lists. Linking `scry::scry` carries
-`-freflection` publicly, so every `pigpen_reflected_tools` and `pigpen_agent`
-translation unit compiles with it; Scry is a private dependency of
-`pigpen_agent`, which keeps that requirement off `pigpen_world`, `pigpen_ui`,
-and both entry points.
-nlohmann/json is private to `pigpen_agent`'s metrics implementation;
-application-facing headers, the UI, and both entry points use standard and Pig
-Pen-owned types only.
-Warnings (`-Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror`) apply
-through the `pigpen_defaults` interface target to pig-pen's own code only;
-fetched dependencies are added as `SYSTEM` with their tests and examples turned
-off.
-See [Building](building.md).
+`CMakeLists.txt` describes Pig Pen's own targets; `cmake/dependencies.cmake`
+pins and fetches the runtime dependencies and `cmake/testing.cmake` adds Catch2
+and the suite. The static libraries are `pigpen_world`, `pigpen_agent`, and,
+when the GUI or tests are enabled, `pigpen_ui`. `pigpen_agent` links
+`scry::scry` privately: scry carries `-freflection`, so every `pigpen_agent`
+translation unit (and `pigpen_reflection_tests`, which links scry directly)
+compiles with it, while `pigpen_world`, `pigpen_ui`, and both entry points stay
+reflection-free. nlohmann/json is likewise private to `pigpen_agent`'s metrics
+writer. The `pigpen_target()` helper applies C++26 and the warning flags to
+pig-pen's own targets only; fetched dependencies are `SYSTEM`. See
+[Building](building.md).

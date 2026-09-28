@@ -9,6 +9,7 @@ namespace pigpen::ui {
 
 std::expected<GuiOptions, std::string>
 parse_gui_options(const std::span<const std::string_view> arguments) {
+  using Result = std::expected<void, std::string>;
   GuiOptions options;
   for (std::size_t index = 0; index < arguments.size(); ++index) {
     const auto argument = arguments[index];
@@ -16,53 +17,40 @@ parse_gui_options(const std::span<const std::string_view> arguments) {
       return std::unexpected("unexpected positional argument: " +
                              std::string{argument});
     }
-
     const auto equals = argument.find('=');
-    const auto name = argument.substr(0, equals);
+    const std::string name{argument.substr(0, equals)};
     const auto inline_value = equals == std::string_view::npos
                                   ? std::optional<std::string_view>{}
-                                  : std::optional{argument.substr(equals + 1)};
-    const auto value = [&]() -> std::expected<std::string_view, std::string> {
-      if (inline_value) {
-        if (inline_value->empty()) {
-          return std::unexpected(std::string{name} + " requires a value");
-        }
-        return *inline_value;
+                                  : argument.substr(equals + 1);
+
+    const auto text = [&](std::string &target) -> Result {
+      if (inline_value && !inline_value->empty()) {
+        target = *inline_value;
+      } else if (!inline_value && index + 1 < arguments.size() &&
+                 !arguments[index + 1].empty() &&
+                 !arguments[index + 1].starts_with("--")) {
+        target = arguments[++index];
+      } else {
+        return std::unexpected(name + " requires a value");
       }
-      if (index + 1 >= arguments.size() || arguments[index + 1].empty() ||
-          arguments[index + 1].starts_with("--")) {
-        return std::unexpected(std::string{name} + " requires a value");
-      }
-      return arguments[++index];
+      return {};
     };
 
-    if (name == "--help") {
-      if (inline_value) {
-        return std::unexpected("--help does not take a value");
-      }
+    Result result;
+    if (name == "--help" && !inline_value) {
       options.help = true;
+    } else if (name == "--help") {
+      result = std::unexpected("--help does not take a value");
     } else if (name == "--model") {
-      auto parsed = value();
-      if (!parsed) {
-        return std::unexpected(std::move(parsed.error()));
-      }
-      options.config.model = *parsed;
+      result = text(options.config.model);
     } else if (name == "--base-url") {
-      auto parsed = value();
-      if (!parsed) {
-        return std::unexpected(std::move(parsed.error()));
-      }
-      options.config.base_url = *parsed;
+      result = text(options.config.base_url);
     } else {
-      return std::unexpected("unknown option: " + std::string{name});
+      result = std::unexpected("unknown option: " + name);
     }
-  }
-
-  if (options.config.model.size() >= 160U) {
-    return std::unexpected("--model must be shorter than 160 characters");
-  }
-  if (options.config.base_url.size() >= 384U) {
-    return std::unexpected("--base-url must be shorter than 384 characters");
+    if (!result) {
+      return std::unexpected(std::move(result.error()));
+    }
   }
   return options;
 }

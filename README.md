@@ -3,7 +3,7 @@
 `pig-pen` drops a locally hosted LLM into a deterministic 10×10 pen and lets you
 watch it play. The model is a blob that can only perceive the pen through three
 tools — `look`, `move`, and `eat` — registered with
-[scry v0.5.0](https://github.com/crybo-rybo/scry/releases/tag/v0.5.0). You get the omniscient view: the
+[scry](https://github.com/crybo-rybo/scry). You get the omniscient view: the
 full grid, the model's fog-of-war, its streamed output, every successfully
 decoded world-tool invocation and result, live stats, and a JSONL log of the
 run.
@@ -28,14 +28,9 @@ Two front ends share the same world, prompt, tools, episode runner, and logger:
 
 ## Quick start
 
-You need CMake 3.31+, Ninja, GCC 16+, Python 3 for tests, libcurl, and OpenGL
-3.2 or newer for the GUI. Pig Pen uses
-C++26 reflection as its main tool-definition and marshalling path; CMake enables
-`-std=c++26 -freflection` and rejects compilers without the required P2996 and
-P3394 support. Every dependency is pinned and fetched by CMake. SDL3 provides
-the desktop window and input backend. macOS uses Homebrew GCC for C++ and Apple
-Clang for SDL3's C/Objective-C implementation; see
-[Building](docs/building.md#macos).
+You need GCC 16+ (for C++26 reflection), CMake 3.31+, Ninja, libcurl, Python 3
+for tests, and OpenGL 3.2+ for the GUI; CMake fetches everything else. See
+[Building](docs/building.md) for per-platform setup, including macOS.
 
 Serve a model first. The default endpoint is Ollama on `127.0.0.1:11434`, but
 Pig Pen does not choose a model for you:
@@ -57,7 +52,7 @@ Or run one short episode in the terminal:
 just run-headless dev --model YOUR_MODEL --turns 4 --seed 42
 ```
 
-Without `just`, the same thing in three commands:
+Without `just`:
 
 ```sh
 cmake --preset dev
@@ -67,8 +62,8 @@ cmake --build --preset dev
 ```
 
 Launching the GUI without `--model` waits for a manual model selection instead.
-Every episode appends a
-`logs/<timestamp>-<model>-<seed>.jsonl` file you can inspect afterwards.
+Every episode writes a `logs/<timestamp>-<model>-<seed>.jsonl` file you can
+inspect afterwards.
 
 ## Docs
 

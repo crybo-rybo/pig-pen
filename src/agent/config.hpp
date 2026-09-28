@@ -3,7 +3,6 @@
 /// ends.
 #pragma once
 
-#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -12,10 +11,11 @@ namespace pigpen::agent {
 
 /// @brief Hard limit on tool requests per turn, enforced by Scry before
 /// dispatch; unknown tools and invalid arguments also spend this budget.
-inline constexpr std::size_t max_world_tool_calls_per_turn{4};
+inline constexpr std::uint32_t max_world_tool_calls_per_turn{4};
+/// @brief Inclusive upper bounds Session::create accepts.
+inline constexpr std::uint32_t turn_budget_limit{10'000};
+inline constexpr std::uint32_t tool_rounds_limit{64};
 
-/// @brief Runtime and experiment settings shared by the headless and GUI
-/// front ends.
 /// @note The three visibility flags change only what the model is told; the
 /// world, the scoring, and the log always record the truth.
 struct Config {
@@ -23,9 +23,9 @@ struct Config {
   /// Exact provider model identifier. It is forwarded without normalization.
   std::string model{};
   std::uint64_t seed{};
-  std::size_t turn_budget{20};
+  std::uint32_t turn_budget{20};
   std::uint32_t max_tool_rounds{8};
-  std::uint32_t max_output_tokens{8'096};
+  std::uint32_t max_output_tokens{8'192};
   double temperature{0.0};
   /// Provider sampling seed, independent of the world seed. Sent as the
   /// OpenAI-compatible `seed` field when set and omitted when unset;

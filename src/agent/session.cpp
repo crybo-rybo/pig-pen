@@ -13,23 +13,12 @@
 #include <chrono>
 #include <cstdlib>
 #include <memory>
-#include <optional>
 #include <string>
 #include <utility>
 
 namespace pigpen::agent {
-namespace {
 
-/// @brief Read an environment variable; missing means empty.
-[[nodiscard]] std::string environment(const char *name) {
-  const auto *value = std::getenv(name);
-  return value == nullptr ? std::string{} : std::string{value};
-}
-
-} // namespace
-
-class Session::Impl final {
-public:
+struct Session::Impl {
   Impl(Config initial_config, std::unique_ptr<MetricsWriter> initial_metrics,
        std::unique_ptr<world::World> initial_world,
        std::unique_ptr<WorldToolBinding> initial_tools,
@@ -39,22 +28,21 @@ public:
         harness(std::move(initial_harness)),
         conversation(std::move(initial_conversation)),
         transport(
-            this->harness, this->conversation,
-            {.on_tool_request = [this](const scry::ToolRequest &)
-                 -> std::optional<scry::ToolRejection> {
-               return tools->admit(!metrics_error.empty());
-             },
+            harness, conversation,
+            {.on_tool_request =
+                 [this](const scry::ToolRequest &) {
+                   return tools->admit(!metrics_error.empty());
+                 },
              .on_tool_call =
                  [this](const scry::ToolCall &call) { tools->observe(call); },
              .on_turn_finished = [this] { tools->flush_pending_activity(); }}),
         runner(
-            transport, static_cast<std::uint32_t>(this->config.turn_budget),
+            transport, config.turn_budget,
             [this] { return world->all_positive_items_eaten(); },
             {
                 .on_turn_finished =
                     [this](const TurnRecord &record) {
-                      if (auto status = this->metrics->record_turn(record);
-                          !status) {
+                      if (auto status = metrics->record_turn(record); !status) {
                         metrics_error = std::move(status.error());
                       }
                       if (!metrics_error.empty()) {
@@ -63,8 +51,7 @@ public:
                     },
                 .on_episode_finished =
                     [this](const EpisodeResult &result) {
-                      if (auto status =
-                              this->metrics->finish(result, world->score());
+                      if (auto status = metrics->finish(result, world->score());
                           !status) {
                         metrics_error = std::move(status.error());
                       }
@@ -100,18 +87,13 @@ Session::create(Config config, std::filesystem::path log_directory,
   if (config.turn_budget == 0) {
     return std::unexpected("turn budget must be greater than zero");
   }
-  if (config.turn_budget > 10'000) {
-    return std::unexpected("turn budget must not exceed 10000");
+  if (config.turn_budget > turn_budget_limit) {
+    return std::unexpected("turn budget must not exceed " +
+                           std::to_string(turn_budget_limit));
   }
-  if (config.max_tool_rounds > 64) {
-    return std::unexpected("maximum tool rounds must not exceed 64");
-  }
-  // Let scry reject a bad provider config before anything with a side effect
-  // happens: validate() runs create()'s checks without starting a worker, and
-  // the metrics log below is only opened once the whole config is known good.
-  const auto provider = scry_config(config, environment("PIGPEN_API_KEY"));
-  if (auto valid = scry::Harness::validate(provider); !valid) {
-    return std::unexpected(valid.error().message);
+  if (config.max_tool_rounds > tool_rounds_limit) {
+    return std::unexpected("maximum tool rounds must not exceed " +
+                           std::to_string(tool_rounds_limit));
   }
   auto conversation = scry::Conversation::create(
       {.system_prompt = build_system_prompt(config)});
@@ -124,10 +106,14 @@ Session::create(Config config, std::filesystem::path log_directory,
   if (!registry) {
     return std::unexpected(registry.error().message);
   }
-  auto harness = scry::Harness::create(provider, std::move(*registry));
+  const auto *api_key = std::getenv("PIGPEN_API_KEY");
+  auto harness = scry::Harness::create(
+      scry_config(config, api_key == nullptr ? "" : api_key),
+      std::move(*registry));
   if (!harness) {
     return std::unexpected(harness.error().message);
   }
+  // Opened last so a rejected config leaves no log behind.
   auto metrics =
       MetricsWriter::create(log_directory, config, std::move(prompt_variant));
   if (!metrics) {
@@ -183,9 +169,6 @@ const ToolActivityFeed &Session::tool_activities() const noexcept {
   return impl_->activities;
 }
 const EpisodeRunner &Session::runner() const noexcept { return impl_->runner; }
-std::size_t Session::tool_call_count() const noexcept {
-  return impl_->activities.size();
-}
 
 const std::filesystem::path &Session::metrics_path() const noexcept {
   return impl_->metrics->path();

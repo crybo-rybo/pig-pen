@@ -23,8 +23,6 @@ struct GuiOptions {
 /// @brief Parses `--model`, `--base-url`, and `--help` from @p arguments,
 /// accepting both `--option value` and `--option=value` forms.
 /// @return Parsed options, or a human-readable error for the caller to print.
-/// @note Length caps on the values mirror the fixed-size ImGui input buffers
-/// in AppUi, so an accepted value always fits the widgets.
 [[nodiscard]] std::expected<GuiOptions, std::string>
 parse_gui_options(std::span<const std::string_view> arguments);
 

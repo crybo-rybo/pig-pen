@@ -85,14 +85,14 @@ TEST_CASE("look and eat activities become ordered transient effects") {
   animation.update(activities, {.x = 5, .y = 5}, 2.0);
   auto effect = animation.active_effect();
   REQUIRE(effect.has_value());
-  CHECK(effect->kind == pigpen::ui::VisualEffectKind::look);
+  CHECK(effect->kind == pigpen::agent::ToolKind::look);
   REQUIRE(effect->direction.has_value());
   CHECK(*effect->direction == pigpen::world::Direction::north);
 
   animation.update(activities, {.x = 5, .y = 5}, 2.231);
   effect = animation.active_effect();
   REQUIRE(effect.has_value());
-  CHECK(effect->kind == pigpen::ui::VisualEffectKind::eat);
+  CHECK(effect->kind == pigpen::agent::ToolKind::eat);
 
   animation.update(activities, {.x = 5, .y = 5}, 2.461);
   CHECK_FALSE(animation.active_effect().has_value());

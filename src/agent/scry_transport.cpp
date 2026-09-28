@@ -19,18 +19,12 @@ namespace {
   case scry::FinishReason::tool_use:
     return "model response ended with an unresolved tool request";
   case scry::FinishReason::unknown:
-    return "model response ended for an unknown reason";
+    break;
   }
-  return "model response ended abnormally";
+  return "model response ended for an unknown reason";
 }
 
 } // namespace
-
-ScryTurnTransport::ScryTurnTransport(scry::Harness &harness,
-                                     scry::Conversation &conversation,
-                                     ScryToolObservers observers)
-    : harness_(harness), conversation_(conversation),
-      observers_(std::move(observers)) {}
 
 scry::Config scry_config(const Config &config, std::string api_key) {
   return {
@@ -39,7 +33,6 @@ scry::Config scry_config(const Config &config, std::string api_key) {
       .model = config.model,
       .dialect = scry::ProviderDialect::openai_compatible,
       .sampling = {.temperature = config.temperature,
-                   .top_p = std::nullopt,
                    .max_tokens = config.max_output_tokens,
                    .seed = config.sampling_seed},
       .reasoning_mode = scry::ReasoningMode::disabled,
@@ -49,18 +42,28 @@ scry::Config scry_config(const Config &config, std::string api_key) {
   };
 }
 
+ScryTurnTransport::ScryTurnTransport(scry::Harness &harness,
+                                     scry::Conversation &conversation,
+                                     ScryToolObservers observers)
+    : harness_(harness), conversation_(conversation),
+      observers_(std::move(observers)) {}
+
 ScryTurnTransport::~ScryTurnTransport() {
   if (turn_) {
-    static_cast<void>(turn_->cancel());
+    turn_->cancel();
     // Nothing downstream of this transport outlives it, so drop delivery as
     // well: the turn still rolls its conversation back, but no callback can
     // reach a destroyed session.
-    static_cast<void>(turn_->disconnect());
+    turn_->disconnect();
   }
 }
 
 std::expected<void, std::string>
 ScryTurnTransport::send(std::string user_message, TurnCallbacks callbacks) {
+  // Scry clears Conversation::busy() once it ingests the terminal event, which
+  // can precede delivery of on_finished under a limited callback budget.
+  // Replacing turn_ then would leave the old callback, which captures this,
+  // connected past destruction; wait for the handle to report finished.
   if (turn_ && !turn_->finished()) {
     return std::unexpected("a model turn is already active");
   }

@@ -4,7 +4,7 @@
 # plus include regrouping into main header / project / third-party / standard
 # blocks — the layout src/ui/app_ui.cpp already follows.
 #
-# CI pins clang-format 22.1.8 (.github/workflows/format.yml); use the same
+# CI pins clang-format 22.1.8 (.github/workflows/ci.yml); use the same
 # major version locally so both produce identical output.
 BasedOnStyle: LLVM
 Standard: Latest

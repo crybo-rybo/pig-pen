@@ -92,7 +92,6 @@ TEST_CASE("metrics log contains a reconcilable header tool turn and footer") {
                   },
                   1)
               .has_value());
-  REQUIRE(writer->finalized());
 
   const auto records = read_records(path);
   REQUIRE(records.size() == 4);

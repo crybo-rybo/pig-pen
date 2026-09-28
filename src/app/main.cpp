@@ -13,12 +13,24 @@
 #include <imgui_impl_opengl3.h>
 #include <imgui_impl_sdl3.h>
 
-#include <cstdio>
 #include <iostream>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
+
+/// @brief Runs a cleanup callable at scope exit, in reverse declaration order.
+template <typename Cleanup> class Defer final {
+public:
+  explicit Defer(Cleanup cleanup) : cleanup_(std::move(cleanup)) {}
+  ~Defer() { cleanup_(); }
+  Defer(const Defer &) = delete;
+  Defer &operator=(const Defer &) = delete;
+
+private:
+  Cleanup cleanup_;
+};
 
 [[nodiscard]] double current_time_seconds() {
   constexpr auto nanoseconds_per_second = 1'000'000'000.0;
@@ -26,42 +38,48 @@ namespace {
 }
 
 void print_usage(std::ostream &output, const std::string_view program) {
-  output << "Usage: " << program << " [--model NAME] [options]\n\n"
-         << "Open the pig-pen GUI, optionally creating and starting a session "
-            "immediately.\n\n"
-         << "Options:\n"
-         << "  --model NAME    Populate the model field and auto-start\n"
-         << "  --base-url URL  Populate the model endpoint field\n"
-         << "                  (default: http://127.0.0.1:11434/v1)\n"
-         << "  --help          Show this help and exit\n\n"
-         << "Values may also use --option=value. Without --model, the GUI "
-            "waits for\n"
-         << "a model identifier to be entered in Controls.\n";
+  output << "Usage: " << program << R"( [--model NAME] [options]
+
+Open the pig-pen GUI, optionally creating and starting a session immediately.
+
+Options:
+  --model NAME    Populate the model field and auto-start
+  --base-url URL  Populate the model endpoint field
+                  (default: http://127.0.0.1:11434/v1)
+  --help          Show this help and exit
+
+Values may also use --option=value. Without --model, the GUI waits for
+a model identifier to be entered in Controls.
+)";
+}
+
+/// @brief Reports an SDL failure on stderr and yields the error exit code.
+[[nodiscard]] int sdl_failure(const std::string_view what) {
+  std::cerr << what << ": " << SDL_GetError() << '\n';
+  return 1;
 }
 
 } // namespace
 
 int main(const int argc, char **argv) {
-  std::vector<std::string_view> arguments;
-  arguments.reserve(argc > 1 ? static_cast<std::size_t>(argc - 1) : 0U);
-  for (int index = 1; index < argc; ++index) {
-    arguments.emplace_back(argv[index]);
-  }
-  auto options = pigpen::ui::parse_gui_options(arguments);
+  const std::string_view program = argc > 0 ? argv[0] : "pig-pen";
+  const std::vector<std::string_view> arguments(argv + (argc > 0 ? 1 : 0),
+                                                argv + argc);
+  const auto options = pigpen::ui::parse_gui_options(arguments);
   if (!options) {
     std::cerr << "option error: " << options.error() << "\n\n";
-    print_usage(std::cerr, argc > 0 ? argv[0] : "pig-pen");
+    print_usage(std::cerr, program);
     return 2;
   }
   if (options->help) {
-    print_usage(std::cout, argc > 0 ? argv[0] : "pig-pen");
+    print_usage(std::cout, program);
     return 0;
   }
 
   if (!SDL_Init(SDL_INIT_VIDEO)) {
-    std::fprintf(stderr, "Could not initialize SDL3: %s\n", SDL_GetError());
-    return 1;
+    return sdl_failure("Could not initialize SDL3");
   }
+  const Defer quit_sdl{[] { SDL_Quit(); }};
 
 #if defined(__APPLE__)
   constexpr auto glsl_version = "#version 150";
@@ -84,34 +102,27 @@ int main(const int argc, char **argv) {
       SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
   auto *window = SDL_CreateWindow("pig-pen", 1440, 900, window_flags);
   if (window == nullptr) {
-    std::fprintf(stderr, "Could not create the pig-pen window: %s\n",
-                 SDL_GetError());
-    SDL_Quit();
-    return 1;
+    return sdl_failure("Could not create the pig-pen window");
   }
+  const Defer destroy_window{[window] { SDL_DestroyWindow(window); }};
+
   const auto gl_context = SDL_GL_CreateContext(window);
   if (gl_context == nullptr) {
-    std::fprintf(stderr, "Could not create the OpenGL context: %s\n",
-                 SDL_GetError());
-    SDL_DestroyWindow(window);
-    SDL_Quit();
-    return 1;
+    return sdl_failure("Could not create the OpenGL context");
   }
+  const Defer destroy_gl_context{
+      [gl_context] { SDL_GL_DestroyContext(gl_context); }};
   if (!SDL_GL_MakeCurrent(window, gl_context)) {
-    std::fprintf(stderr, "Could not activate the OpenGL context: %s\n",
-                 SDL_GetError());
-    SDL_GL_DestroyContext(gl_context);
-    SDL_DestroyWindow(window);
-    SDL_Quit();
-    return 1;
+    return sdl_failure("Could not activate the OpenGL context");
   }
   if (!SDL_GL_SetSwapInterval(1)) {
-    std::fprintf(stderr, "Warning: could not enable vertical sync: %s\n",
-                 SDL_GetError());
+    std::cerr << "Warning: could not enable vertical sync: " << SDL_GetError()
+              << '\n';
   }
 
   IMGUI_CHECKVERSION();
   ImGui::CreateContext();
+  const Defer destroy_imgui{[] { ImGui::DestroyContext(); }};
   auto &io = ImGui::GetIO();
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
   io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
@@ -124,81 +135,54 @@ int main(const int argc, char **argv) {
   style.TabRounding = 4.0F;
 
   if (!ImGui_ImplSDL3_InitForOpenGL(window, gl_context)) {
-    std::fprintf(stderr, "Could not initialize the ImGui SDL3 backend\n");
-    ImGui::DestroyContext();
-    SDL_GL_DestroyContext(gl_context);
-    SDL_DestroyWindow(window);
-    SDL_Quit();
+    std::cerr << "Could not initialize the ImGui SDL3 backend\n";
     return 1;
   }
+  const Defer shutdown_sdl_backend{[] { ImGui_ImplSDL3_Shutdown(); }};
   if (!ImGui_ImplOpenGL3_Init(glsl_version)) {
-    std::fprintf(stderr, "Could not initialize the ImGui OpenGL backend\n");
-    ImGui_ImplSDL3_Shutdown();
-    ImGui::DestroyContext();
-    SDL_GL_DestroyContext(gl_context);
-    SDL_DestroyWindow(window);
-    SDL_Quit();
+    std::cerr << "Could not initialize the ImGui OpenGL backend\n";
     return 1;
   }
+  const Defer shutdown_gl_backend{[] { ImGui_ImplOpenGL3_Shutdown(); }};
 
-  int exit_code{};
-  {
-    pigpen::ui::AppUi application{options->config};
-    bool done{};
-    while (!done) {
-      SDL_Event event;
-      while (SDL_PollEvent(&event)) {
-        ImGui_ImplSDL3_ProcessEvent(&event);
-        if (event.type == SDL_EVENT_QUIT ||
-            (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED &&
-             event.window.windowID == SDL_GetWindowID(window))) {
-          done = true;
-        }
-      }
-      if (done) {
-        break;
-      }
-      if ((SDL_GetWindowFlags(window) & SDL_WINDOW_MINIMIZED) != 0U) {
-        SDL_Delay(10);
-        continue;
-      }
-
-      const auto current_time = current_time_seconds();
-      application.pump(current_time);
-
-      ImGui_ImplOpenGL3_NewFrame();
-      ImGui_ImplSDL3_NewFrame();
-      ImGui::NewFrame();
-      application.draw(current_time);
-
-      ImGui::Render();
-      int framebuffer_width{};
-      int framebuffer_height{};
-      if (!SDL_GetWindowSizeInPixels(window, &framebuffer_width,
-                                     &framebuffer_height)) {
-        std::fprintf(stderr, "Could not query the window size: %s\n",
-                     SDL_GetError());
-        exit_code = 1;
-        break;
-      }
-      glViewport(0, 0, framebuffer_width, framebuffer_height);
-      glClearColor(0.035F, 0.045F, 0.065F, 1.0F);
-      glClear(GL_COLOR_BUFFER_BIT);
-      ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-      if (!SDL_GL_SwapWindow(window)) {
-        std::fprintf(stderr, "Could not present the OpenGL frame: %s\n",
-                     SDL_GetError());
-        exit_code = 1;
-        break;
+  // Declared after every guard so the session, and its log footer, is torn
+  // down before the ImGui context it draws into.
+  pigpen::ui::AppUi application{options->config};
+  for (;;) {
+    SDL_Event event;
+    while (SDL_PollEvent(&event)) {
+      ImGui_ImplSDL3_ProcessEvent(&event);
+      if (event.type == SDL_EVENT_QUIT ||
+          (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED &&
+           event.window.windowID == SDL_GetWindowID(window))) {
+        return 0;
       }
     }
-  }
+    if ((SDL_GetWindowFlags(window) & SDL_WINDOW_MINIMIZED) != 0U) {
+      SDL_Delay(10);
+      continue;
+    }
 
-  ImGui_ImplOpenGL3_Shutdown();
-  ImGui_ImplSDL3_Shutdown();
-  ImGui::DestroyContext();
-  SDL_GL_DestroyContext(gl_context);
-  SDL_DestroyWindow(window);
-  SDL_Quit();
-  return exit_code;
+    application.pump(current_time_seconds());
+
+    ImGui_ImplOpenGL3_NewFrame();
+    ImGui_ImplSDL3_NewFrame();
+    ImGui::NewFrame();
+    application.draw();
+
+    ImGui::Render();
+    int framebuffer_width{};
+    int framebuffer_height{};
+    if (!SDL_GetWindowSizeInPixels(window, &framebuffer_width,
+                                   &framebuffer_height)) {
+      return sdl_failure("Could not query the window size");
+    }
+    glViewport(0, 0, framebuffer_width, framebuffer_height);
+    glClearColor(0.035F, 0.045F, 0.065F, 1.0F);
+    glClear(GL_COLOR_BUFFER_BIT);
+    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+    if (!SDL_GL_SwapWindow(window)) {
+      return sdl_failure("Could not present the OpenGL frame");
+    }
+  }
 }

@@ -1,7 +1,7 @@
 /// @file world_tools_tests.cpp
 /// @brief Covers the reflected tool boundary: compile-time input schemas,
-/// typed world results and the
-/// opaque_look / reward_feedback visibility toggles.
+/// typed world results and the opaque_look / reward_feedback visibility
+/// toggles.
 ///
 /// WorldTools accepts and returns only reflected C++ values, so everything
 /// here runs without JSON parsing, a scry registry, or a model.
@@ -14,7 +14,6 @@
 #include <nlohmann/json.hpp>
 #include <scry/reflection.hpp>
 
-#include <cstddef>
 #include <cstdint>
 #include <string>
 
@@ -75,44 +74,25 @@ static_assert(
     scry::reflection::input_schema_v<EatArguments> ==
     R"({"additionalProperties":false,"properties":{},"required":[],"type":"object"})");
 
-TEST_CASE("C++ declarations are the complete model input-schema source") {
-  const auto directional = nlohmann::json::parse(
-      scry::reflection::input_schema_v<DirectionArguments>);
-  CHECK(directional.at("type") == "object");
-  CHECK(directional.at("additionalProperties") == false);
-  CHECK(directional.at("required") == nlohmann::json::array({"direction"}));
-  CHECK(directional.at("properties").at("direction").at("enum") ==
-        nlohmann::json::array({"north", "south", "east", "west"}));
-  CHECK(directional.at("properties").at("direction").at("description") ==
-        "Cardinal direction: north, south, east, or west");
-
-  const auto eat =
-      nlohmann::json::parse(scry::reflection::input_schema_v<EatArguments>);
-  CHECK(eat.at("type") == "object");
-  CHECK(eat.at("properties").empty());
-  CHECK(eat.at("required").empty());
-  CHECK(eat.at("additionalProperties") == false);
-}
-
 TEST_CASE("Move returns a fixed typed result for success and wall failure") {
   World world{37};
   WorldTools tools{world};
 
   const auto east = tools.move({.direction = Direction::east});
-  CHECK(east.response.ok);
-  CHECK(east.response.position == (Position{.x = 6, .y = 5}));
+  CHECK(east.ok);
+  CHECK(east.position == (Position{.x = 6, .y = 5}));
 
   for (int y = world.position().y; y < World::height - 1; ++y) {
     const auto moved = tools.move({.direction = Direction::north});
-    REQUIRE(moved.response.ok);
+    REQUIRE(moved.ok);
   }
   const auto before_wall = world.position();
   const auto wall = tools.move({.direction = Direction::north});
-  CHECK_FALSE(wall.response.ok);
-  REQUIRE(wall.response.reason);
-  CHECK(*wall.response.reason == pigpen::world::MoveFailure::wall);
-  CHECK(wall.response.position == before_wall);
-  CHECK(wall.before == wall.after);
+  CHECK_FALSE(wall.ok);
+  REQUIRE(wall.reason);
+  CHECK(*wall.reason == pigpen::world::MoveFailure::wall);
+  CHECK(wall.position == before_wall);
+  CHECK(world.position() == before_wall);
 }
 
 TEST_CASE("Look returns a typed complete ray and supports opaque items") {
@@ -124,13 +104,12 @@ TEST_CASE("Look returns a typed complete ray and supports opaque items") {
   WorldTools visible_tools{visible_world};
 
   const auto visible = visible_tools.look({.direction = viewpoint.direction});
-  REQUIRE(visible.response.ok);
-  REQUIRE_FALSE(visible.response.cells.empty());
-  REQUIRE(visible.response.cells.front().item);
-  CHECK(*visible.response.cells.front().item ==
+  REQUIRE(visible.ok);
+  REQUIRE_FALSE(visible.cells.empty());
+  REQUIRE(visible.cells.front().item);
+  CHECK(*visible.cells.front().item ==
         pigpen::world::item_name(placement.item));
-  CHECK(visible.response.wall_at_distance ==
-        static_cast<int>(visible.response.cells.size()) + 1);
+  CHECK(visible.wall_at_distance == static_cast<int>(visible.cells.size()) + 1);
 
   World opaque_world{seed};
   move_to(opaque_world, viewpoint.position);
@@ -138,9 +117,9 @@ TEST_CASE("Look returns a typed complete ray and supports opaque items") {
   config.opaque_look = true;
   WorldTools opaque_tools{opaque_world, config};
   const auto opaque = opaque_tools.look({.direction = viewpoint.direction});
-  REQUIRE(opaque.response.ok);
-  REQUIRE(opaque.response.cells.front().item);
-  CHECK(*opaque.response.cells.front().item == "something");
+  REQUIRE(opaque.ok);
+  REQUIRE(opaque.cells.front().item);
+  CHECK(*opaque.cells.front().item == "something");
 }
 
 TEST_CASE(
@@ -152,11 +131,10 @@ TEST_CASE(
   WorldTools feedback_tools{feedback_world};
 
   const auto revealed = feedback_tools.eat({});
-  REQUIRE(revealed.response.ok);
-  CHECK(revealed.response.ate == placement.item);
-  CHECK(revealed.response.reward == pigpen::world::item_reward(placement.item));
-  CHECK(revealed.response.score == pigpen::world::item_reward(placement.item));
-  CHECK(revealed.eaten == placement.item);
+  REQUIRE(revealed.ok);
+  CHECK(revealed.ate == placement.item);
+  CHECK(revealed.reward == pigpen::world::item_reward(placement.item));
+  CHECK(revealed.score == pigpen::world::item_reward(placement.item));
 
   World hidden_world{seed};
   move_to(hidden_world, placement.position);
@@ -164,10 +142,10 @@ TEST_CASE(
   config.reward_feedback = false;
   WorldTools hidden_tools{hidden_world, config};
   const auto hidden = hidden_tools.eat({});
-  REQUIRE(hidden.response.ok);
-  CHECK_FALSE(hidden.response.reward);
-  CHECK_FALSE(hidden.response.score);
-  CHECK(hidden.eaten == placement.item);
+  REQUIRE(hidden.ok);
+  CHECK_FALSE(hidden.reward);
+  CHECK_FALSE(hidden.score);
+  CHECK(hidden.ate == placement.item);
   CHECK(hidden_world.score() == pigpen::world::item_reward(placement.item));
 }
 
@@ -175,10 +153,10 @@ TEST_CASE(
     "Scry publicly encodes typed arguments and responses for observability") {
   World world{9};
   WorldTools tools{world};
-  const auto execution = tools.move({.direction = Direction::east});
+  const auto moved = tools.move({.direction = Direction::east});
   const auto arguments = scry::reflection::encode(
       DirectionArguments{.direction = Direction::east});
-  const auto response = scry::reflection::encode(execution.response);
+  const auto response = scry::reflection::encode(moved);
 
   REQUIRE(arguments.has_value());
   REQUIRE(response.has_value());

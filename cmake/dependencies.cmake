@@ -1,24 +1,19 @@
-# All third-party fetching and upstream option pinning lives here so the root
-# CMakeLists.txt only describes Pig Pen's own targets. Everything is fetched
-# with SYSTEM + EXCLUDE_FROM_ALL: warnings stay off for pinned code and it is
-# kept out of the default test/example graph.
+# Third-party dependencies, pinned. Everything is fetched SYSTEM (no warnings
+# from pinned code) and EXCLUDE_FROM_ALL (only what pig-pen links is built).
+# Upstream tests, examples, and install rules already default to off when a
+# project is not top-level, so only non-default choices are set here.
+#
+# To build against a local scry checkout instead of the pinned revision:
+#   cmake --preset dev -DFETCHCONTENT_SOURCE_DIR_SCRY=/absolute/path/to/scry
 include(FetchContent)
 
-# --- scry ---------------------------------------------------------------------
-
-# Scry v0.5.0 supplies the runtime and optional scripted testing support.
-# Keep upstream tests and examples out of the application build.
+# scry::testing (the scripted transport) is only needed by the test suite.
 set(SCRY_BUILD_TESTING_SUPPORT ${PIGPEN_BUILD_TESTS} CACHE BOOL "" FORCE)
-set(SCRY_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(SCRY_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-set(SCRY_ENABLE_FORMAT_CHECK OFF CACHE BOOL "" FORCE)
-set(SCRY_ENABLE_CLANG_TIDY OFF CACHE BOOL "" FORCE)
-set(SCRY_WARNINGS_AS_ERRORS OFF CACHE BOOL "" FORCE)
-set(SCRY_BUILD_FUZZERS OFF CACHE BOOL "" FORCE)
 
-# Keep the previously documented project option as a compatibility alias. It
-# resolves relative paths against the project source, unlike FetchContent's
-# scope-dependent relative-path handling.
+# Deprecated compatibility alias for FETCHCONTENT_SOURCE_DIR_SCRY. It resolves
+# relative paths against the project source, unlike FetchContent's
+# scope-dependent relative-path handling, and fails rather than silently
+# building the pinned revision when the checkout is invalid or conflicts.
 if(PIGPEN_SCRY_SOURCE)
   get_filename_component(
     PIGPEN_SCRY_SOURCE_ABSOLUTE
@@ -63,9 +58,6 @@ if(PIGPEN_SCRY_SOURCE)
   )
 endif()
 
-# To build against a local scry checkout instead of the pinned revision, pass
-# CMake's built-in override with an absolute path:
-#   cmake --preset dev -DFETCHCONTENT_SOURCE_DIR_SCRY=/path/to/scry
 FetchContent_Declare(
   scry
   GIT_REPOSITORY https://github.com/crybo-rybo/scry.git
@@ -75,10 +67,6 @@ FetchContent_Declare(
   EXCLUDE_FROM_ALL
 )
 
-# --- nlohmann/json ------------------------------------------------------------
-
-set(JSON_BuildTests OFF CACHE INTERNAL "")
-set(JSON_Install OFF CACHE INTERNAL "")
 FetchContent_Declare(
   nlohmann_json
   GIT_REPOSITORY https://github.com/nlohmann/json.git
@@ -94,20 +82,14 @@ if(NOT TARGET scry::scry)
   message(FATAL_ERROR "The selected Scry source does not provide scry::scry")
 endif()
 
-# --- SDL3 + Dear ImGui (GUI only) ---------------------------------------------
-
 if(PIGPEN_BUILD_GUI)
+  # Link SDL3 statically into the GUI binary.
   set(SDL_SHARED OFF CACHE BOOL "" FORCE)
   set(SDL_STATIC ON CACHE BOOL "" FORCE)
-  set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
-  set(SDL_TESTS OFF CACHE BOOL "" FORCE)
-  set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
-  set(SDL_INSTALL OFF CACHE BOOL "" FORCE)
-  set(SDL_UNINSTALL OFF CACHE BOOL "" FORCE)
   FetchContent_Declare(
     SDL3
     GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
-    # SDL 3.4.14. Pin the commit rather than a mutable branch.
+    # SDL 3.4.14
     GIT_TAG 147a8ee32dbf9ac02f3794964490687b6bbda1bc
     GIT_PROGRESS TRUE
     SYSTEM
