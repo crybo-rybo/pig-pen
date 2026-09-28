@@ -131,7 +131,8 @@ Key invariants to preserve:
   polls it through `EpisodeBatch`'s job source and must never block on input.
 - `examples/rollout_consumer.py` is a stdlib-only reference kept under test
   (`tests/rollout_consumer_tests.py`); keep it in step with the worker's
-  record format.
+  record format. `tests/bench/` (built with `-DPIGPEN_BUILD_BENCH=ON`, not
+  run by CTest) reproduces the performance notes in `training.md`.
 - The three scenario flags (`--hidden-values`, `--no-reward-feedback`,
   `--opaque-look`) change only what the model is told — the world, scoring,
   and log always record the truth.

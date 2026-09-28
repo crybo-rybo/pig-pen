@@ -240,7 +240,7 @@ Sessions are created per job. Harness creation starts a worker thread and
 initialises libcurl, which is milliseconds against episodes that take seconds
 of inference; reusing a harness across episodes would also mean rebinding the
 tool registry's captured world, so it is not worth doing until profiling says
-otherwise (§6). Phase 4 profiled it: about 0.3 ms per episode to create and
+otherwise (§6). Phase 4 profiled it: about 0.2 ms per episode to create and
 destroy a session, so sessions stay per job.
 
 ### 3.4 Train/eval discipline
@@ -349,9 +349,11 @@ turn records).
   the stream), and an optional `sampling_seed` (number or null) overrides
   `--sampling-seed`; unknown keys are rejected. `--jobs -` excludes
   `--seeds`, `--samples`, and `--sampling-seed-base`. A malformed line
-  gets a `job_error` record (`line`, `error`) on stdout, is counted in the
-  batch record's new `job_errors`, and makes the exit code 6; the worker
-  keeps going. `EpisodeBatch` gained a job source (`ready`, `pending`,
+  (including out-of-range numbers, repeated keys, and NUL bytes) gets a
+  `job_error` record (`line`, `error`) on stdout, is counted in the batch
+  record's new `job_errors`, and makes the exit code 6; the worker keeps
+  going. A stdin read error (not its end) aborts with exit 1 after the
+  started episodes finish. `EpisodeBatch` gained a job source (`ready`, `pending`,
   `exhausted`), asked only while a slot is free, so jobs are pulled lazily;
   a `LineReader` thread does the only blocking read (with the OS read call,
   not stdio, whose lock would otherwise block exit on a signal) and the
@@ -361,19 +363,23 @@ turn records).
   server-side request log keyed by `X-Pigpen-Rollout` joins with worker
   records. **Done**, standard library only: it joins records with a JSONL
   request log into (trajectory, reward) pairs, drops invalid rewards and
-  unmatched rollouts, and computes seed-group advantages. It is run by
+  unmatched rollouts, and computes advantages grouped by rollout-id prefix
+  and seed. It is run by
   `tests/rollout_consumer_tests.py` (including against a real worker
   batch), and ruff covers `examples/` in the justfile and CI.
 - `Session::pump()` budget parameters if P sessions × 2 ms ever matters.
   **Measured; not added.** Against an instant loopback server, a pass over
-  32 sessions takes 0.07–0.13 ms at p50 and at most 5 ms, and over 128
-  sessions at most 13 ms with the pump thread under 20 % busy: the budget
-  only binds on a backlog, and the added latency is negligible next to
-  inference. Numbers in [Training](training.md#performance-notes).
+  32 or 128 sessions takes about 1 ms at p99 (at most 15 ms, the pass that
+  creates all 128 sessions) with the pump thread at most about a quarter
+  busy: the budget only binds on a backlog, and the added latency is
+  negligible next to inference. Numbers, and `tests/bench/` to reproduce
+  them, in [Training](training.md#performance-notes).
 - Harness reuse across episodes, only if profiling shows creation cost.
-  **Measured; not added.** Creating a session takes about 0.06–0.13 ms and
-  destroying one after an episode about 0.2 ms, under 1 % of even a
-  one-turn episode against the loopback stub.
+  **Measured; not added.** Creating a session takes about 0.06–0.09 ms and
+  destroying one after an episode about 0.1 ms: about 15 % of a one-turn
+  episode against an instant loopback stub (1.3 ms), but well under 1 %
+  against a real model, whose single request takes tens of milliseconds or
+  more.
 
 ## 5. Testing strategy
 

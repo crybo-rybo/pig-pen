@@ -121,13 +121,27 @@ stderr:
 ```
 
 `line` is the one-based line number on stdin, counting every line, blank ones
-included. The errors are `invalid JSON at byte N`, `a job must be a JSON
-object`, `unknown key "K"`, `"seed" is required`, a type or range error
-naming the key, a bad or repeated `rollout_id`, and `line is longer than 65536
-bytes`. The worker remembers every rollout id of the stream to refuse
-repeats, a few dozen bytes per job. The batch record counts rejected lines in
+included. The errors are `invalid JSON at byte N`, `invalid JSON: a number
+is out of range` (such as `1e400`), `NUL byte at byte N`, `a job must be a
+JSON object`, `key "K" appears twice`, `unknown key "K"`, `"seed" is
+required`, a type or range error naming the key, a bad or repeated
+`rollout_id`, and `line is longer than 65536 bytes`. Nothing in a line's
+content can stop the batch. The batch record counts rejected lines in
 `job_errors`, and any rejected line makes the exit code 6, as an invalid
 episode does, so a trainer that only checks the exit code still notices.
+
+The worker remembers every rollout id of the stream to refuse repeats, and
+never forgets one: about 120 bytes per job for ids of the default shape, so
+about 120 MB per million jobs. A trainer that keeps one worker for a long
+run should restart it now and then, for example once per training step or
+every few hundred thousand jobs; uniqueness is only checked within one
+worker's stream.
+
+If stdin cannot be read (a read error rather than its end, for example stdin
+is a directory or a closed descriptor), the worker stops taking jobs, lets
+the episodes already started finish and write their records, says `input
+error` on stderr, and writes a batch record with status `aborted`, the
+reason in `error` (`could not read standard input: ...`), and exit code 1.
 
 ## Joining rollouts with the trainer's server
 
@@ -162,8 +176,12 @@ log-probabilities), carried through untouched. It writes one
 `(trajectory, reward)` line per usable rollout, drops invalid rewards,
 rollouts with no logged requests, and requests with no worker record (and
 says so on stderr), and adds a GRPO-style advantage: the reward minus the
-mean reward of the kept rollouts with the same world seed (`--normalize`
-also divides by the group's standard deviation):
+mean reward of the kept rollouts in its group (`--normalize` also divides by
+the group's standard deviation). A group is the rollouts with the same world
+seed and the same rollout-id prefix: an id `<prefix>/<seed>/<sample>`, such
+as the default `run42/1003/2` or a stream's `step17/1003/1`, is grouped as
+`<prefix>/<seed>`, so training steps that reuse a seed never share a
+baseline. An id of any other shape falls back to its seed alone:
 
 ```sh
 python3 examples/rollout_consumer.py --requests requests.jsonl --records rollouts.jsonl
@@ -252,8 +270,8 @@ The last line, written once every started episode has ended:
 ```
 
 `status` is `completed`, `interrupted` (a signal), or `aborted` (a session
-could not be created, or reporting an episode failed; `error` has the
-reason). `episodes` counts the
+could not be created, reporting an episode failed, or stdin could not be
+read; `error` has the reason). `episodes` counts the
 `episode` lines written, always `valid + invalid`. `not_started` counts jobs
 that never got an episode and therefore have no record: those still queued
 when a signal or abort stopped the batch, plus the job whose session could
@@ -267,7 +285,7 @@ otherwise. `exit_code` is the status the process exits with.
 | code | meaning |
 |---|---|
 | `0` | every episode's reward is valid |
-| `1` | a session could not be created (a configuration problem such as a bad `--header` or `--log-dir`), or reporting an episode failed; the batch is aborted: in-flight episodes are cancelled cooperatively and still get their records. Also used when stdout cannot be written (for example the consumer closed the pipe): the worker then writes nothing more to stdout, cancels in-flight episodes cooperatively so their logs still get footers, starts no more jobs, and says so on stderr |
+| `1` | a session could not be created (a configuration problem such as a bad `--header` or `--log-dir`), or reporting an episode failed; the batch is aborted: in-flight episodes are cancelled cooperatively and still get their records. With `--jobs -`, also a stdin that could not be read (started episodes finish normally). Also used when stdout cannot be written (for example the consumer closed the pipe): the worker then writes nothing more to stdout, cancels in-flight episodes cooperatively so their logs still get footers, starts no more jobs, and says so on stderr |
 | `2` | invalid command line, including `--model`, `--base-url`, or `--prompt-variant` text that is not valid UTF-8; nothing is written to stdout |
 | `6` | the batch completed but at least one episode's reward is invalid, or (with `--jobs -`) at least one job line was rejected |
 | `130` / `143` | `SIGINT` / `SIGTERM`: in-flight episodes are cancelled cooperatively and their records written, normally invalid with reason `stopped` (or `timeout` or `error` if that is how they had already ended), queued jobs are not started, and the batch record says `interrupted` |
@@ -324,30 +342,49 @@ reward needs.
 
 Two follow-ups the design left open were measured rather than built: a knob
 for `Session::pump()`'s budget (2 ms and 32 callbacks per session per pump)
-and reusing a session's model client across episodes. Both were timed with a
-scratch harness around `EpisodeBatch` in a release build on a 4-core
-2.1 GHz x86-64 container, against a threaded loopback stub that answers
-every request at once (a `move` + `eat` round, then a text answer streamed
-as 1 or 200 deltas), 5-turn episodes, 4 episodes per slot.
+and reusing a session's model client across episodes. Reproduce the numbers
+with the benchmark in `tests/bench/` (not part of the test suite):
+
+```sh
+cmake --preset release -DPIGPEN_BUILD_BENCH=ON
+cmake --build --preset release --target pigpen_session_bench
+python3 tests/bench/run_session_bench.py build/release/pigpen_session_bench
+```
+
+It drives sessions through `EpisodeBatch` exactly as the worker does, against
+a threaded loopback stub that answers every request at once (a `move` +
+`eat` round, then a text answer streamed as 1 or 200 deltas), so it measures
+the worker's own overhead with no inference time at all. These figures are
+from two runs in a release build on a 4-core 2.1 GHz x86-64 container, with
+5-turn episodes and 4 episodes per slot:
 
 | `--parallel` | episodes/s | pump thread busy | pass p50 | pass p99 | pass max | pump with work p99 |
 |---|---|---|---|---|---|---|
-| 8 | 19 | 1.5 % | 0.06–0.08 ms | 0.7–0.8 ms | 1.8–2.2 ms | 0.1 ms |
-| 32 | 75 | 4–5 % | 0.07–0.13 ms | 0.9–1.3 ms | 3.7–4.9 ms | 0.1–0.2 ms |
-| 128 | 200–240 | 16–19 % | 0.18–0.32 ms | 2.4–2.5 ms | 12–13 ms | 0.3–0.5 ms |
+| 8 | 275–360 | 10–16 % | 0.09–0.14 ms | 1.4–1.8 ms | 1.4–4.7 ms | 0.13–0.27 ms |
+| 32 | 310–360 | 13–18 % | 0.03–0.17 ms | 0.8–0.9 ms | 3.2–5.1 ms | 0.17–0.25 ms |
+| 128 | 290–350 | 19–26 % | 0.06–0.22 ms | 1.0–1.3 ms | 11–15 ms | 0.24–0.43 ms |
 
-A pass is one step of every live session (excluding the 1 ms idle sleep);
-the worst passes are the ones that also create and destroy sessions. An idle
-pump costs under 1 µs. The 2 ms budget only binds when one session has a
-backlog, and even at 128 sessions served far faster than any real inference
-server, the pump thread is mostly idle and the worst pass adds about 13 ms
-to a turn that takes seconds. So there are no pump-budget knobs: they would
-trade fairness between sessions that are not competing.
+A pass is one step of every live session, not counting the 1 ms idle sleep.
+The largest passes are the first, which creates all P sessions at once
+(128 × about 0.09 ms), and the ones that also create and destroy sessions.
+Throughput stops growing with P because the Python stub, bound by its
+interpreter lock, is saturated at about 3,000 requests a second, not because of the worker: its
+pump thread stays 75–90 % idle. The 2 ms budget only binds when one session
+has a backlog, and a pump that delivers anything takes 0.02 ms at p50. So
+there are no pump-budget knobs: a smaller budget would only trade fairness
+between sessions that are not competing, and a pass p99 near 1 ms is noise
+next to one model request.
 
-Creating a session (world, tool registry, conversation, and model client
-with its I/O thread) takes about 0.06–0.13 ms, and destroying one after an
-episode about 0.2 ms (joining the I/O thread and closing its connection):
-about 0.3 ms per episode, under 1 % of a one-turn episode against the
-loopback stub (44 ms) and far less against real inference. Reusing a model
-client would also mean rebinding its tool registry's captured world, so
-sessions stay created per job.
+| session lifecycle | p50 | p99 |
+|---|---|---|
+| create (world, registry, conversation, model client and its I/O thread) | 0.06–0.09 ms | 0.14–0.21 ms |
+| destroy after an episode (join the I/O thread, close its connection) | 0.10 ms | 0.24–0.29 ms |
+| a whole one-turn episode (two requests) against the instant stub | 1.3 ms | 2.4–2.5 ms |
+
+Creating and destroying a session costs about 0.2 ms per episode. Against
+the instant stub that is about 15 % of a one-turn episode, and about 3 % of
+a 5-turn one; against a real model, where one request takes tens to
+thousands of milliseconds, it is well under 1 %. Reuse would only pay off
+for a server that answers in about a millisecond, and it would mean
+rebinding the tool registry's captured world, so sessions stay created per
+job.

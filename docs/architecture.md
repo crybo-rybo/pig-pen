@@ -193,8 +193,8 @@ write as a stop request, so a closed pipe still cancels cooperatively.
 
 The pump budget and per-job session creation were measured rather than
 made configurable: with 128 sessions against an instant loopback server the
-pump thread is under 20 % busy and the worst pass is about 13 ms, and a
-session costs about 0.3 ms to create and destroy. The numbers are in
+pump thread is at most about a quarter busy and a pass takes about 1 ms at
+p99, and a session costs about 0.2 ms to create and destroy. The numbers are in
 [Training](training.md#performance-notes).
 
 ## `src/ui` — the ImGui layer
@@ -225,9 +225,10 @@ seeds, `--header` parsing that keeps `X-Pigpen-Rollout` and
 `X-Pigpen-Seed` for the worker, and `JobStream`, which turns `--jobs -`
 lines into jobs (defaults, rollout-id checks, and uniqueness across the
 stream). `LineReader` reads lines on its own thread and queues them for a
-pump loop to poll; the worker gives it standard input through the operating
-system's read call rather than stdio, so a read still blocked when the
-process exits holds no lock that exit needs. A front end that chooses world seeds itself
+pump loop to poll, reporting a read error apart from the end of input; the
+worker gives it standard input through the operating system's read call
+rather than stdio, so a read still blocked when the process exits holds no
+lock that exit needs. A front end that chooses world seeds itself
 registers the shared flags without `--seed` and points `--seed` at its own
 flag with `OptionParser::rejected()`.
 
