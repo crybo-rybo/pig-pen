@@ -18,7 +18,9 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <optional>
 #include <string>
+#include <system_error>
 #include <thread>
 
 namespace {
@@ -225,9 +227,17 @@ TEST_CASE("session rejects bad request headers before opening a log") {
 TEST_CASE("a session without a log directory keeps its facts and writes "
           "nothing") {
   const auto directory = session_test_directory();
-  const auto previous = std::filesystem::current_path();
   std::filesystem::create_directories(directory);
   // Anything written relative to the working directory would land here.
+  // Restored even when a REQUIRE below throws.
+  struct WorkingDirectory {
+    std::filesystem::path previous{std::filesystem::current_path()};
+    ~WorkingDirectory() {
+      std::error_code ignored;
+      std::filesystem::current_path(previous, ignored);
+    }
+  };
+  std::optional<WorkingDirectory> working_directory{std::in_place};
   std::filesystem::current_path(directory);
   pigpen::agent::Config config;
   config.model = "registry.example/pig-model:Q4_K_M";
@@ -252,7 +262,7 @@ TEST_CASE("a session without a log directory keeps its facts and writes "
     CHECK(summary.reward.invalid_reason == "stopped");
     CHECK(summary.reward_weights == weights);
   }
-  std::filesystem::current_path(previous);
+  working_directory.reset();
   CHECK(std::filesystem::is_empty(directory));
 
   std::error_code ignored;

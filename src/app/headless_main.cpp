@@ -173,7 +173,7 @@ void print_updates(const pigpen::agent::Session &session,
 /// @brief Pumps one session to completion and maps the outcome to an exit
 /// code.
 [[nodiscard]] int run(const Options &options,
-                      const pigpen::cli::TerminationSignal &signal) {
+                      const pigpen::cli::TerminationSignal &termination) {
   auto session_options = options.session;
   session_options.api_key = pigpen::cli::api_key_from_environment();
   auto created = pigpen::agent::Session::create(options.config,
@@ -231,7 +231,7 @@ void print_updates(const pigpen::agent::Session &session,
   int termination_signal = 0;
   const auto stop_requested = [&] {
     if (termination_signal == 0 &&
-        (termination_signal = signal.received()) != 0) {
+        (termination_signal = termination.received()) != 0) {
       std::cerr << "received signal " << termination_signal
                 << "; cancelling active turn and finalizing metrics\n";
     }
@@ -295,8 +295,10 @@ void print_updates(const pigpen::agent::Session &session,
 } // namespace
 
 int main(const int argc, char **argv) {
-  pigpen::cli::TerminationSignal signal;
-  if (auto installed = signal.install(); !installed) {
+  // Deliberately never destroyed: restoring the default handlers after main
+  // returns would let a late signal replace the exit code already computed.
+  auto &termination = *new pigpen::cli::TerminationSignal{};
+  if (auto installed = termination.install(); !installed) {
     std::cerr << "runtime error: " << installed.error() << '\n';
     return runtime_error_exit;
   }
@@ -313,5 +315,5 @@ int main(const int argc, char **argv) {
     print_usage(std::cout, program);
     return 0;
   }
-  return run(*options, signal);
+  return run(*options, termination);
 }
