@@ -41,9 +41,15 @@ tool[turn=1,tick=1] look args={"direction":"north"} result={"cells":[...],"direc
 assistant[turn=1]: I
 assistant[turn=1]:  scanned
 assistant[turn=1]:  north
-summary finish_reason=turn_budget turns_used=4 turn_budget=4 score=1 tool_calls=7
+summary finish_reason=turn_budget turns_used=4 turn_budget=4 score=1 tool_calls=7 reward=1.9
 log_path="logs/20260807-101500-123-llama3.1_8b-instruct-q4_K_M-42.jsonl"
 ```
+
+The summary line ends with the episode's shaped reward (see
+[World and tools](world.md#reward)), printed to ten significant digits, or
+`reward=invalid` when the episode ended with `stopped`, `cancelled`, or
+`error`, or did not finish. The log footer has the exact value and its
+breakdown.
 
 Assistant text is emitted one line per streamed chunk, so it is chatty by
 design — pipe it to a file, or read the JSONL log instead, if you want the
@@ -70,6 +76,7 @@ and round limit, see [Tool errors and limits](world.md#tool-errors-and-limits).
 | `--log-dir PATH` | `logs` | where the JSONL file is written |
 | `--prompt-variant NAME` | `default` | free-form label stored in the log header |
 | `--input TEXT` | *(none)* | human guidance appended to the first turn's nudge |
+| `--reward NAME=VALUE` | *(defaults)* | override one reward weight; repeatable (see below) |
 | `--hidden-values` | off | omit the item/reward table from the system prompt |
 | `--no-reward-feedback` | off | hide the numeric reward and running score from `eat` results |
 | `--opaque-look` | off | `look` reports occupied cells as `"something"` instead of naming the item |
@@ -84,6 +91,16 @@ the server and best-effort even there: the same seed, model, prompt, and
 temperature often reproduce a run on one server, but nothing carries across
 models, servers, or server versions. Scry forwards the value and promises
 nothing more.
+
+`--reward` takes a weight name and a number between -1e6 and 1e6, for
+example
+`--reward invalid_call=-1.0 --reward=explored_cell=0.1`. The names are
+`score`, `explored_cell`, `active_turn`, `zero_tool_turn`, `failed_action`,
+`invalid_call`, `budget_refused_call`, `objective`, and `unused_turn`; see
+[World and tools](world.md#reward) for their meaning and defaults. An
+unknown name, a missing `=`, or a value that is not a number in that range
+is an invalid command line. Weights only change the computed reward, never the
+episode, and the footer records the weights used.
 
 The three scenario flags change only what the model is told — the world, the
 scoring, and the log always record the truth. See
@@ -159,8 +176,11 @@ world, conversation, tool registry, and log as one new session. Animation speed
 applies immediately.
 
 **Stats** — score, turns used against the budget, last turn latency, finish
-reason, items eaten by type, per-tool call counts, and transport/animation
-queue depths.
+reason, items eaten by type, per-tool call counts, the shaped reward (live
+and provisional until the episode ends, or `invalid` for a stopped,
+cancelled, or failed episode) with a collapsible per-term breakdown and
+request tally, and transport/animation queue depths. The GUI always uses the
+default reward weights.
 
 ## Ending an episode
 

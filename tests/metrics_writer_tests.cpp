@@ -1,9 +1,11 @@
 /// @file metrics_writer_tests.cpp
-/// @brief Covers JSONL header/tool/turn/footer reconciliation, the incomplete
-/// "abandoned" footer emitted on destruction, and footer finality.
+/// @brief Covers JSONL header/tool/turn/footer reconciliation, the footer's
+/// reward fields, the incomplete "abandoned" footer emitted on destruction,
+/// and footer finality.
 
 #include "agent/metrics_writer.hpp"
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <nlohmann/json.hpp>
 
@@ -34,6 +36,21 @@ read_records(const std::filesystem::path &path) {
       std::chrono::steady_clock::now().time_since_epoch().count();
   return std::filesystem::temp_directory_path() /
          ("pigpen-metrics-tests-" + std::to_string(stamp));
+}
+
+/// @brief A finished episode summary with nothing recorded.
+[[nodiscard]] pigpen::agent::EpisodeSummary
+finished_summary(const pigpen::agent::FinishReason reason) {
+  pigpen::agent::EpisodeFacts facts{.finish_reason = reason};
+  return {
+      .finish_reason = reason,
+      .items_eaten = {{"apple", 0},
+                      {"berry", 0},
+                      {"toadstool", 0},
+                      {"truffle", 0}},
+      .tool_call_counts = {{"eat", 0}, {"look", 0}, {"move", 0}},
+      .reward = pigpen::agent::compute_reward(facts, {}),
+  };
 }
 
 } // namespace
@@ -92,13 +109,34 @@ TEST_CASE("metrics log contains a reconcilable header tool turn and footer") {
                                                         .host_refused = 0},
               })
               .has_value());
+  pigpen::agent::RewardWeights weights;
+  weights.invalid_call = -1.0;
+  const pigpen::agent::EpisodeFacts facts{
+      .finish_reason = pigpen::agent::FinishReason::turn_budget,
+      .score = 1,
+      .observed_cells = 3,
+      .turns_used = 1,
+      .turn_budget = 2,
+      .executed_actions = 1,
+      .active_turns = 1,
+      .invalid_calls = 2,
+      .budget_refused_calls = 1,
+  };
   REQUIRE(writer
-              ->finish(
-                  {
-                      .reason = pigpen::agent::FinishReason::turn_budget,
-                      .turns_used = 1,
-                  },
-                  1)
+              ->finish({
+                  .finish_reason = pigpen::agent::FinishReason::turn_budget,
+                  .turns_used = 1,
+                  .final_score = 1,
+                  .items_eaten = {{"apple", 0},
+                                  {"berry", 1},
+                                  {"toadstool", 0},
+                                  {"truffle", 0}},
+                  .tool_call_counts = {{"eat", 1}, {"look", 0}, {"move", 0}},
+                  .calls = {.executed = 1, .invalid = 2, .budget_refused = 1},
+                  .duration = std::chrono::milliseconds{250},
+                  .reward_weights = weights,
+                  .reward = pigpen::agent::compute_reward(facts, weights),
+              })
               .has_value());
 
   const auto records = read_records(path);
@@ -142,11 +180,44 @@ TEST_CASE("metrics log contains a reconcilable header tool turn and footer") {
                                  "input_tokens", "latency_ms", "output_tokens",
                                  "scry_tools", "status", "tool_calls", "turn",
                                  "type", "user_message", "zero_tool_turn"});
-  REQUIRE(records.back().at("type") == "footer");
-  REQUIRE(records.back().at("complete") == true);
-  REQUIRE(records.back().at("final_score") == 1);
-  REQUIRE(records.back().at("items_eaten").at("berry") == 1);
-  REQUIRE(records.back().at("tool_call_counts").at("eat") == 1);
+  const auto &footer = records.back();
+  REQUIRE(footer.at("type") == "footer");
+  REQUIRE(footer.at("complete") == true);
+  CHECK(footer.at("finish_reason") == "turn_budget");
+  CHECK(footer.at("error") == "");
+  REQUIRE(footer.at("final_score") == 1);
+  REQUIRE(footer.at("items_eaten").at("berry") == 1);
+  REQUIRE(footer.at("tool_call_counts").at("eat") == 1);
+  CHECK(footer.at("turns_used") == 1);
+  CHECK(footer.at("duration_ms") == 250);
+  // The reward fields are additive: every earlier footer field is still
+  // written under the same name.
+  std::vector<std::string> footer_keys;
+  for (const auto &[key, value] : footer.items()) {
+    footer_keys.push_back(key);
+  }
+  CHECK(footer_keys ==
+        std::vector<std::string>{"calls", "complete", "duration_ms", "error",
+                                 "final_score", "finish_reason", "items_eaten",
+                                 "reward", "reward_version", "reward_weights",
+                                 "tool_call_counts", "turns_used", "type"});
+  CHECK(footer.at("calls") == nlohmann::json{{"executed", 1},
+                                             {"invalid", 2},
+                                             {"budget_refused", 1},
+                                             {"host_refused", 0}});
+  CHECK(footer.at("reward_version") == 1);
+  CHECK(footer.at("reward_weights").at("invalid_call") == -1.0);
+  CHECK(footer.at("reward_weights").at("score") == 1.0);
+  CHECK(footer.at("reward_weights").size() == 9);
+  const auto &reward = footer.at("reward");
+  CHECK(reward.at("valid") == true);
+  CHECK(reward.at("invalid_reason").is_null());
+  // 1 score + 2 explored cells + 1 active turn - 2 invalid - 1 over budget.
+  CHECK(reward.at("total").get<double>() ==
+        Catch::Approx(1.0 + 0.1 + 0.1 - 2.0 - 0.25));
+  CHECK(reward.at("explored_cells") == 2);
+  CHECK(reward.at("invalid_calls") == 2);
+  CHECK(reward.at("terms").at("invalid_call") == -2.0);
 
   std::error_code ignored;
   std::filesystem::remove_all(directory, ignored);
@@ -181,6 +252,9 @@ TEST_CASE("destroying an unfinished writer still emits an incomplete footer") {
   REQUIRE(records.back().at("complete") == false);
   REQUIRE(records.back().at("finish_reason") == "abandoned");
   REQUIRE(records.back().at("turns_used") == 3);
+  // An abandoned episode has no summary, so no reward fields.
+  CHECK_FALSE(records.back().contains("reward"));
+  CHECK_FALSE(records.back().contains("calls"));
 
   std::error_code ignored;
   std::filesystem::remove_all(directory, ignored);
@@ -194,26 +268,26 @@ TEST_CASE("metrics footer is final and cannot be duplicated") {
   auto writer = std::move(*created);
   const auto path = writer->path();
 
-  REQUIRE(writer
-              ->finish(
-                  {
-                      .reason = pigpen::agent::FinishReason::stopped,
-                      .turns_used = 0,
-                  },
-                  0)
+  // A summary of an unfinished episode is refused without writing.
+  auto unfinished = finished_summary(pigpen::agent::FinishReason::stopped);
+  unfinished.finish_reason.reset();
+  CHECK_FALSE(writer->finish(unfinished));
+
+  REQUIRE(writer->finish(finished_summary(pigpen::agent::FinishReason::stopped))
               .has_value());
-  CHECK_FALSE(writer->finish(
-      {
-          .reason = pigpen::agent::FinishReason::stopped,
-          .turns_used = 0,
-      },
-      0));
+  CHECK_FALSE(
+      writer->finish(finished_summary(pigpen::agent::FinishReason::stopped)));
   CHECK_FALSE(writer->record_turn({.record = {.turn = 1}}));
 
   const auto records = read_records(path);
   REQUIRE(records.size() == 2);
   CHECK(records.back().at("type") == "footer");
   CHECK(records.back().at("finish_reason") == "stopped");
+  CHECK(records.back().at("complete") == true);
+  // A stopped episode's reward is absent, not zero.
+  CHECK(records.back().at("reward").at("valid") == false);
+  CHECK(records.back().at("reward").at("invalid_reason") == "stopped");
+  CHECK(records.back().at("reward").at("total").is_null());
 
   std::error_code ignored;
   std::filesystem::remove_all(directory, ignored);

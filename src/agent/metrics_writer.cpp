@@ -2,6 +2,7 @@
 /// @brief MetricsWriter implementation; the contract is in the header.
 #include "agent/metrics_writer.hpp"
 
+#include "agent/summary_json.hpp"
 #include "world/world.hpp"
 
 #include <nlohmann/json.hpp>
@@ -11,6 +12,7 @@
 #include <ctime>
 #include <iomanip>
 #include <sstream>
+#include <string_view>
 #include <system_error>
 #include <utility>
 
@@ -71,15 +73,23 @@ iso_timestamp(const std::chrono::system_clock::time_point now) {
   return {{"x", position.x}, {"y", position.y}};
 }
 
-/// @brief Append one JSONL record and flush so a crash loses nothing.
+/// @brief Append one serialised JSONL line and flush so a crash loses
+/// nothing.
 [[nodiscard]] std::expected<void, std::string>
-write_line(std::ofstream &stream, const std::filesystem::path &path,
-           const nlohmann::json &record) {
-  stream << record.dump() << '\n' << std::flush;
+write_raw_line(std::ofstream &stream, const std::filesystem::path &path,
+               const std::string_view line) {
+  stream << line << '\n' << std::flush;
   if (!stream) {
     return std::unexpected("failed writing metrics log: " + path.string());
   }
   return {};
+}
+
+/// @brief Append one JSONL record.
+[[nodiscard]] std::expected<void, std::string>
+write_line(std::ofstream &stream, const std::filesystem::path &path,
+           const nlohmann::json &record) {
+  return write_raw_line(stream, path, record.dump());
 }
 
 /// @brief Stable lowercase name recorded in turn lines.
@@ -171,9 +181,7 @@ MetricsWriter::MetricsWriter(
 
 MetricsWriter::~MetricsWriter() {
   if (!finalized_ && stream_) {
-    static_cast<void>(write_footer("abandoned", turns_recorded_,
-                                   "episode ended before finalization",
-                                   last_score_, false));
+    static_cast<void>(write_abandoned_footer());
   }
 }
 
@@ -257,29 +265,33 @@ MetricsWriter::record_turn(const EpisodeTurn &turn) {
 }
 
 std::expected<void, std::string>
-MetricsWriter::finish(const EpisodeResult &result, const int final_score) {
-  return write_footer(finish_reason_name(result.reason), result.turns_used,
-                      result.error, final_score, true);
-}
-
-std::expected<void, std::string> MetricsWriter::write_footer(
-    const std::string_view reason, const std::uint32_t turns_used,
-    const std::string_view error, const int final_score, const bool complete) {
+MetricsWriter::finish(const EpisodeSummary &summary) {
   if (finalized_) {
     return std::unexpected("metrics log already has a footer");
   }
+  if (!summary.complete()) {
+    return std::unexpected("cannot write a footer for an unfinished episode");
+  }
+  auto status = write_raw_line(stream_, path_, to_json_line(summary, "footer"));
+  if (status) {
+    finalized_ = true;
+  }
+  return status;
+}
+
+std::expected<void, std::string> MetricsWriter::write_abandoned_footer() {
   const auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
       std::chrono::steady_clock::now() - started_);
   auto status = write_line(stream_, path_,
                            {
                                {"type", "footer"},
-                               {"complete", complete},
-                               {"finish_reason", reason},
-                               {"error", error},
-                               {"final_score", final_score},
+                               {"complete", false},
+                               {"finish_reason", "abandoned"},
+                               {"error", "episode ended before finalization"},
+                               {"final_score", last_score_},
                                {"items_eaten", eaten_counts_},
                                {"tool_call_counts", tool_counts_},
-                               {"turns_used", turns_used},
+                               {"turns_used", turns_recorded_},
                                {"duration_ms", duration.count()},
                            });
   if (status) {

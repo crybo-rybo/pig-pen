@@ -3,6 +3,8 @@
 #include "ui/app_ui.hpp"
 
 #include "agent/episode_runner.hpp"
+#include "agent/episode_summary.hpp"
+#include "agent/reward.hpp"
 #include "world/world.hpp"
 
 #include <imgui.h>
@@ -186,6 +188,51 @@ decoded_call_label(const agent::ToolActivity &activity) {
         ")";
   }
   return label;
+}
+
+/// @brief Reward total and a collapsible per-term table, part of Stats.
+void draw_reward_breakdown(const agent::EpisodeSummary &summary) {
+  const auto &reward = summary.reward;
+  ImGui::Text("Reward");
+  ImGui::SameLine();
+  if (reward.valid) {
+    ImGui::TextColored(reward.total >= 0.0 ? ImVec4{0.46F, 0.92F, 0.62F, 1.0F}
+                                           : ImVec4{1.0F, 0.42F, 0.42F, 1.0F},
+                       "%.3f", reward.total);
+  } else if (!summary.complete()) {
+    ImGui::TextDisabled("%.3f (provisional until the episode ends)",
+                        reward.total);
+  } else {
+    ImGui::TextColored({1.0F, 0.52F, 0.32F, 1.0F}, "invalid (%s)",
+                       reward.invalid_reason.c_str());
+  }
+  if (!ImGui::TreeNode("Reward breakdown")) {
+    return;
+  }
+  if (ImGui::BeginTable("reward-table", 3,
+                        ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+    ImGui::TableSetupColumn("Term");
+    ImGui::TableSetupColumn("Count");
+    ImGui::TableSetupColumn("Contribution");
+    ImGui::TableHeadersRow();
+    const auto counts = agent::reward_term_counts(reward);
+    for (std::size_t index = 0; index < counts.size(); ++index) {
+      const auto name = std::string{agent::reward_weight_fields[index].name};
+      ImGui::TableNextRow();
+      ImGui::TableSetColumnIndex(0);
+      ImGui::TextUnformatted(name.c_str());
+      ImGui::TableSetColumnIndex(1);
+      ImGui::Text("%g", counts[index]);
+      ImGui::TableSetColumnIndex(2);
+      ImGui::Text("%+.3f", reward.terms.at(name));
+    }
+    ImGui::EndTable();
+  }
+  ImGui::TextDisabled("Requests: %u executed, %u invalid, %u over budget, "
+                      "%u refused by the host",
+                      summary.calls.executed, summary.calls.invalid,
+                      summary.calls.budget_refused, summary.calls.host_refused);
+  ImGui::TreePop();
 }
 
 } // namespace
@@ -852,6 +899,9 @@ void AppUi::draw_stats_panel() {
   ImGui::SameLine();
   ImGui::TextColored({1.0F, 0.52F, 0.32F, 1.0F}, "| failed %zu",
                      eat_attempts - successful_eats);
+
+  draw_reward_breakdown(
+      agent::summarize_episode(*session_, session_->reward_weights()));
 
   ImGui::TextDisabled(
       "Callbacks %zu | transport queued %zu | visuals queued %zu",

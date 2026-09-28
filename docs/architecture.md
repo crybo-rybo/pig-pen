@@ -15,6 +15,7 @@ src/app/main.cpp              src/app/headless_main.cpp
                                   ├── WorldTools      typed actions and visibility
                                   ├── WorldToolBinding reflected scry::ToolRegistry
                                   ├── ToolActivity    typed semantics + exact payloads
+                                  ├── summarize_episode() → EpisodeSummary + reward
                                   ├── MetricsWriter   JSONL
                                   └── world::World    the simulation
 ```
@@ -41,7 +42,10 @@ serialisation used for determinism tests. Details in [World and tools](world.md)
 | `scry_transport.cpp` | the real implementation, over `scry::Harness` / `scry::Conversation` |
 | `episode_runner.cpp` | the state machine: `idle → playing ⇄ paused → finished`, turn budget, cooperative cancellation, transcript, and observers for turn/episode completion |
 | `episode_turn.cpp` | `EpisodeTurn` (a `TurnRecord` plus its optional `TurnCallTally`) and the pure `tally_turn_calls()` that splits Scry's call count into executed, invalid, budget-refused, and host-refused |
-| `metrics_writer.cpp` | JSONL header/tool/turn/footer, with a footer guaranteed even on abnormal shutdown |
+| `reward.cpp` | `RewardWeights`, `EpisodeFacts`, and the pure `compute_reward()` returning a `RewardBreakdown` (validity, raw counts, per-term contributions); `parse_reward_weight()` for `NAME=VALUE` overrides. No scry, JSON, or `Session` |
+| `episode_summary.cpp` | `episode_facts()` and `summarize_episode()`: an episode's outcome (finish reason, turns, score, items eaten, tool counts, summed call tally, duration, reward) from a world, activity feed, turns, and runner snapshot, or from a `Session` |
+| `summary_json.cpp` | `to_json_line()`, the only serialisation of a summary, its reward, and its weights |
+| `metrics_writer.cpp` | JSONL header/tool/turn/footer; a finished episode's footer is its serialised summary, and a footer is guaranteed even on abnormal shutdown |
 | `session.cpp` | composes all of the above into one owned object |
 
 Two seams make this testable. `ITurnTransport` lets `EpisodeRunner` be driven
@@ -97,8 +101,14 @@ scenario edits show "Pending settings apply on Reset" instead of mutating a
 live episode.
 
 The session is also where an episode's facts live: the world, the activity
-feed, every finished turn with its call tally (`turns()`), and its creation
-time (`elapsed()`). The log records the same facts but is not their only home.
+feed, every finished turn with its call tally (`turns()`), and its duration
+(`elapsed()`, which stops when the episode finishes). The log records the same
+facts but is not their only home. `summarize_episode()` builds an
+`EpisodeSummary` from them at any time; the session writes that summary as
+the footer when the episode finishes, using the `RewardWeights` it was created
+with, and front ends call it for their own reports (the CLI's `reward=` and
+the GUI's Stats panel). The shaped reward is computed only from these facts
+and never feeds back into the world or the prompt.
 
 The session owns the bindings and world at stable addresses. They outlive the
 harness that adopts their registry. Destruction flushes pending world activity
@@ -146,7 +156,7 @@ when the GUI or tests are enabled, `pigpen_ui`. `pigpen_agent` links
 `scry::scry` privately: scry carries `-freflection`, so every `pigpen_agent`
 translation unit (and `pigpen_reflection_tests`, which links scry directly)
 compiles with it, while `pigpen_world`, `pigpen_ui`, and both entry points stay
-reflection-free. nlohmann/json is likewise private to `pigpen_agent`'s metrics
-writer. The `pigpen_target()` helper applies C++26 and the warning flags to
+reflection-free. nlohmann/json is likewise private to `pigpen_agent`, used
+only by the metrics writer and `summary_json.cpp`. The `pigpen_target()` helper applies C++26 and the warning flags to
 pig-pen's own targets only; fetched dependencies are `SYSTEM`. See
 [Building](building.md).

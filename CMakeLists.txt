@@ -49,11 +49,14 @@ pigpen_target(pigpen_world)
 # PRIVATE so pigpen_world, pigpen_ui, and the front ends remain reflection-free.
 add_library(pigpen_agent STATIC
   src/agent/episode_runner.cpp
+  src/agent/episode_summary.cpp
   src/agent/episode_turn.cpp
   src/agent/metrics_writer.cpp
   src/agent/prompt.cpp
+  src/agent/reward.cpp
   src/agent/scry_transport.cpp
   src/agent/session.cpp
+  src/agent/summary_json.cpp
   src/agent/world_tool_binding.cpp
   src/agent/world_tools.cpp
 )

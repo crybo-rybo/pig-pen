@@ -37,9 +37,11 @@ covering:
 | `tests/scry_transport_tests.cpp` | standalone registry manifests, native call budgets across batches and turns, model-visible decode errors, exact dispatch payloads and identity, side effects on dispatch failure and shutdown, objective/logging admission, per-turn call tallies for batches mixing executed, invalid, over-budget, and post-objective requests, round-limit history preservation, cancellation, and transport lifetime using `scry::testing` |
 | `tests/prompt_tests.cpp` | config defaults and that each prompt flag says what it claims — including hidden rewards and keeping automatic recovery instructions separate from human guidance |
 | `tests/episode_turn_tests.cpp` | the call tally arithmetic on plain records, its absence without Scry statistics, and its refusal to fabricate a tally from inconsistent counts |
+| `tests/reward_tests.cpp` | the default weights, each reward term in isolation, the total as the sum of terms, validity for every finish reason (and an unfinished episode), and `NAME=VALUE` weight parsing with each error |
+| `tests/episode_summary_tests.cpp` | reward facts and summaries built from a plain world, activity feed, turns, and snapshot (no `Session`), and the summary's single JSON serialisation with valid, invalid, and unfinished rewards |
 | `tests/episode_runner_tests.cpp` | the turn loop against a scripted transport: budget exhaustion, pause/resume, stop cancelling an in-flight turn, objective completion, terminal/logging errors, and queued human input |
-| `tests/metrics_writer_tests.cpp` | header/tool/turn/footer reconciliation, the turn `calls` tally as an object or `null`, the incomplete footer on destruction, and footer finality |
-| `tests/session_tests.cpp` | config rejection and that a session owns a seeded world plus a registered tool harness atomically, starting with no retained turns |
+| `tests/metrics_writer_tests.cpp` | header/tool/turn/footer reconciliation, the turn `calls` tally as an object or `null`, the footer's `calls`, `reward`, `reward_version`, and `reward_weights`, the incomplete footer on destruction, and footer finality |
+| `tests/session_tests.cpp` | config rejection, that a session owns a seeded world plus a registered tool harness atomically, starting with no retained turns, and that its summary, duration, and footer use the reward weights it was created with |
 | `tests/world_animation_tests.cpp` | the typed activity feed becoming an ordered visual timeline, with caller-supplied time |
 | `tests/gui_options_tests.cpp` | GUI startup parsing for model and endpoint arguments, including both value syntaxes and invalid input |
 
@@ -47,21 +49,25 @@ covering:
 
 - `pigpen_headless_integration` — `tests/headless_integration_tests.py` runs
   the CLI against a loopback OpenAI-compatible stub through the real Scry/Curl
-  path: argv wiring (including `--sampling-seed`), the tool result posted back
-  to the provider, stdout, the JSONL log on disk (including each turn's call
-  tally), and exit codes `0` (a valid `move`) and `5` (only a schema-invalid
-  call)
+  path: argv wiring (including `--sampling-seed` and repeated `--reward`
+  overrides), the tool result posted back to the provider, stdout (including
+  the summary line's `reward=`), the JSONL log on disk (including each turn's
+  call tally and the footer's reward breakdown), and exit codes `0` (a valid
+  `move`) and `5` (only a schema-invalid call)
 - `pigpen_headless_help` — `--help` exits 0
 - `pigpen_headless_requires_model`, `pigpen_headless_rejects_invalid_bounds`
   (`--max-tool-rounds 65`), `pigpen_headless_rejects_invalid_temperature`
-  (`--temperature nan`), and `pigpen_headless_rejects_invalid_sampling_seed`
-  (above the 32-bit range) — each passes only if the CLI prints the matching
-  option diagnostic
+  (`--temperature nan`), `pigpen_headless_rejects_invalid_sampling_seed`
+  (above the 32-bit range), `pigpen_headless_rejects_unknown_reward_weight`
+  (`--reward bogus=1`), and `pigpen_headless_rejects_invalid_reward_value`
+  (`--reward=invalid_call=inf`) — each passes only if the CLI prints the
+  matching option diagnostic
 - `pigpen_headless_graceful_sigint` / `_sigterm` — `tests/headless_signal_tests.py`
   starts a stub socket server on a loopback port, points the CLI at it, sends
   an exact tagged model identifier, verifies that identifier in the HTTP
   request and JSONL header, then asserts the exit status is `128 + signal`
-  *and* that the JSONL file still ends with a finalized footer
+  *and* that the JSONL file still ends with a finalized footer whose reward
+  is invalid (`stopped`), matching `reward=invalid` on the summary line
 
 Python 3 is required whenever tests are enabled. The two signal tests only
 register on UNIX; the loopback integration test runs on every

@@ -10,6 +10,7 @@
 #include "agent/episode_runner.hpp"
 #include "agent/episode_turn.hpp"
 #include "agent/events.hpp"
+#include "agent/reward.hpp"
 #include "world/world.hpp"
 
 #include <chrono>
@@ -39,10 +40,12 @@ class Session final {
 public:
   /// @brief Validate @p config and compose the world, registered harness,
   /// conversation, and already-open metrics log.
+  /// @param reward_weights Weights the log footer's reward is computed with.
   /// @return The session, or a human-readable rejection message.
   [[nodiscard]] static std::expected<std::shared_ptr<Session>, std::string>
   create(Config config, std::filesystem::path log_directory = "logs",
-         std::string prompt_variant = "default");
+         std::string prompt_variant = "default",
+         RewardWeights reward_weights = {});
 
   ~Session();
 
@@ -72,8 +75,11 @@ public:
   /// @brief Every turn the runner finished, oldest first, each with its call
   /// tally. A turn the runner abandoned in flight (fail()) is not retained.
   [[nodiscard]] const std::vector<EpisodeTurn> &turns() const noexcept;
-  /// @brief Wall time since the session was created, on a steady clock.
+  /// @brief Wall time since the session was created, on a steady clock;
+  /// frozen once the episode finishes, so it is then the episode duration.
   [[nodiscard]] std::chrono::milliseconds elapsed() const;
+  /// @brief The weights passed to create(), used for the footer's reward.
+  [[nodiscard]] const RewardWeights &reward_weights() const noexcept;
   [[nodiscard]] const std::filesystem::path &metrics_path() const noexcept;
   /// @brief Last metrics-write failure, or empty; a failure is terminal.
   [[nodiscard]] const std::string &metrics_error() const noexcept;

@@ -7,7 +7,7 @@
 #pragma once
 
 #include "agent/config.hpp"
-#include "agent/episode_runner.hpp"
+#include "agent/episode_summary.hpp"
 #include "agent/episode_turn.hpp"
 #include "agent/events.hpp"
 
@@ -18,11 +18,14 @@
 #include <map>
 #include <memory>
 #include <string>
-#include <string_view>
 
 namespace pigpen::agent {
 
-/// @brief Writes one episode's JSONL log and reconciles its summary counts.
+/// @brief Writes one episode's JSONL log.
+///
+/// The footer of a finished episode is its EpisodeSummary. The writer keeps
+/// running counts of what it recorded only for the "abandoned" footer, which
+/// has no summary to draw on.
 class MetricsWriter final {
 public:
   /// @brief Create the log directory and file, then write the header line.
@@ -45,9 +48,11 @@ public:
   /// @brief Append one finished model turn and its call tally.
   [[nodiscard]] std::expected<void, std::string>
   record_turn(const EpisodeTurn &turn);
-  /// @brief Write the final footer; the log accepts nothing afterwards.
+  /// @brief Write @p summary as the final footer; the log accepts nothing
+  /// afterwards.
+  /// @return An error, writing nothing, when the summary is not complete().
   [[nodiscard]] std::expected<void, std::string>
-  finish(const EpisodeResult &result, int final_score);
+  finish(const EpisodeSummary &summary);
 
   [[nodiscard]] const std::filesystem::path &path() const noexcept {
     return path_;
@@ -57,14 +62,13 @@ private:
   MetricsWriter(std::filesystem::path path, std::ofstream stream,
                 std::chrono::steady_clock::time_point started);
 
-  [[nodiscard]] std::expected<void, std::string>
-  write_footer(std::string_view reason, std::uint32_t turns_used,
-               std::string_view error, int final_score, bool complete);
+  /// @brief The incomplete footer the destructor writes.
+  [[nodiscard]] std::expected<void, std::string> write_abandoned_footer();
 
   std::filesystem::path path_{};
   std::ofstream stream_{};
   std::chrono::steady_clock::time_point started_{};
-  // Pre-seeded so the footer always lists every tool and item, even at zero.
+  // Abandoned-footer counts, pre-seeded so every tool and item is listed.
   std::map<std::string, std::size_t> tool_counts_{
       {"move", 0}, {"look", 0}, {"eat", 0}};
   std::map<std::string, std::size_t> eaten_counts_{

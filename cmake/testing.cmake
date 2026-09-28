@@ -20,10 +20,12 @@ include(Catch)
 add_executable(
   pigpen_tests
     tests/episode_runner_tests.cpp
+    tests/episode_summary_tests.cpp
     tests/episode_turn_tests.cpp
     tests/gui_options_tests.cpp
     tests/metrics_writer_tests.cpp
     tests/prompt_tests.cpp
+    tests/reward_tests.cpp
     tests/session_tests.cpp
     tests/world_animation_tests.cpp
     tests/world_tests.cpp
@@ -78,6 +80,16 @@ pigpen_headless_rejects(
   rejects_invalid_sampling_seed
   "--sampling-seed must be in the range"
   --model m --sampling-seed 4294967296
+)
+pigpen_headless_rejects(
+  rejects_unknown_reward_weight
+  "unknown reward weight \"bogus\""
+  --model m --reward bogus=1
+)
+pigpen_headless_rejects(
+  rejects_invalid_reward_value
+  "reward weight invalid_call must be a finite number"
+  --model m --reward=invalid_call=inf
 )
 
 add_test(
