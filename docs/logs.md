@@ -112,17 +112,48 @@ the turn.
 
 ```json
 {"type":"footer","complete":true,"finish_reason":"turn_budget","error":"",
- "final_score":0,"items_eaten":{"apple":0,"berry":0,"toadstool":0,"truffle":0},
- "tool_call_counts":{"eat":6,"look":3,"move":0},
- "turns_used":2,"duration_ms":3186}
+ "final_score":1,"items_eaten":{"apple":0,"berry":1,"toadstool":0,"truffle":0},
+ "tool_call_counts":{"eat":1,"look":3,"move":3},
+ "turns_used":2,"duration_ms":3186,
+ "calls":{"executed":7,"invalid":1,"budget_refused":0,"host_refused":0},
+ "reward":{"valid":true,"invalid_reason":null,"total":1.65,
+   "score":1,"explored_cells":21,"active_turns":2,"zero_tool_turns":0,
+   "failed_actions":1,"invalid_calls":1,"budget_refused_calls":0,
+   "unused_turns":0,"objective_complete":false,
+   "terms":{"score":1.0,"explored_cell":1.05,"active_turn":0.2,"zero_tool_turn":0.0,
+     "failed_action":-0.1,"invalid_call":-0.5,"budget_refused_call":0.0,
+     "objective":0.0,"unused_turn":0.0}},
+ "reward_version":1,
+ "reward_weights":{"score":1.0,"explored_cell":0.05,"active_turn":0.1,
+   "zero_tool_turn":-1.0,"failed_action":-0.1,"invalid_call":-0.5,
+   "budget_refused_call":-0.25,"objective":5.0,"unused_turn":0.1}}
 ```
 
 `complete: true` means the episode reached a terminal state on its own —
 `turn_budget`, `objective_complete`, `stopped`, `cancelled`, or `error`. If the
 process exits, the window closes, or the session is reset mid-episode, the
 writer still emits a footer, but with `complete: false` and
-`finish_reason: "abandoned"`. A footer is final: nothing can be recorded after
-it, and it cannot be written twice.
+`finish_reason: "abandoned"`. An abandoned footer has only the fields up to
+`duration_ms`. A footer is final: nothing can be recorded after it, and it
+cannot be written twice.
+
+`final_score` is the truthful world score. `items_eaten` and
+`tool_call_counts` list every item and tool, even at zero. `duration_ms` is
+the wall time from session creation to the finish.
+
+`calls` sums the turn `calls` tallies. Turns whose tally is `null` add
+nothing. `reward` is the shaped reward described in
+[World and tools](world.md#reward):
+
+- `valid` is `true` only for `turn_budget` and `objective_complete`. When it
+  is `false`, `total` is `null`, and `invalid_reason` names the finish reason
+  (`stopped`, `cancelled`, or `error`). When the reward is valid,
+  `invalid_reason` is `null`.
+- The raw counts (`score` through `objective_complete`) and `terms` (each
+  count times its weight, keyed by weight name) are always written, so a
+  run can be re-weighted without re-playing it.
+- `reward_weights` holds the weights actually used, including any
+  `--reward` overrides. `reward_version` identifies the reward definition.
 
 ## Reading a log
 
@@ -160,6 +191,13 @@ for f in logs/*.jsonl; do
   jq -c --arg f "$f" 'select(.type=="footer")
     | {run:$f, score:.final_score, reason:.finish_reason, tools:.tool_call_counts}' "$f"
 done
+```
+
+Re-weight a finished run offline, here with `invalid_call` at −1.0:
+
+```sh
+jq 'select(.type=="footer" and .reward.valid)
+  | .reward.total - .reward.terms.invalid_call + .reward.invalid_calls * -1.0' logs/<run>.jsonl
 ```
 
 Since the world is seed-deterministic, two runs with the same seed and turn

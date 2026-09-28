@@ -1,6 +1,7 @@
 # Plan: RL worker mode
 
-Status: phase 0 (episode facts) is implemented; later phases are proposals.
+Status: phases 0 (episode facts) and 1 (reward and summary) are implemented;
+later phases are proposals.
 
 Pig Pen today runs one episode at a time under a front end that owns the pump
 loop (the GUI once per frame, `pig-pen-headless` in a sleep-1 ms loop) and

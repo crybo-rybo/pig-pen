@@ -31,6 +31,43 @@ random free cells. Nothing is placed on the spawn.
 An episode's objective is complete when every **positive-value** item is gone.
 Leftover toadstools do not keep it running.
 
+## Reward
+
+The world score above is the truth, and nothing below changes it. Separately,
+every episode gets a shaped **reward** (version 1), computed after the fact
+from what was recorded. It is meant for comparing and training policies. It
+never reaches the world or the prompt. The model is not told about it.
+
+Each term is a count times a weight:
+
+| term (weight name) | default | counts |
+|---|---:|---|
+| `score` | 1.0 | points of truthful world score (may be negative) |
+| `explored_cell` | 0.05 | distinct cells observed beyond the spawn (`observed_count − 1`, at most 99) |
+| `active_turn` | 0.1 | completed turns with at least one executed world action |
+| `zero_tool_turn` | −1.0 | completed turns with no executed world action |
+| `failed_action` | −0.1 | executed actions that failed: a wall bump or an empty `eat` |
+| `invalid_call` | −0.5 | requests naming an unknown tool or carrying undecodable arguments |
+| `budget_refused_call` | −0.25 | requests past the four-request limit |
+| `objective` | 5.0 | once, when the objective is complete |
+| `unused_turn` | 0.1 | turns left in the budget, only when the objective is complete |
+
+Cancelled or errored turns count as neither active nor zero-tool. Invalid and
+over-budget requests come from each turn's call tally (see
+[Logs](logs.md#turn)), and a turn without one adds nothing. Requests the host
+refuses after the objective is complete are recorded but not penalised; they
+only happen when the model batched more calls into the round of the final
+`eat`.
+
+A reward is **valid** only when the episode ended with `turn_budget` or
+`objective_complete`. For `stopped`, `cancelled`, `error`, or an unfinished
+episode, the reward is absent rather than zero: logs write `"total": null`
+with an `invalid_reason`, and a trainer should drop the episode. The counts and
+per-term contributions are still written, so any episode can be re-weighted
+offline. Override weights with `--reward NAME=VALUE` on the CLI
+([Running](running.md#options)); the weights used are recorded in the log
+footer.
+
 ## Determinism
 
 The seed plus the action sequence fully determine the world. `World::dump()`
