@@ -391,5 +391,8 @@ int main(const int argc, char **argv) {
     // report exceptions into an abort. Unwinding closes every session.
     std::cerr << "runtime error: " << error.what() << '\n';
     return runtime_error_exit;
+  } catch (...) {
+    std::cerr << "runtime error: unknown exception\n";
+    return runtime_error_exit;
   }
 }

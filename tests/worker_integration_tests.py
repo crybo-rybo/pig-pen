@@ -129,6 +129,7 @@ class StubHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         stub = self.server
+        self.left = False
         length = int(self.headers.get("Content-Length", "0"))
         body = json.loads(self.rfile.read(length))
         rollout = self.headers.get("X-Pigpen-Rollout")
@@ -157,12 +158,23 @@ class StubHandler(BaseHTTPRequestHandler):
             # that runs sessions serially just leaves the event unset.
             if stub.overlap and index == 0:
                 stub.overlapped.wait(timeout=OVERLAP_TIMEOUT)
-            self.reply(stub.script(key, index))
+            self.reply(stub.script(key, index), key)
         finally:
-            with stub.condition:
-                stub.in_flight[key] -= 1
+            self.leave(key)
 
-    def reply(self, reply: Reply) -> None:
+    def leave(self, key: str) -> None:
+        """Stop counting this request as in flight; idempotent per request.
+
+        Called before a response is written: once the worker can read it, it
+        may start its next job while this handler thread is still running.
+        """
+        if self.left:
+            return
+        self.left = True
+        with self.server.condition:
+            self.server.in_flight[key] -= 1
+
+    def reply(self, reply: Reply, key: str) -> None:
         kind = reply[0]
         if kind == "hang":
             # Never answer; the worker's timeout or signal must cancel it.
@@ -171,6 +183,7 @@ class StubHandler(BaseHTTPRequestHandler):
             return
         if kind == "gated":
             self.server.gate.wait(timeout=60)
+        self.leave(key)
         if kind == "status":
             body = b'{"error":{"message":"scripted failure"}}'
             self.send_response(reply[1])
