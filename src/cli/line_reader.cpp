@@ -14,6 +14,7 @@
 #include <io.h>
 #else
 #include <cerrno>
+#include <poll.h>
 #include <unistd.h>
 #endif
 
@@ -163,6 +164,17 @@ LineReader::ReadBytes standard_input_bytes() {
       if (count >= 0) {
         return static_cast<std::size_t>(count);
       }
+#if !defined(_WIN32)
+      // A parent may hand over a non-blocking pipe: wait for input rather
+      // than mistake "nothing yet" for a read error.
+      if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        pollfd ready{.fd = STDIN_FILENO, .events = POLLIN, .revents = 0};
+        if (::poll(&ready, 1, -1) >= 0 || errno == EINTR) {
+          continue;
+        }
+        return std::unexpected(std::system_category().message(errno));
+      }
+#endif
       if (errno != EINTR) {
         return std::unexpected(std::system_category().message(errno));
       }

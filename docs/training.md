@@ -143,6 +143,9 @@ the episodes already started finish and write their records, says `input
 error` on stderr, and writes a batch record with status `aborted`, the
 reason in `error` (`could not read standard input: ...`), and exit code 1.
 
+A non-blocking stdin that is merely empty is not an error: the reader waits
+for input on it just as it does on a blocking one.
+
 ## Joining rollouts with the trainer's server
 
 Every request an episode makes carries two headers:
@@ -346,9 +349,9 @@ and reusing a session's model client across episodes. Reproduce the numbers
 with the benchmark in `tests/bench/` (not part of the test suite):
 
 ```sh
-cmake --preset release -DPIGPEN_BUILD_BENCH=ON
-cmake --build --preset release --target pigpen_session_bench
-python3 tests/bench/run_session_bench.py build/release/pigpen_session_bench
+cmake --preset release -B build/bench -DPIGPEN_BUILD_BENCH=ON
+cmake --build build/bench --target pigpen_session_bench
+python3 tests/bench/run_session_bench.py build/bench/pigpen_session_bench
 ```
 
 It drives sessions through `EpisodeBatch` exactly as the worker does, against

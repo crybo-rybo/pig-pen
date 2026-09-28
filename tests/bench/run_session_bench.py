@@ -3,9 +3,9 @@
 Not run by CTest; this reproduces the numbers in docs/training.md
 ("Performance notes"):
 
-    cmake --preset release -DPIGPEN_BUILD_BENCH=ON
-    cmake --build --preset release --target pigpen_session_bench
-    python3 tests/bench/run_session_bench.py build/release/pigpen_session_bench
+    cmake --preset release -B build/bench -DPIGPEN_BUILD_BENCH=ON
+    cmake --build build/bench --target pigpen_session_bench
+    python3 tests/bench/run_session_bench.py build/bench/pigpen_session_bench
 
 The stub answers every request at once, so it measures the worker's own
 overhead with no inference time at all: a request whose last message is a

@@ -22,6 +22,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -905,6 +906,51 @@ def test_unreadable_stdin_exits_1(executable: str) -> None:
     )
 
 
+def test_nonblocking_stdin_waits(executable: str) -> None:
+    """A non-blocking stdin that is empty for now is waited on, not an error."""
+    read_end, write_end = os.pipe()
+    os.set_blocking(read_end, False)
+    with Stub(play_one_turn) as server:
+        try:
+            process = subprocess.Popen(
+                worker_command(executable, server, "--jobs", "-"),
+                stdin=read_end,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            os.close(read_end)
+            read_end = -1
+            try:
+                # Give the reader time to find the pipe empty (EAGAIN).
+                time.sleep(0.3)
+                check(process.poll() is None, "worker exited on an empty pipe")
+                os.write(write_end, b'{"seed": 81}\n')
+                record = read_record(process)
+                check(record.get("rollout_id") == "rollout/81/0", f"{record!r}")
+                os.close(write_end)
+                write_end = -1
+                process.wait(timeout=30)
+                stdout = process.stdout.read()
+                stderr = process.stderr.read()
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+                process.stdout.close()
+                process.stderr.close()
+        finally:
+            for descriptor in (read_end, write_end):
+                if descriptor >= 0:
+                    os.close(descriptor)
+
+    output = f"stdout={stdout}\nstderr={stderr}"
+    check(process.returncode == 0, f"exit {process.returncode}\n{output}")
+    batch = json.loads(stdout)
+    expected_batch = {"type": "batch", "status": "completed", "episodes": 1}
+    check(subset(batch, expected_batch) == expected_batch, f"batch: {batch!r}")
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         raise SystemExit("usage: worker_integration_tests.py PIG_PEN_WORKER")
@@ -917,6 +963,7 @@ def main() -> int:
     if os.name == "posix":
         test_signal_while_waiting_for_jobs(executable)
         test_unreadable_stdin_exits_1(executable)
+        test_nonblocking_stdin_waits(executable)
         test_closed_stdout_exits_1(executable)
         for signal_number in (signal.SIGINT, signal.SIGTERM):
             test_signal_cancels_in_flight(executable, signal_number)
