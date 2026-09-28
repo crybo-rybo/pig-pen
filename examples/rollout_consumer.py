@@ -7,7 +7,14 @@ writes one `episode` record per rollout; the trainer's inference server (or a
 proxy in front of it) logs what it sampled, keyed by that header. This script
 joins the two into (trajectory, reward) pairs, drops what a trainer must not
 train on, and computes GRPO-style group advantages: each reward minus the
-mean reward of the rollouts that share its world seed.
+mean reward of its group.
+
+A group is the rollouts that share a world seed *and* a rollout-id prefix.
+An id shaped `<prefix>/<seed>/<sample>` (the worker's default, or a trainer's
+own such as `step17/1003/1`) is grouped under `<prefix>/<seed>`, so a
+long-lived `--jobs -` stream that names its ids by training step never mixes
+steps in one baseline. Any other id falls back to its seed alone, grouped
+with the other such ids of that seed.
 
 The request log is JSONL, one line per request in arrival order:
 
@@ -26,8 +33,10 @@ The second form runs the worker and reads its stdout; the request log is
 read once the worker has exited, since the server writes it concurrently.
 Output is JSONL on stdout, one line per kept rollout:
 
-    {"rollout_id", "seed", "sample", "reward", "advantage", "group_size",
-     "trajectory": [{"request", "completion"}, ...]}
+    {"rollout_id", "seed", "sample", "group", "reward", "advantage",
+     "group_size", "trajectory": [{"request", "completion"}, ...]}
+
+where `group` is `<prefix>/<seed>`, or the seed alone for the fallback.
 
 and a summary of what was kept and dropped on stderr.
 """
@@ -59,6 +68,7 @@ class Rollout:
     reward: float
     trajectory: list[dict[str, Any]]
     advantage: float = 0.0
+    group: str = ""
     group_size: int = 1
 
 
@@ -131,16 +141,32 @@ def join(records: Iterable[str], requests: Iterable[str]) -> Join:
     return result
 
 
+def group_key(rollout_id: str, seed: int) -> str:
+    """`<prefix>/<seed>` for an id `<prefix>/<seed>/<sample>`, else the seed.
+
+    The id must end in the record's own seed and a whole-number sample, with
+    a non-empty prefix before them; anything else (a custom id such as
+    `trial-a`) falls back to the seed alone.
+    """
+    prefix, _, rest = rollout_id.rpartition("/")
+    prefix, _, id_seed = prefix.rpartition("/")
+    if prefix and id_seed == str(seed) and rest.isdigit():
+        return f"{prefix}/{seed}"
+    return str(seed)
+
+
 def add_advantages(rollouts: list[Rollout], normalize: bool = False) -> None:
-    """Advantage = reward - mean reward of the rollouts with the same seed.
+    """Advantage = reward - mean reward of the rollout's group.
 
     Samples of one seed play the identical world, so the group mean is the
-    baseline. With `normalize`, the difference is also divided by the
-    group's standard deviation, as GRPO does.
+    baseline; the rollout-id prefix keeps separate runs or training steps
+    apart. With `normalize`, the difference is also divided by the group's
+    standard deviation, as GRPO does.
     """
-    groups: dict[int, list[Rollout]] = defaultdict(list)
+    groups: dict[str, list[Rollout]] = defaultdict(list)
     for rollout in rollouts:
-        groups[rollout.seed].append(rollout)
+        rollout.group = group_key(rollout.rollout_id, rollout.seed)
+        groups[rollout.group].append(rollout)
     for group in groups.values():
         rewards = [rollout.reward for rollout in group]
         mean = statistics.fmean(rewards)
@@ -202,6 +228,7 @@ def main(argv: list[str]) -> int:
             "rollout_id": rollout.rollout_id,
             "seed": rollout.seed,
             "sample": rollout.sample,
+            "group": rollout.group,
             "reward": rollout.reward,
             "advantage": rollout.advantage,
             "group_size": rollout.group_size,
