@@ -10,7 +10,9 @@ reflection.
 - 10×10, walled on all four sides. Coordinates run `0..9`.
 - `(0,0)` is the **south-west** corner: `x` grows east, `y` grows north.
 - The blob spawns at `(5,5)`. That cell is empty and starts out as the only
-  observed cell.
+  observed cell. Standing on or looking at a cell marks it observed for good;
+  `World::observed_count()` is the number of distinct observed cells, spawn
+  included (1 to 100).
 
 ## Items
 

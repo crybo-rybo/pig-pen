@@ -183,6 +183,13 @@ public:
   item_at(Position position) const noexcept;
   /// @brief Whether the blob has ever stood on or looked at a cell.
   [[nodiscard]] bool is_observed(Position position) const noexcept;
+  /// @brief How many distinct cells have ever been observed, in
+  /// [1, cell_count].
+  /// @note Counts the spawn cell, which is observed from construction; each
+  /// cell counts once however often it is revisited or rescanned.
+  [[nodiscard]] std::size_t observed_count() const noexcept {
+    return observed_.count();
+  }
   /// @brief Every remaining item and its position, in row-major order.
   [[nodiscard]] std::vector<ItemPlacement> items() const;
   /// @brief How many of an item kind have been eaten.

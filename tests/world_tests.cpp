@@ -37,7 +37,9 @@ count_item(const std::vector<ItemPlacement> &placements, const ItemType item) {
                     [item](const auto &value) { return value.item == item; }));
 }
 
-[[nodiscard]] std::size_t observed_count(const World &world) {
+/// @brief Counts observed cells by probing every position, independently of
+/// World::observed_count().
+[[nodiscard]] std::size_t scanned_observed_count(const World &world) {
   std::size_t count = 0;
   for (int y = 0; y < World::height; ++y) {
     for (int x = 0; x < World::width; ++x) {
@@ -128,7 +130,8 @@ TEST_CASE("the spawn is empty and is the only initially observed cell",
   CHECK(world.score() == 0);
   CHECK_FALSE(world.item_at(World::spawn).has_value());
   CHECK(world.is_observed(World::spawn));
-  CHECK(observed_count(world) == 1);
+  CHECK(scanned_observed_count(world) == 1);
+  CHECK(world.observed_count() == 1);
 
   CHECK_FALSE(World::in_bounds({.x = -1, .y = 0}));
   CHECK_FALSE(World::in_bounds({.x = 0, .y = -1}));
@@ -220,9 +223,43 @@ TEST_CASE("look returns every cell in its ray and marks it observed",
       CHECK(cell.item == world.item_at(expected));
       CHECK(world.is_observed(expected));
     }
-    CHECK(observed_count(world) == result.cells.size() + 1);
+    CHECK(scanned_observed_count(world) == result.cells.size() + 1);
+    CHECK(world.observed_count() == result.cells.size() + 1);
     CHECK(world.position() == World::spawn);
   }
+}
+
+TEST_CASE("observed count includes the spawn and counts each cell once",
+          "[world][observation]") {
+  World world{29};
+  REQUIRE(world.observed_count() == 1);
+
+  // Rescanning and walking back over seen cells adds nothing.
+  REQUIRE(world.look(Direction::east).cells.size() == 4);
+  REQUIRE(world.observed_count() == 5);
+  REQUIRE(world.look(Direction::east).cells.size() == 4);
+  REQUIRE(world.move(Direction::east).ok);
+  REQUIRE(world.move(Direction::west).ok);
+  CHECK(world.observed_count() == 5);
+  REQUIRE_FALSE(world.eat().ok);
+  CHECK(world.observed_count() == 5);
+
+  // A move onto a new cell adds exactly that cell.
+  REQUIRE(world.move(Direction::north).ok);
+  CHECK(world.observed_count() == 6);
+  CHECK(world.observed_count() == scanned_observed_count(world));
+
+  // Looking north and south from every column observes the whole pen.
+  move_to(world, {.x = 0, .y = 5});
+  for (int x = 0; x < World::width; ++x) {
+    if (x > 0) {
+      REQUIRE(world.move(Direction::east).ok);
+    }
+    static_cast<void>(world.look(Direction::north));
+    static_cast<void>(world.look(Direction::south));
+  }
+  CHECK(world.observed_count() == World::cell_count);
+  CHECK(scanned_observed_count(world) == World::cell_count);
 }
 
 TEST_CASE("eating reports empty cells without changing the score",
