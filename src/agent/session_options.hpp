@@ -34,8 +34,8 @@ struct SessionOptions {
   /// ends read it from the environment; the Session never does.
   std::string api_key{};
   /// Identifies this episode to the model server. When non-empty it is sent
-  /// as the rollout_header_name request header on every request and recorded
-  /// in the log header.
+  /// as the rollout_header_name request header on every request, recorded
+  /// in the log header and footer, and carried by the episode's summary.
   std::string rollout_id{};
   /// Extra `{name, value}` headers sent verbatim on every request. Names that
   /// collide with a provider-managed header, or with rollout_header_name,

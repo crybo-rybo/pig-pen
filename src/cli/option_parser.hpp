@@ -49,6 +49,17 @@ parse_unsigned(std::string_view name, std::string_view value,
 parse_real(std::string_view name, std::string_view value, double minimum,
            double maximum);
 
+/// @brief Whether @p text is well-formed UTF-8: no stray continuation
+/// bytes, truncated or overlong sequences, surrogates, or code points past
+/// U+10FFFF.
+[[nodiscard]] bool is_valid_utf8(std::string_view text) noexcept;
+
+/// @brief Reject a value that is not well-formed UTF-8, for text that ends
+/// up in a request or a JSON record.
+/// @return `NAME must be valid UTF-8` when it is not.
+[[nodiscard]] ParseResult require_utf8(std::string_view name,
+                                       std::string_view value);
+
 /// @brief Registered options plus the loop that applies them.
 ///
 /// A value is the rest of the argument after `=` (which must not be empty)
@@ -122,6 +133,11 @@ public:
   void value(std::string name, std::string metavar, std::string description,
              ValueHandler handler);
 
+  /// @brief `NAME`, with or without a value, is always the error
+  /// @p message. The option is left out of help(); a front end uses this
+  /// to point a familiar flag it does not take at the one it does.
+  void rejected(std::string name, std::string message);
+
   /// @brief Apply @p arguments (without the program name) in order.
   /// @return The first error; targets set before it keep their values.
   [[nodiscard]] ParseResult parse(std::span<const std::string_view> arguments);
@@ -139,6 +155,8 @@ private:
     /// Absent for a flag.
     ValueHandler on_value;
     std::function<void()> on_flag;
+    /// Set for a rejected() option, which help() leaves out.
+    std::optional<std::string> rejection{};
   };
 
   [[nodiscard]] const Option *find(std::string_view name) const;

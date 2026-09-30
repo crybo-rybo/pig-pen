@@ -1,7 +1,8 @@
 /// @file episode_driver_tests.cpp
 /// @brief Covers EpisodeDriver against a fake episode with hand-driven time:
 /// finishing on its own, a timeout whose cancellation finishes within the
-/// grace period, a stalled cancellation, and a stop request (a signal) that
+/// grace period, a stalled cancellation (also when a stop request arrives
+/// during the grace period), and a stop request (a signal) that
 /// waits for the episode however long it takes.
 
 #include "agent/episode_driver.hpp"
@@ -170,7 +171,7 @@ TEST_CASE("a stop request cancels before pumping and waits without limit") {
   CHECK(episode.stops == 2);
 }
 
-TEST_CASE("a stop request during the grace period also waits for the end") {
+TEST_CASE("a stop request during the grace period keeps the grace deadline") {
   FakeEpisode episode;
   EpisodeDriver driver{episode, timeout};
 
@@ -178,12 +179,29 @@ TEST_CASE("a stop request during the grace period also waits for the end") {
   CHECK_FALSE(driver.step(start + timeout, false));
   CHECK(episode.stops == 1);
   CHECK_FALSE(driver.step(start + timeout + 1s, true));
+  CHECK(driver.interrupted());
   CHECK(episode.stops == 2);
-  CHECK_FALSE(
-      driver.step(start + timeout + pigpen::agent::cancellation_grace, true));
-  CHECK_FALSE(driver.step(start + 1h, false));
+  // A signal after a timeout must not let a stuck cancellation hold the
+  // caller forever: the grace period still ends the drive.
+  const auto grace_end = start + timeout + pigpen::agent::cancellation_grace;
+  CHECK_FALSE(driver.step(grace_end - 1ms, true));
+  CHECK(driver.step(grace_end, true) == DriveOutcome::cancellation_stalled);
+  CHECK(driver.timed_out());
+  CHECK(episode.stops == 2);
+  CHECK_FALSE(episode.done);
+}
+
+TEST_CASE("a stop request during the grace period still reports an episode "
+          "that finishes in time as interrupted") {
+  FakeEpisode episode;
+  EpisodeDriver driver{episode, timeout};
+
+  CHECK_FALSE(driver.step(start, false));
+  CHECK_FALSE(driver.step(start + timeout, false));
+  CHECK_FALSE(driver.step(start + timeout + 1s, true));
   episode.done = true;
-  CHECK(driver.step(start + 2h, false) == DriveOutcome::interrupted);
+  CHECK(driver.step(start + timeout + 2s, false) == DriveOutcome::interrupted);
+  CHECK(driver.timed_out());
 }
 
 TEST_CASE("a stop request wins over an episode finishing in the same pass") {

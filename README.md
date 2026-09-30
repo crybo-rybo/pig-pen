@@ -8,12 +8,13 @@ full grid, the model's fog-of-war, its streamed output, every successfully
 decoded world-tool invocation and result, live stats, and a JSONL log of the
 run.
 
-Two front ends share the same world, prompt, tools, episode runner, and logger:
+Three front ends share the same world, prompt, tools, episode runner, and logger:
 
 | binary | what it is |
 |---|---|
 | `pig-pen` | Dear ImGui desktop app — grid, animation, transcript, event log, controls |
 | `pig-pen-headless` | scriptable CLI that runs one bounded episode and exits |
+| `pig-pen-worker` | RL rollout worker: plays seeds × samples episodes in parallel against a trainer's server and prints one reward record per episode |
 
 ## The pen
 
@@ -62,7 +63,7 @@ cmake --build --preset dev
 ```
 
 Launching the GUI without `--model` waits for a manual model selection instead.
-Every episode writes a `logs/<timestamp>-<model>-<seed>.jsonl` file you can
+Every GUI and headless episode writes a `logs/<timestamp>-<model>-<seed>.jsonl` file you can
 inspect afterwards.
 
 ## Docs
@@ -72,4 +73,5 @@ inspect afterwards.
 - [Testing](docs/testing.md) — the suite runs without a model or a network
 - [World and tools](docs/world.md) — grid rules, tool schemas, result JSON
 - [Logs](docs/logs.md) — the JSONL record format and `jq` recipes
+- [Training](docs/training.md) — the RL worker, its records, and joining rollouts with a trainer
 - [Architecture](docs/architecture.md) — how the pieces fit together

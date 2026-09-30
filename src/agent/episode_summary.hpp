@@ -28,6 +28,9 @@ struct EpisodeSummary {
   std::optional<FinishReason> finish_reason{};
   /// The runner's terminal error text, or empty.
   std::string error{};
+  /// SessionOptions::rollout_id of the session summarised, or empty; the
+  /// plain-facts summarize_episode() leaves it empty.
+  std::string rollout_id{};
   std::uint32_t turns_used{};
   /// Truthful world score.
   int final_score{};
@@ -62,8 +65,9 @@ struct EpisodeSummary {
     std::span<const EpisodeTurn> turns, const EpisodeSnapshot &snapshot,
     std::chrono::milliseconds duration, const RewardWeights &weights);
 
-/// @brief Summarise @p session as it stands; callable at any time, including
-/// mid-episode (the reward is then invalid with reason `unfinished`).
+/// @brief Summarise @p session as it stands, including its rollout id;
+/// callable at any time, including mid-episode (the reward is then invalid
+/// with reason `unfinished`).
 [[nodiscard]] EpisodeSummary summarize_episode(const Session &session,
                                                const RewardWeights &weights);
 

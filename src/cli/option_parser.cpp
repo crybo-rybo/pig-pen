@@ -62,6 +62,60 @@ std::string format_real(const double number) {
                                       : std::format("{}", number);
 }
 
+bool is_valid_utf8(const std::string_view text) noexcept {
+  std::size_t index = 0;
+  while (index < text.size()) {
+    const auto lead = static_cast<unsigned char>(text[index]);
+    std::size_t length = 0;
+    // The smallest code point each length may encode, so overlong forms fail.
+    char32_t code_point = 0;
+    char32_t minimum = 0;
+    if (lead < 0x80U) {
+      ++index;
+      continue;
+    }
+    if ((lead & 0xE0U) == 0xC0U) {
+      length = 2;
+      code_point = lead & 0x1FU;
+      minimum = 0x80;
+    } else if ((lead & 0xF0U) == 0xE0U) {
+      length = 3;
+      code_point = lead & 0x0FU;
+      minimum = 0x800;
+    } else if ((lead & 0xF8U) == 0xF0U) {
+      length = 4;
+      code_point = lead & 0x07U;
+      minimum = 0x10000;
+    } else {
+      return false;
+    }
+    if (text.size() - index < length) {
+      return false;
+    }
+    for (std::size_t offset = 1; offset < length; ++offset) {
+      const auto next = static_cast<unsigned char>(text[index + offset]);
+      if ((next & 0xC0U) != 0x80U) {
+        return false;
+      }
+      code_point = (code_point << 6U) | (next & 0x3FU);
+    }
+    if (code_point < minimum || code_point > 0x10FFFF ||
+        (code_point >= 0xD800 && code_point <= 0xDFFF)) {
+      return false;
+    }
+    index += length;
+  }
+  return true;
+}
+
+ParseResult require_utf8(const std::string_view name,
+                         const std::string_view value) {
+  if (!is_valid_utf8(value)) {
+    return std::unexpected(std::string{name} + " must be valid UTF-8");
+  }
+  return {};
+}
+
 std::expected<std::uint64_t, std::string>
 parse_unsigned(const std::string_view name, const std::string_view value,
                const std::uint64_t minimum, const std::uint64_t maximum) {
@@ -126,6 +180,17 @@ void OptionParser::value(std::string name, std::string metavar,
   });
 }
 
+void OptionParser::rejected(std::string name, std::string message) {
+  options_.push_back({
+      .name = std::move(name),
+      .metavar = {},
+      .description = {},
+      .on_value = {},
+      .on_flag = {},
+      .rejection = std::move(message),
+  });
+}
+
 const OptionParser::Option *
 OptionParser::find(const std::string_view name) const {
   const auto found = std::ranges::find(options_, name, &Option::name);
@@ -149,6 +214,9 @@ OptionParser::parse(const std::span<const std::string_view> arguments) {
     const auto *const option = find(name);
     if (option == nullptr) {
       return std::unexpected("unknown option: " + name);
+    }
+    if (option->rejection) {
+      return std::unexpected(*option->rejection);
     }
     if (!option->on_value) {
       if (inline_value) {
@@ -177,6 +245,9 @@ OptionParser::parse(const std::span<const std::string_view> arguments) {
 std::string OptionParser::help() const {
   std::string output;
   for (const auto &option : options_) {
+    if (option.rejection) {
+      continue;
+    }
     auto label = "  " + option.name;
     if (!option.metavar.empty()) {
       label += ' ' + option.metavar;

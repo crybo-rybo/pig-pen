@@ -29,16 +29,19 @@ void add_reward_option(OptionParser &parser, agent::RewardWeights &weights) {
 }
 
 void add_config_options(OptionParser &parser, agent::Config &config,
-                        agent::SessionOptions &options) {
+                        agent::SessionOptions &options,
+                        const WorldSeedOption world_seed) {
   constexpr auto u32_max = std::numeric_limits<std::uint32_t>::max();
   parser.text("--base-url", "URL", config.base_url,
               std::format("Model endpoint (default: {})", config.base_url));
   parser.text("--model", "NAME", config.model,
               "Exact model identifier sent to the server (required)");
-  parser.integer(
-      "--seed", "INTEGER", config.seed, 0,
-      std::numeric_limits<std::uint64_t>::max(),
-      std::format("Deterministic world seed (default: {})", config.seed));
+  if (world_seed == WorldSeedOption::registered) {
+    parser.integer(
+        "--seed", "INTEGER", config.seed, 0,
+        std::numeric_limits<std::uint64_t>::max(),
+        std::format("Deterministic world seed (default: {})", config.seed));
+  }
   parser.integer("--turns", "INTEGER", config.turn_budget, 1,
                  agent::turn_budget_limit,
                  std::format("Episode turn budget, 1..{} (default: {})",
@@ -73,8 +76,14 @@ ParseResult validate_config_options(const agent::Config &config,
   if (config.base_url.empty()) {
     return std::unexpected("--base-url cannot be empty");
   }
+  if (auto valid = require_utf8("--base-url", config.base_url); !valid) {
+    return valid;
+  }
   if (config.model.empty()) {
     return std::unexpected("--model is required");
+  }
+  if (auto valid = require_utf8("--model", config.model); !valid) {
+    return valid;
   }
   if (options.log_directory && options.log_directory->empty()) {
     return std::unexpected("--log-dir cannot be empty");
@@ -82,7 +91,7 @@ ParseResult validate_config_options(const agent::Config &config,
   if (options.prompt_variant.empty()) {
     return std::unexpected("--prompt-variant cannot be empty");
   }
-  return {};
+  return require_utf8("--prompt-variant", options.prompt_variant);
 }
 
 } // namespace pigpen::cli

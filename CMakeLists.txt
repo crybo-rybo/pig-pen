@@ -48,6 +48,7 @@ pigpen_target(pigpen_world)
 # Every TU here compiles with -freflection (carried by scry::scry). Scry stays
 # PRIVATE so pigpen_world, pigpen_ui, and the front ends remain reflection-free.
 add_library(pigpen_agent STATIC
+  src/agent/episode_batch.cpp
   src/agent/episode_driver.cpp
   src/agent/episode_runner.cpp
   src/agent/episode_summary.cpp
@@ -76,6 +77,7 @@ add_library(
     src/cli/config_options.cpp
     src/cli/option_parser.cpp
     src/cli/termination_signal.cpp
+    src/cli/worker_jobs.cpp
 )
 target_link_libraries(pigpen_cli PUBLIC pigpen_agent)
 pigpen_target(pigpen_cli)
@@ -90,6 +92,10 @@ endif()
 add_executable(pig-pen-headless src/app/headless_main.cpp)
 target_link_libraries(pig-pen-headless PRIVATE pigpen_agent pigpen_cli)
 pigpen_target(pig-pen-headless)
+
+add_executable(pig-pen-worker src/app/worker_main.cpp)
+target_link_libraries(pig-pen-worker PRIVATE pigpen_agent pigpen_cli)
+pigpen_target(pig-pen-worker)
 
 if(PIGPEN_BUILD_GUI)
   find_package(OpenGL REQUIRED)

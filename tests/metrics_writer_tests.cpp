@@ -1,9 +1,12 @@
 /// @file metrics_writer_tests.cpp
 /// @brief Covers JSONL header/tool/turn/footer reconciliation, the footer's
 /// reward fields, the incomplete "abandoned" footer emitted on destruction,
-/// and footer finality.
+/// footer finality, and the Config serialisation the header shares with the
+/// worker's episode record.
 
 #include "agent/metrics_writer.hpp"
+
+#include "agent/summary_json.hpp"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -200,7 +203,8 @@ TEST_CASE("metrics log contains a reconcilable header tool turn and footer") {
         std::vector<std::string>{"calls", "complete", "duration_ms", "error",
                                  "final_score", "finish_reason", "items_eaten",
                                  "reward", "reward_version", "reward_weights",
-                                 "tool_call_counts", "turns_used", "type"});
+                                 "rollout_id", "tool_call_counts", "turns_used",
+                                 "type"});
   CHECK(footer.at("calls") == nlohmann::json{{"executed", 1},
                                              {"invalid", 2},
                                              {"budget_refused", 1},
@@ -252,6 +256,7 @@ TEST_CASE("destroying an unfinished writer still emits an incomplete footer") {
   REQUIRE(records.back().at("complete") == false);
   REQUIRE(records.back().at("finish_reason") == "abandoned");
   REQUIRE(records.back().at("turns_used") == 3);
+  CHECK(records.back().at("rollout_id").is_null());
   // An abandoned episode has no summary, so no reward fields.
   CHECK_FALSE(records.back().contains("reward"));
   CHECK_FALSE(records.back().contains("calls"));
@@ -288,6 +293,67 @@ TEST_CASE("metrics footer is final and cannot be duplicated") {
   CHECK(records.back().at("reward").at("valid") == false);
   CHECK(records.back().at("reward").at("invalid_reason") == "stopped");
   CHECK(records.back().at("reward").at("total").is_null());
+
+  std::error_code ignored;
+  std::filesystem::remove_all(directory, ignored);
+}
+
+TEST_CASE("the header and the worker's episode record share one Config "
+          "serialisation") {
+  const auto directory = test_directory();
+  pigpen::agent::Config config;
+  config.model = "registry.example/pig-model:Q4_K_M";
+  config.seed = 1003;
+  config.turn_budget = 9;
+  config.sampling_seed = 12;
+  config.opaque_look = true;
+  auto created = pigpen::agent::MetricsWriter::create(
+      directory, config, "default", "run42/1003/2");
+  REQUIRE(created.has_value());
+  const auto path = (*created)->path();
+  auto summary = finished_summary(pigpen::agent::FinishReason::turn_budget);
+  summary.rollout_id = "run42/1003/2";
+  REQUIRE((*created)->finish(summary));
+  created->reset();
+
+  const auto records = read_records(path);
+  REQUIRE(records.size() == 2);
+  auto header = records.front();
+  CHECK(header.at("rollout_id") == "run42/1003/2");
+  CHECK(records.back().at("rollout_id") == "run42/1003/2");
+  // Everything in the header but its own four keys is the Config.
+  for (const auto *const key :
+       {"type", "started_at", "prompt_variant", "rollout_id"}) {
+    CHECK(header.erase(key) == 1);
+  }
+  const auto record = nlohmann::json::parse(pigpen::agent::to_json_line(
+      pigpen::agent::EpisodeRecord{.summary = summary, .config = config}));
+  CHECK(record.at("config") == header);
+  CHECK(header.at("scenario").at("opaque_look") == true);
+
+  std::error_code ignored;
+  std::filesystem::remove_all(directory, ignored);
+}
+
+TEST_CASE("a log survives text that is not UTF-8") {
+  const auto directory = test_directory();
+  pigpen::agent::Config config;
+  config.model = "pig\xff";
+  auto created =
+      pigpen::agent::MetricsWriter::create(directory, config, "variant\xc3");
+  REQUIRE(created.has_value());
+  const auto path = (*created)->path();
+  REQUIRE((*created)->record_turn({
+      .record = {.turn = 1, .assistant_text = "said \xff"},
+  }));
+  created->reset();
+
+  const auto records = read_records(path);
+  REQUIRE(records.size() == 3);
+  CHECK(records[0].at("model") == "pig\xef\xbf\xbd");
+  CHECK(records[0].at("prompt_variant") == "variant\xef\xbf\xbd");
+  CHECK(records[1].at("assistant_text") == "said \xef\xbf\xbd");
+  CHECK(records[2].at("finish_reason") == "abandoned");
 
   std::error_code ignored;
   std::filesystem::remove_all(directory, ignored);

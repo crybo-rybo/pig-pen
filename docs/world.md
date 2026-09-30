@@ -65,8 +65,10 @@ episode, the reward is absent rather than zero: logs write `"total": null`
 with an `invalid_reason`, and a trainer should drop the episode. The counts and
 per-term contributions are still written, so any episode can be re-weighted
 offline. Override weights with `--reward NAME=VALUE` on the CLI
-([Running](running.md#options)); the weights used are recorded in the log
-footer.
+([Running](running.md#options)) or the worker ([Training](training.md)); the
+weights used are recorded in the log footer and in every worker record. The
+worker also marks an episode cut short by its `--timeout-seconds` invalid,
+with reason `timeout`.
 
 ## Determinism
 

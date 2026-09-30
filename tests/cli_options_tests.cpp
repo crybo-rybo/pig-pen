@@ -246,6 +246,69 @@ TEST_CASE("shared config options keep the headless CLI's diagnostics") {
         "--hidden-values does not take a value");
 }
 
+TEST_CASE("shared config options can leave --seed to the front end") {
+  pigpen::agent::Config config;
+  pigpen::agent::SessionOptions options;
+  pigpen::cli::OptionParser parser;
+  pigpen::cli::add_config_options(parser, config, options,
+                                  pigpen::cli::WorldSeedOption::omitted);
+  CHECK(parse_error(parser, {"--seed", "4"}) == "unknown option: --seed");
+  CHECK_FALSE(parser.help().contains("--seed "));
+  CHECK(parse_error(parser, {"--turns", "3", "--model", "m"}).empty());
+  CHECK(config.turn_budget == 3);
+  CHECK(config.seed == 0);
+}
+
+TEST_CASE("UTF-8 validation accepts well-formed text only") {
+  using pigpen::cli::is_valid_utf8;
+  CHECK(is_valid_utf8(""));
+  CHECK(is_valid_utf8("pig-model:Q4_K_M"));
+  CHECK(is_valid_utf8("caf\xc3\xa9"));                // U+00E9
+  CHECK(is_valid_utf8("\xe2\x82\xac"));               // U+20AC
+  CHECK(is_valid_utf8("\xf0\x9f\x90\x96"));           // U+1F416
+  CHECK(is_valid_utf8("\xf4\x8f\xbf\xbf"));           // U+10FFFF
+  CHECK(is_valid_utf8("\xed\x9f\xbf"));               // U+D7FF
+  CHECK_FALSE(is_valid_utf8("\xff"));                 // never a lead byte
+  CHECK_FALSE(is_valid_utf8("\x80"));                 // stray continuation
+  CHECK_FALSE(is_valid_utf8("caf\xc3"));              // truncated
+  CHECK_FALSE(is_valid_utf8("\xe2\x82"));             // truncated
+  CHECK_FALSE(is_valid_utf8("\xc3\x28"));             // bad continuation
+  CHECK_FALSE(is_valid_utf8("\xc0\xaf"));             // overlong '/'
+  CHECK_FALSE(is_valid_utf8("\xe0\x80\xaf"));         // overlong
+  CHECK_FALSE(is_valid_utf8("\xf0\x80\x80\xaf"));     // overlong
+  CHECK_FALSE(is_valid_utf8("\xed\xa0\x80"));         // surrogate U+D800
+  CHECK_FALSE(is_valid_utf8("\xf4\x90\x80\x80"));     // past U+10FFFF
+  CHECK_FALSE(is_valid_utf8("\xf8\x88\x80\x80\x80")); // five bytes
+  CHECK(pigpen::cli::require_utf8("--model", "ok"));
+  CHECK(pigpen::cli::require_utf8("--model", "\xff").error() ==
+        "--model must be valid UTF-8");
+}
+
+TEST_CASE("shared config validation rejects text that is not UTF-8") {
+  const auto error = [](const auto &change) {
+    pigpen::agent::Config config;
+    config.model = "m";
+    pigpen::agent::SessionOptions options;
+    change(config, options);
+    const auto valid = pigpen::cli::validate_config_options(config, options);
+    return valid ? std::string{} : valid.error();
+  };
+  CHECK(error([](auto &, auto &) {}).empty());
+  CHECK(error([](auto &config, auto &) { config.model = "pig\xff"; }) ==
+        "--model must be valid UTF-8");
+  CHECK(error([](auto &config, auto &) {
+          config.base_url = "http://h\xc3/v1";
+        }) == "--base-url must be valid UTF-8");
+  CHECK(error([](auto &, auto &options) {
+          options.prompt_variant = "\xed\xa0\x80";
+        }) == "--prompt-variant must be valid UTF-8");
+  // Emptiness is still reported first.
+  CHECK(error([](auto &config, auto &) {
+          config.base_url.clear();
+          config.model = "\xff";
+        }) == "--base-url cannot be empty");
+}
+
 TEST_CASE("shared config validation reports the first empty value in order") {
   pigpen::agent::Config config;
   pigpen::agent::SessionOptions options{.log_directory = ""};

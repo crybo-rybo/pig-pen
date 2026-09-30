@@ -98,6 +98,13 @@ parse_options(const std::span<const std::string_view> arguments) {
       !valid) {
     return std::unexpected(std::move(valid.error()));
   }
+  // Guidance reaches the request and the log's turn records.
+  if (options.user_input) {
+    if (auto valid = pigpen::cli::require_utf8("--input", *options.user_input);
+        !valid) {
+      return std::unexpected(std::move(valid.error()));
+    }
+  }
   return options;
 }
 

@@ -18,7 +18,8 @@
 
 namespace pigpen::agent {
 
-/// @brief What one pump() pass accomplished; both front ends surface this.
+/// @brief What one pump() pass accomplished; drivers use it to decide
+/// whether their caller may idle.
 struct PumpStats {
   std::size_t callbacks_delivered{};
   std::size_t events_remaining{};
@@ -46,10 +47,12 @@ enum class DriveOutcome : std::uint8_t {
   /// The deadline passed and the cancellation it started finished in time.
   timed_out,
   /// The deadline passed and cancellation did not finish within
-  /// cancellation_grace; the episode is still unfinished.
+  /// cancellation_grace; the episode is still unfinished. A stop request
+  /// that arrives during the grace period does not extend it.
   cancellation_stalled,
   /// A stop was requested and the episode then finished; this wins over a
-  /// timeout, and a requested stop is waited for without limit.
+  /// timeout. A stop requested before any timeout is waited for without
+  /// limit.
   interrupted,
 };
 
@@ -73,10 +76,12 @@ struct EpisodeDriverObservers {
 /// Each step() is one pass: honour a new stop request, pump, report a
 /// finished episode, then check the deadline. The deadline is @p timeout
 /// after the first step's @p now. When it passes, the driver requests
-/// stop() and allows cancellation_grace more; if that also passes without
-/// a stop request, the episode is left unfinished as cancellation_stalled.
-/// A stop request calls stop() once and then waits without limit, because
-/// finishing is what writes the log footer.
+/// stop() and allows cancellation_grace more; if that also passes, the
+/// episode is left unfinished as cancellation_stalled.
+/// A stop request calls stop() once; made before any timeout, it then waits
+/// without limit, because finishing is what writes the log footer. Made
+/// during the grace period, it keeps the grace deadline, so an episode
+/// stuck in cancellation cannot hold its caller forever.
 class EpisodeDriver final {
 public:
   using Clock = std::chrono::steady_clock;
@@ -114,6 +119,8 @@ private:
   std::optional<DriveOutcome> outcome_{};
   bool timed_out_{};
   bool interrupted_{};
+  /// A stop was requested before any timeout.
+  bool waits_without_limit_{};
 };
 
 } // namespace pigpen::agent

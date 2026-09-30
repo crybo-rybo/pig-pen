@@ -136,6 +136,7 @@ TEST_CASE("session atomically owns a seeded world registered harness and "
   CHECK(footer.at("type") == "footer");
   CHECK(footer.at("finish_reason") == "abandoned");
   CHECK(footer.at("complete") == false);
+  CHECK(footer.at("rollout_id") == "run42/2026/1");
 
   std::error_code ignored;
   std::filesystem::remove_all(directory, ignored);
@@ -261,6 +262,8 @@ TEST_CASE("a session without a log directory keeps its facts and writes "
     CHECK(summary.complete());
     CHECK(summary.reward.invalid_reason == "stopped");
     CHECK(summary.reward_weights == weights);
+    CHECK(session->rollout_id() == "run42/0/0");
+    CHECK(summary.rollout_id == "run42/0/0");
   }
   working_directory.reset();
   CHECK(std::filesystem::is_empty(directory));

@@ -1,19 +1,22 @@
 # Architecture
 
-Pig Pen is a C++26 application in four layers plus two thin entry points. The
-point of the layering is that everything except the final transport integration
+Pig Pen is a C++26 application in four layers plus three thin entry points.
+The point of the layering is that everything except the final transport integration
 is testable without a window or a model server.
 
 ```
-src/app/main.cpp                      src/app/headless_main.cpp
-  SDL3 + ImGui frame loop               usage, stdout, exit codes
-        │                                     │
-   src/ui/  AppUi, WorldAnimation        src/cli/  OptionParser, shared Config
-        │   (GUI options via src/cli)             flags, TerminationSignal
-        │                                     │
-        │                             agent::EpisodeDriver
-        │                               deadline, cancellation grace
-        ▼                                     ▼
+src/app/main.cpp          src/app/headless_main.cpp       src/app/worker_main.cpp
+  SDL3 + ImGui frame loop   eval CLI: one episode,          RL worker: seeds × samples,
+                            transcript, exit codes          P in flight, JSONL records
+        │                         │                               │
+   src/ui/  AppUi,           src/cli/  OptionParser, shared Config flags,
+   WorldAnimation            TerminationSignal, worker job expansion
+   (GUI options via src/cli)      │                               │
+        │                         │                     agent::EpisodeBatch
+        │                         │                       job queue, P drivers
+        │                  agent::EpisodeDriver ◄─────────────────┘
+        │                    deadline, cancellation grace
+        ▼                         ▼
    agent::Session  (Config: the episode, SessionOptions: the host)
                                   │
                                   ├── EpisodeRunner   turn loop, play/pause/stop
@@ -25,6 +28,10 @@ src/app/main.cpp                      src/app/headless_main.cpp
                                   ├── MetricsWriter   JSONL, only with a log directory
                                   └── world::World    the simulation
 ```
+
+The episode never knows which front end drives it: all three run the same
+`Session`, and a front end differs only in who owns the pump loop, how many
+sessions it pumps, and what it does with the facts an episode leaves behind.
 
 ## `src/world` — the simulation
 
@@ -51,9 +58,10 @@ serialisation used for determinism tests. Details in [World and tools](world.md)
 | `episode_turn.cpp` | `EpisodeTurn` (a `TurnRecord` plus its optional `TurnCallTally`) and the pure `tally_turn_calls()` that splits Scry's call count into executed, invalid, budget-refused, and host-refused |
 | `reward.cpp` | `RewardWeights`, `EpisodeFacts`, and the pure `compute_reward()` returning a `RewardBreakdown` (validity, raw counts, per-term contributions); `parse_reward_weight()` for `NAME=VALUE` overrides. No scry, JSON, or `Session` |
 | `episode_summary.cpp` | `episode_facts()` and `summarize_episode()`: an episode's outcome (finish reason, turns, score, items eaten, tool counts, summed call tally, duration, reward) from a world, activity feed, turns, and runner snapshot, or from a `Session` |
-| `summary_json.cpp` | `to_json_line()`, the only serialisation of a summary, its reward, and its weights |
+| `summary_json.cpp` | `to_json_line()`, the only serialisation of a summary, its reward, and its weights, and of the worker's `EpisodeRecord` (the summary plus seed, sample, and `Config`) and `BatchRecord`. `record_json.hpp`, internal to `pigpen_agent`, shares `config_json()` so the log header and the worker record write `Config` one way |
 | `metrics_writer.cpp` | JSONL header/tool/turn/footer; a finished episode's footer is its serialised summary, and a footer is guaranteed even on abnormal shutdown |
-| `episode_driver.cpp` | `IDrivableEpisode` (`pump`, `finished`, `stop`) and `EpisodeDriver`, the one copy of the drive-to-completion policy: overall deadline, cooperative cancellation, the 15 s grace, and a stop request that waits without limit. Time is a parameter, so it is tested with a fake episode |
+| `episode_driver.cpp` | `IDrivableEpisode` (`pump`, `finished`, `stop`) and `EpisodeDriver`, the one copy of the drive-to-completion policy: overall deadline, cooperative cancellation, the 15 s grace, and a stop request that waits without limit unless a timeout's grace period is already running. Time is a parameter, so it is tested with a fake episode |
+| `episode_batch.cpp` | `EpisodeBatch`: jobs by index, a `std::function` factory that turns a job into a `BatchEntry` (an owned `IDrivableEpisode` plus its `on_end` report), and up to P `EpisodeDriver`s pumped round-robin on one thread. Reports come exactly once, in completion order, while the episode is alive; a stop request or a factory failure stops starting jobs and cancels every live one. `run()` takes the clock and the idle sleep, so it is tested with fakes |
 | `session.cpp` | composes all of the above into one owned object, and implements `IDrivableEpisode` |
 
 Three seams make this testable. `ITurnTransport` lets `EpisodeRunner` be driven
@@ -61,8 +69,9 @@ by a scripted transport in `tests/episode_runner_tests.cpp`, so the whole turn
 loop — including stop-cancels-in-flight-turn — is covered without a model.
 `WorldTools` accepts and returns only reflected C++ values, so world behavior,
 fixed response shapes, and scenario visibility are tested without JSON or a registry.
-`IDrivableEpisode` lets `EpisodeDriver`'s deadline and cancellation policy be
-tested with a fake episode and hand-driven time.
+`IDrivableEpisode` lets `EpisodeDriver`'s deadline and cancellation policy,
+and `EpisodeBatch`'s scheduling on top of it, be tested with fake episodes
+and hand-driven time.
 The public `scry::testing` component exercises the real bindings, transport, tool
 budgets, and transactional history with scripted provider streams.
 
@@ -117,7 +126,7 @@ live episode.
 
 The session is also where an episode's facts live: the world, the activity
 feed, every finished turn with its call tally (`turns()`), and its duration
-(`elapsed()`, which stops when the episode finishes). The log records the same
+(`elapsed()`, which stops when the episode finishes), and its `rollout_id()`. The log records the same
 facts but is not their only home. `summarize_episode()` builds an
 `EpisodeSummary` from them at any time; the session writes that summary as
 the footer when the episode finishes, using the `RewardWeights` it was created
@@ -138,11 +147,13 @@ from `SessionOptions::rollout_id` (and records as the log header's
 ### Everything is pumped, nothing blocks
 
 `Session::pump()` gives the scry harness a 2 ms time budget and at most 32
-callbacks, then ticks the runner. Both front ends call it from their own loop —
+callbacks, then ticks the runner. Every front end calls it from its own loop —
 the GUI once per frame, the CLI through `EpisodeDriver::step()` in a loop that
-sleeps 1 ms when the last pump had nothing to do. Scry owns its I/O worker;
+sleeps 1 ms when the last pump had nothing to do, and the worker through
+`EpisodeBatch`, which steps up to P drivers per pass and sleeps 1 ms only when
+none of them had anything to do. Scry owns its I/O worker (one per session);
 application callbacks and tools run only on the pump thread, with no blocking
-waits in either front end.
+waits in any front end.
 
 Cancellation is cooperative for the same reason: `stop()` asks the transport to
 cancel and the episode is not finished until the terminal callback comes back,
@@ -152,9 +163,27 @@ a new stop request, pumps, reports a finished episode, then checks the
 deadline (measured from the first step). A passed deadline requests `stop()`
 once and allows 15 s more; if cancellation outlasts that, the drive ends
 `cancellation_stalled` with the episode unfinished. A stop request (a signal)
-calls `stop()` and then waits without limit. The outcomes are `finished`,
+calls `stop()`; made before any timeout, it then waits without limit, and
+made during the grace period it leaves the grace deadline in place, so an
+episode stuck in cancellation cannot hold the process forever. The outcomes are `finished`,
 `timed_out`, `cancellation_stalled`, and `interrupted`; the driver never
 sleeps or reads a clock, so one thread can drive several episodes.
+
+`EpisodeBatch` is that one thread's loop for the worker: each pass starts
+queued jobs while fewer than P episodes are live, then steps every live
+driver once. A finished drive is reported, then its driver and session are
+destroyed (driver first, since it borrows the episode), which finalises any
+log and releases the harness before the next job starts. `run()` sleeps
+1 ms only after a pass in which no job started, no drive ended, and every
+pump was idle. Each session keeps its own scry I/O thread, so P sessions
+need no locking, and every callback, tool handler, and record write still
+happens on the one pump thread. A signal is a stop request for every live
+driver; a job whose session cannot be created stops the batch the same way,
+so every started episode is reported either way, and jobs never started
+are only counted. An exception from the factory or from a report aborts the
+batch the same way, and the slot is released regardless, so nothing is
+reported twice. The worker also ignores `SIGPIPE` and treats a failed stdout
+write as a stop request, so a closed pipe still cancels cooperatively.
 
 ## `src/ui` — the ImGui layer
 
@@ -177,6 +206,12 @@ wording, and generate the help text. `add_config_options()` registers every
 `reward_weight_fields`), and `validate_config_options()` rejects the values a
 parse can leave empty. `TerminationSignal` installs the `SIGINT`/`SIGTERM`
 handlers, which only write a `volatile sig_atomic_t` for the loop to poll.
+`worker_jobs.cpp` is the worker's pure job arithmetic: `--seeds` lists and
+ranges, seed-major expansion into `WorkerJob`s with rollout ids and sampling
+seeds, and `--header` parsing that keeps `X-Pigpen-Rollout` and
+`X-Pigpen-Seed` for the worker. A front end that chooses world seeds itself
+registers the shared flags without `--seed` and points `--seed` at its own
+flag with `OptionParser::rejected()`.
 
 ## `src/app` — the entry points
 
@@ -184,7 +219,11 @@ handlers, which only write a `volatile sig_atomic_t` for the loop to poll.
 `headless_main.cpp` is the usage text, its four own options (`--log-dir`,
 `--timeout-seconds`, `--input`, `--help`), incremental printing of the
 transcript and activity feed, a `while (!driver.step(...))` loop, and the
-exit-code policy described in [Running](running.md#exit-codes). Both read
+exit-code policy described in [Running](running.md#exit-codes).
+`worker_main.cpp` is the usage text, the worker's own options, the factory
+that turns a job into a `Session` (world seed, sampling seed, rollout id, and
+the `X-Pigpen-Seed` header), the records on stdout, and the exit-code policy
+described in [Training](training.md#exit-codes). All three read
 `PIGPEN_API_KEY` and pass it to the session.
 
 ## Build layout
@@ -196,9 +235,10 @@ and the suite. The static libraries are `pigpen_world`, `pigpen_agent`,
 `pigpen_cli` for the GUI's options). `pigpen_agent` links
 `scry::scry` privately: scry carries `-freflection`, so every `pigpen_agent`
 translation unit (and `pigpen_reflection_tests`, which links scry directly)
-compiles with it, while `pigpen_world`, `pigpen_cli`, `pigpen_ui`, and both
-entry points stay reflection-free: they include only scry-free agent headers,
+compiles with it, while `pigpen_world`, `pigpen_cli`, `pigpen_ui`, and all
+three entry points stay reflection-free: they include only scry-free agent headers,
 and a private link dependency of a static library is link-only. nlohmann/json is likewise private to `pigpen_agent`, used
-only by the metrics writer and `summary_json.cpp`. The `pigpen_target()` helper applies C++26 and the warning flags to
+only by the metrics writer and `summary_json.cpp` (through the internal
+`record_json.hpp`). The `pigpen_target()` helper applies C++26 and the warning flags to
 pig-pen's own targets only; fetched dependencies are `SYSTEM`. See
 [Building](building.md).

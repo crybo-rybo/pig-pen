@@ -1,7 +1,8 @@
 /// @file episode_summary_tests.cpp
 /// @brief Covers episode facts and summaries built from plain values (a
 /// World, an activity feed, retained turns, and a runner snapshot) without a
-/// Session, and the single JSON serialisation of a summary.
+/// Session, and the single JSON serialisation of a summary and of the
+/// worker's episode and batch records built on it.
 
 #include "agent/episode_summary.hpp"
 
@@ -224,12 +225,14 @@ TEST_CASE("a summary serialises to one JSON line", "[summary][json]") {
   for (const auto &[key, value] : record.items()) {
     keys.push_back(key);
   }
-  CHECK(keys ==
-        std::vector<std::string>{"calls", "complete", "duration_ms", "error",
-                                 "final_score", "finish_reason", "items_eaten",
-                                 "reward", "reward_version", "reward_weights",
-                                 "tool_call_counts", "turns_used", "type"});
+  CHECK(keys == std::vector<std::string>{
+                    "calls", "complete", "duration_ms", "error", "final_score",
+                    "finish_reason", "items_eaten", "reward", "reward_version",
+                    "reward_weights", "rollout_id", "tool_call_counts",
+                    "turns_used", "type"});
   CHECK(record.at("type") == "footer");
+  // Built without a Session, the summary has no rollout id.
+  CHECK(record.at("rollout_id").is_null());
   CHECK(record.at("complete") == true);
   CHECK(record.at("finish_reason") == "turn_budget");
   CHECK(record.at("error") == "");
@@ -297,4 +300,105 @@ TEST_CASE("a summary serialises to one JSON line", "[summary][json]") {
   CHECK(running.at("complete") == false);
   CHECK(running.at("finish_reason").is_null());
   CHECK(running.at("reward").at("invalid_reason") == "unfinished");
+}
+
+TEST_CASE("a worker episode record is the summary plus its identity",
+          "[summary][json]") {
+  const World world{0};
+  const auto turns = mixed_turns();
+  const EpisodeSnapshot snapshot{
+      .state = RunState::finished,
+      .turns_used = 4,
+      .turn_budget = 4,
+      .finish_reason = FinishReason::turn_budget,
+  };
+  pigpen::agent::EpisodeRecord record{
+      .summary = pigpen::agent::summarize_episode(
+          world, mixed_activities(), turns, snapshot,
+          std::chrono::milliseconds{41}, {}),
+      .sample = 2,
+  };
+  record.summary.rollout_id = "run42/1003/2";
+  record.config.model = "m";
+  record.config.seed = 1003;
+
+  const auto line = pigpen::agent::to_json_line(record);
+  CHECK_FALSE(line.contains('\n'));
+  auto episode = nlohmann::json::parse(line);
+  auto footer =
+      nlohmann::json::parse(pigpen::agent::to_json_line(record.summary));
+  CHECK(episode.at("type") == "episode");
+  CHECK(episode.at("rollout_id") == "run42/1003/2");
+  CHECK(episode.at("seed") == 1003);
+  CHECK(episode.at("sample") == 2);
+  CHECK(episode.at("sampling_seed").is_null());
+  CHECK(episode.at("config").at("seed") == 1003);
+  CHECK(episode.at("config").at("model") == "m");
+  CHECK(episode.at("config").at("sampling_seed").is_null());
+  CHECK(episode.at("config").at("scenario").at("turn_budget") == 20);
+  // Apart from its type and the four identity keys, the record is exactly
+  // the summary's line.
+  for (const auto *const key : {"seed", "sample", "sampling_seed", "config"}) {
+    CHECK(episode.erase(key) == 1);
+  }
+  episode.erase("type");
+  footer.erase("type");
+  CHECK(episode == footer);
+
+  record.config.sampling_seed = 9;
+  const auto seeded =
+      nlohmann::json::parse(pigpen::agent::to_json_line(record));
+  CHECK(seeded.at("sampling_seed") == 9);
+  CHECK(seeded.at("config").at("sampling_seed") == 9);
+}
+
+TEST_CASE("a batch record serialises every count", "[summary][json]") {
+  const auto completed = nlohmann::json::parse(
+      pigpen::agent::to_json_line(pigpen::agent::BatchRecord{
+          .status = "completed",
+          .jobs = 6,
+          .episodes = 6,
+          .valid = 5,
+          .invalid = 1,
+          .duration = std::chrono::milliseconds{1234},
+          .exit_code = 6,
+      }));
+  CHECK(completed == nlohmann::json{{"type", "batch"},
+                                    {"status", "completed"},
+                                    {"jobs", 6},
+                                    {"episodes", 6},
+                                    {"valid", 5},
+                                    {"invalid", 1},
+                                    {"not_started", 0},
+                                    {"duration_ms", 1234},
+                                    {"error", nullptr},
+                                    {"exit_code", 6}});
+  const auto aborted = nlohmann::json::parse(
+      pigpen::agent::to_json_line(pigpen::agent::BatchRecord{
+          .status = "aborted",
+          .jobs = 3,
+          .not_started = 3,
+          .error = "rollout/1/0: bad header",
+          .exit_code = 1,
+      }));
+  CHECK(aborted.at("error") == "rollout/1/0: bad header");
+  CHECK(aborted.at("not_started") == 3);
+}
+
+TEST_CASE("records never throw on text that is not UTF-8", "[summary][json]") {
+  pigpen::agent::EpisodeRecord record{
+      .summary = {.error = "bad \xff byte", .rollout_id = "r/1/0"},
+  };
+  record.config.model = "pig\xc3";
+  std::string line;
+  REQUIRE_NOTHROW(line = pigpen::agent::to_json_line(record));
+  const auto parsed = nlohmann::json::parse(line);
+  // Each invalid byte becomes U+FFFD; the rest of the text survives.
+  CHECK(parsed.at("error") == "bad \xef\xbf\xbd byte");
+  CHECK(parsed.at("config").at("model") == "pig\xef\xbf\xbd");
+  REQUIRE_NOTHROW(line = pigpen::agent::to_json_line(record.summary));
+  CHECK(nlohmann::json::parse(line).at("error") == "bad \xef\xbf\xbd byte");
+  REQUIRE_NOTHROW(line = pigpen::agent::to_json_line(
+                      pigpen::agent::BatchRecord{.error = "x\xff"}));
+  CHECK(nlohmann::json::parse(line).at("error") == "x\xef\xbf\xbd");
 }

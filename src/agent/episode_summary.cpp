@@ -99,9 +99,11 @@ EpisodeSummary summarize_episode(const world::World &world,
 
 EpisodeSummary summarize_episode(const Session &session,
                                  const RewardWeights &weights) {
-  return summarize_episode(session.world(), session.tool_activities(),
-                           session.turns(), session.runner().snapshot(),
-                           session.elapsed(), weights);
+  auto summary = summarize_episode(session.world(), session.tool_activities(),
+                                   session.turns(), session.runner().snapshot(),
+                                   session.elapsed(), weights);
+  summary.rollout_id = session.rollout_id();
+  return summary;
 }
 
 } // namespace pigpen::agent
