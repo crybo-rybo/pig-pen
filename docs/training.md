@@ -203,9 +203,12 @@ request or log.
 
 stdout is pure JSONL: one `episode` record per started job, in completion
 order (not job order), with `--jobs -` a `job_error` record per rejected
-line among them, then one `batch` record. Each line is flushed as it is
-written, so a consumer can stream it. Keys are sorted. Diagnostics (invalid
-episodes, timeouts, signals, startup errors) go to stderr only.
+line among them, then one `batch` record. Each line is queued to a
+bounded buffer the pump drains every pass, so a consumer can stream it and
+a reader that stops consuming can never wedge the pump: once 1 MiB of
+records are buffered the worker treats stdout as failed, like a closed
+pipe. Keys are sorted. Diagnostics (invalid episodes, timeouts, signals,
+batch errors) go to stderr only.
 
 ### `episode`
 
@@ -288,14 +291,16 @@ otherwise. `exit_code` is the status the process exits with.
 | code | meaning |
 |---|---|
 | `0` | every episode's reward is valid |
-| `1` | a session could not be created (a configuration problem such as a bad `--header` or `--log-dir`), or reporting an episode failed; the batch is aborted: in-flight episodes are cancelled cooperatively and still get their records. With `--jobs -`, also a stdin that could not be read (started episodes finish normally). Also used when stdout cannot be written (for example the consumer closed the pipe): the worker then writes nothing more to stdout, cancels in-flight episodes cooperatively so their logs still get footers, starts no more jobs, and says so on stderr |
+| `1` | a session could not be created (a configuration problem such as a bad `--header` or `--log-dir`), or reporting an episode failed; the batch is aborted: in-flight episodes are cancelled cooperatively and still get their records. Reporting failures are an episode log that could not be finalized, and a stdout that cannot be written (for example the consumer closed the pipe, or stopped reading once 1 MiB of records are buffered): the worker then writes nothing more to stdout, cancels in-flight episodes cooperatively so their logs still get footers, starts no more jobs, and says so on stderr. With `--jobs -`, also a stdin that could not be read (started episodes finish normally) |
 | `2` | invalid command line, including `--model`, `--base-url`, or `--prompt-variant` text that is not valid UTF-8; nothing is written to stdout |
 | `6` | the batch completed but at least one episode's reward is invalid, or (with `--jobs -`) at least one job line was rejected |
 | `130` / `143` | `SIGINT` / `SIGTERM`: in-flight episodes are cancelled cooperatively and their records written, normally invalid with reason `stopped` (or `timeout` or `error` if that is how they had already ended), queued jobs are not started, and the batch record says `interrupted` |
 
 When more than one applies, an abort or a stdout failure (1) wins over a
 signal, and a signal over 6. `SIGPIPE` is ignored, so a closed pipe is a
-failed write, never a fatal signal.
+failed write, never a fatal signal. After the batch ends the worker waits
+at most one second for a stalled stdout reader to take the buffered
+records, then exits; shutdown never blocks on a reader.
 
 ## Seeds, scenarios, and evaluation
 

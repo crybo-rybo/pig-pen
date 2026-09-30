@@ -4,7 +4,8 @@ Covers what the C++ suite cannot: parallel sessions over the real curl/HTTP
 path, the rollout and seed headers on every request, the JSONL records on
 stdout, per-episode logs, jobs read from stdin with `--jobs -` (including
 rejected lines and a producer that waits for each record before writing the
-next job), and exit codes 0, 1 (stdout closed), 2, 6, and 130/143.
+next job), and exit codes 0, 1 (stdout closed or stalled, or a log that
+failed to finalize), 2, 6, and 130/143.
 
 The stub is a ThreadingHTTPServer: a single-threaded one would serialise the
 worker's parallel sessions and hide scheduling bugs. It scripts each rollout
@@ -554,6 +555,142 @@ def test_closed_stdout_exits_1(executable: str) -> None:
     check(all(f.get("complete") is True for f in footers.values()), f"{footers!r}")
 
 
+def test_log_finalization_failure_exit_1(executable: str) -> None:
+    """A log footer that cannot be written aborts the batch (exit 1).
+
+    The file-size limit lets the header and the turn through but fails
+    exactly the final write, so the batch reports the failure as a batch
+    error instead of a clean `valid: 1`.
+    """
+    import resource
+
+    with (
+        Stub(play_one_turn) as server,
+        tempfile.TemporaryDirectory(prefix="pigpen-worker-logs-") as log_dir,
+    ):
+        directory = pathlib.Path(log_dir)
+        probe = subprocess.run(
+            worker_command(executable, server, "--seeds", "91", "--log-dir", log_dir),
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        probe_output = f"stdout={probe.stdout}\nstderr={probe.stderr}"
+        check(probe.returncode == 0, f"probe exit {probe.returncode}\n{probe_output}")
+        before = set(directory.glob("*.jsonl"))
+        check(len(before) == 1, f"probe logs: {sorted(p.name for p in before)}")
+        content = next(iter(before)).read_bytes()
+        footer = content.split(b"\n")[-2]
+        check(
+            json.loads(footer)["type"] == "footer",
+            f"probe has no footer: {footer[:80]!r}",
+        )
+        # The limit ends exactly where the footer starts, so the header
+        # and the turn fit but the footer's single write fails immediately
+        # with EFBIG (SIGXFSZ ignored): no partial footer byte is written.
+        footer_start = content.rfind(footer)
+        check(footer_start > 0, "footer not found in probe log")
+        limit = footer_start
+
+        def limit_file_size() -> None:
+            signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+            resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit))
+
+        # A fresh seed: the stub scripts replies per rollout, so reusing the
+        # probe's seed would replay its exhausted script (500s).
+        completed = subprocess.run(
+            worker_command(executable, server, "--seeds", "92", "--log-dir", log_dir),
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+            preexec_fn=limit_file_size,
+        )
+        after = set(directory.glob("*.jsonl")) - before
+        # Read the limited log before the temporary directory goes away.
+        check(len(after) == 1, f"limited logs: {sorted(p.name for p in after)}")
+        limited_kinds = []
+        for line in next(iter(after)).read_text().splitlines():
+            try:
+                limited_kinds.append(json.loads(line).get("type"))
+            except json.JSONDecodeError:
+                limited_kinds.append("<partial>")
+
+    output = f"stdout={completed.stdout}\nstderr={completed.stderr}"
+    check(completed.returncode == 1, f"exit {completed.returncode}\n{output}")
+    check(
+        "log finalization failed" in completed.stderr,
+        f"no log diagnostic\n{output}",
+    )
+    _episodes, batch = split_records(parse_output(completed.stdout, output), output)
+    check(batch["exit_code"] == 1, f"batch: {batch!r}")
+    check(batch["status"] == "aborted", f"batch: {batch!r}")
+    check(batch["valid"] == 1, f"episode must stay valid: {batch!r}")
+    check(
+        batch["error"] and "log finalization failed" in batch["error"],
+        f"batch error missing: {batch!r}",
+    )
+    # Only the final write failed: the log has its header and turn but no
+    # footer, not even a partial one.
+    check("footer" not in limited_kinds, f"footer was written: {limited_kinds!r}")
+    check("<partial>" not in limited_kinds, f"partial line: {limited_kinds!r}")
+    check(
+        "header" in limited_kinds and "turn" in limited_kinds,
+        f"log: {limited_kinds!r}",
+    )
+
+
+def test_stalled_stdout_exits_1(executable: str) -> None:
+    """A reader that stops consuming cannot wedge the episode pump.
+
+    The pipe stays open, so a worker that blocks writing records would hang
+    here; the bounded buffer must fail the output instead, cancelling
+    in-flight episodes cooperatively and exiting 1. A SIGTERM sent while
+    the pipe is stalled must shut the worker down promptly (bounded final
+    drain) rather than block on stdout.
+    """
+    with Stub(play_one_turn) as server:
+        process = subprocess.Popen(
+            worker_command(
+                executable,
+                server,
+                *("--seeds", "101-110", "--samples", "100"),
+                *("--parallel", "8", "--timeout-seconds", "60"),
+            ),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        watchdog = threading.Timer(120, process.kill)
+        watchdog.start()
+        try:
+            # Let a few records flow, then stop reading entirely with the
+            # pipe open: the worker must notice the stall itself.
+            for _ in range(10):
+                check(process.stdout.readline(), "worker produced no records")
+            # Give the worker time to fill the pipe and stall on it, but
+            # not enough to fill the 1 MiB buffer and exit on its own.
+            time.sleep(3)
+            if process.poll() is None:
+                # Still alive on a stalled pipe: SIGTERM must shut it down
+                # promptly instead of hanging on the final drain.
+                start = time.monotonic()
+                process.send_signal(signal.SIGTERM)
+                process.wait(timeout=30)
+                elapsed = time.monotonic() - start
+                check(elapsed < 10, f"SIGTERM shutdown took {elapsed:.1f}s")
+            stderr = process.stderr.read()
+        finally:
+            watchdog.cancel()
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+
+    check(process.returncode == 1, f"exit {process.returncode}\nstderr={stderr}")
+    check("output error" in stderr, f"no output diagnostic\nstderr={stderr}")
+
+
 def test_usage_errors_exit_2(executable: str) -> None:
     for arguments, diagnostic in (
         (["--model", "m"], "--seeds is required"),
@@ -965,6 +1102,8 @@ def main() -> int:
         test_unreadable_stdin_exits_1(executable)
         test_nonblocking_stdin_waits(executable)
         test_closed_stdout_exits_1(executable)
+        test_stalled_stdout_exits_1(executable)
+        test_log_finalization_failure_exit_1(executable)
         for signal_number in (signal.SIGINT, signal.SIGTERM):
             test_signal_cancels_in_flight(executable, signal_number)
     return 0
