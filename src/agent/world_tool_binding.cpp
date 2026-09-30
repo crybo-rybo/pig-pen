@@ -33,8 +33,7 @@ template <typename Arguments, typename Invoke>
 scry::Status WorldToolBinding::add(scry::ToolRegistry &registry,
                                    const ToolKind kind, std::string description,
                                    Invoke invoke) {
-  return scry::reflection::add<Arguments>(
-      registry,
+  return registry.add<Arguments>(
       {.name = std::string{tool_kind_name(kind)},
        .description = std::move(description)},
       [this, kind, invoke](const scry::ToolCallContext &context,
