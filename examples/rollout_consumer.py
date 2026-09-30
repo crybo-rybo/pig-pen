@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Join pig-pen-worker records with a model server's request log.
 
 A reference for the trainer side of docs/training.md, using only the
