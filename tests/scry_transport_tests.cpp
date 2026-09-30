@@ -3,6 +3,7 @@
 /// provider codec, dispatch, and history, without sockets or a model server.
 #include "agent/scry_transport.hpp"
 
+#include "agent/episode_turn.hpp"
 #include "agent/world_tool_binding.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -75,7 +76,7 @@ struct ScriptedWorld {
                          calls.push_back(call);
                        },
                    .on_turn_finished =
-                       [this] { binding.flush_pending_activity(); }}) {
+                       [this] { host_refused = binding.complete_turn(); }}) {
     binding.on_activity = [this](pigpen::agent::ToolActivity activity) {
       activities.push_back(std::move(activity));
     };
@@ -87,6 +88,7 @@ struct ScriptedWorld {
 
   void send() {
     outcome.reset();
+    activities_at_send = activities.size();
     REQUIRE(transport.send("Continue.", {.on_finished = [this](auto result) {
                              outcome = std::move(result);
                            }}));
@@ -94,6 +96,15 @@ struct ScriptedWorld {
 
   void finish() {
     pump_until(harness, [this] { return outcome.has_value(); });
+  }
+
+  /// The tally Session derives for the last turn, from the same inputs.
+  [[nodiscard]] std::optional<pigpen::agent::TurnCallTally> tally() const {
+    REQUIRE(outcome);
+    return pigpen::agent::tally_turn_calls(
+        {.tool_calls = activities.size() - activities_at_send,
+         .tool_stats = outcome->tool_stats},
+        host_refused);
   }
 
   pigpen::world::World world{37};
@@ -105,8 +116,44 @@ struct ScriptedWorld {
   std::vector<pigpen::agent::ToolActivity> activities;
   std::vector<scry::ToolCall> calls;
   std::optional<pigpen::agent::TurnOutcome> outcome;
+  std::size_t activities_at_send{};
+  std::uint32_t host_refused{};
   bool logging_failed{false};
 };
+
+/// @brief Eat every positive item but the last, then stand on the last one,
+/// so the next successful eat completes the objective.
+/// @return The cell of the remaining positive item.
+pigpen::world::Position
+stand_on_last_positive_item(pigpen::world::World &world) {
+  std::vector<pigpen::world::Position> positive_cells;
+  for (const auto &placement : world.items()) {
+    if (pigpen::world::item_reward(placement.item) > 0) {
+      positive_cells.push_back(placement.position);
+    }
+  }
+  REQUIRE_FALSE(positive_cells.empty());
+  using pigpen::world::Direction;
+  for (const auto cell : positive_cells) {
+    while (world.position().x != cell.x) {
+      REQUIRE(world
+                  .move(world.position().x < cell.x ? Direction::east
+                                                    : Direction::west)
+                  .ok);
+    }
+    while (world.position().y != cell.y) {
+      REQUIRE(world
+                  .move(world.position().y < cell.y ? Direction::north
+                                                    : Direction::south)
+                  .ok);
+    }
+    if (cell != positive_cells.back()) {
+      REQUIRE(world.eat().ok);
+    }
+  }
+  REQUIRE_FALSE(world.all_positive_items_eaten());
+  return positive_cells.back();
+}
 
 } // namespace
 
@@ -156,6 +203,11 @@ TEST_CASE("Scry bounds requested calls across batches and resets each turn") {
   CHECK(run.outcome->tool_stats->calls == 6);
   CHECK(run.outcome->tool_stats->rejected_calls == 2);
   CHECK_FALSE(run.outcome->tool_stats->round_limit_reached);
+  CHECK(run.host_refused == 0);
+  CHECK(run.tally() == pigpen::agent::TurnCallTally{.executed = 2,
+                                                    .invalid = 2,
+                                                    .budget_refused = 2,
+                                                    .host_refused = 0});
   REQUIRE(run.activities.size() == 2);
   CHECK(run.world.position() == (pigpen::world::Position{7, 5}));
   REQUIRE(run.calls.size() == 6);
@@ -199,6 +251,7 @@ TEST_CASE("Scry bounds requested calls across batches and resets each turn") {
   REQUIRE(run.outcome->tool_stats);
   CHECK(run.outcome->tool_stats->calls == 1);
   CHECK(run.outcome->tool_stats->rejected_calls == 0);
+  CHECK(run.tally() == pigpen::agent::TurnCallTally{.executed = 1});
   REQUIRE(run.activities.size() == 3);
   CHECK(run.activities.back().scry_turn_id !=
         run.activities.front().scry_turn_id);
@@ -230,6 +283,8 @@ TEST_CASE(
   CHECK(run.outcome->tool_stats->unexecuted_calls == 2);
   CHECK(run.outcome->tool_stats->calls == 1);
   CHECK(run.outcome->tool_stats->rounds == 1);
+  // Calls dropped by the round limit are in no tally bucket.
+  CHECK(run.tally() == pigpen::agent::TurnCallTally{.executed = 1});
   CHECK(run.world.position() == (pigpen::world::Position{6, 5}));
   REQUIRE(run.activities.size() == 1);
   auto history = run.conversation.to_json();
@@ -266,6 +321,8 @@ TEST_CASE("logging failure stops a batch after an action without discarding "
   REQUIRE(run.outcome->tool_stats);
   CHECK(run.outcome->tool_stats->calls == 2);
   CHECK(run.outcome->tool_stats->rejected_calls == 1);
+  CHECK(run.tally() ==
+        pigpen::agent::TurnCallTally{.executed = 1, .host_refused = 1});
   CHECK(run.world.position() == (pigpen::world::Position{6, 5}));
   REQUIRE(run.activities.size() == 1);
   REQUIRE(run.calls.size() == 2);
@@ -280,32 +337,7 @@ TEST_CASE("logging failure stops a batch after an action without discarding "
 
 TEST_CASE("eating the final positive item refuses later actions in the batch") {
   ScriptedWorld run;
-  std::vector<pigpen::world::Position> positive_cells;
-  for (const auto &placement : run.world.items()) {
-    if (pigpen::world::item_reward(placement.item) > 0) {
-      positive_cells.push_back(placement.position);
-    }
-  }
-  REQUIRE_FALSE(positive_cells.empty());
-  using pigpen::world::Direction;
-  for (const auto cell : positive_cells) {
-    while (run.world.position().x != cell.x) {
-      REQUIRE(run.world
-                  .move(run.world.position().x < cell.x ? Direction::east
-                                                        : Direction::west)
-                  .ok);
-    }
-    while (run.world.position().y != cell.y) {
-      REQUIRE(run.world
-                  .move(run.world.position().y < cell.y ? Direction::north
-                                                        : Direction::south)
-                  .ok);
-    }
-    if (cell != positive_cells.back()) {
-      REQUIRE(run.world.eat().ok);
-    }
-  }
-  REQUIRE_FALSE(run.world.all_positive_items_eaten());
+  const auto last_cell = stand_on_last_positive_item(run.world);
   run.enqueue(openai_tool_stream({
       {.id = "last-food", .name = "eat", .arguments = "{}"},
       {.id = "refused", .name = "move", .arguments = R"({"direction":"east"})"},
@@ -318,8 +350,10 @@ TEST_CASE("eating the final positive item refuses later actions in the batch") {
   REQUIRE(run.outcome->tool_stats);
   CHECK(run.outcome->tool_stats->calls == 2);
   CHECK(run.outcome->tool_stats->rejected_calls == 1);
+  CHECK(run.tally() ==
+        pigpen::agent::TurnCallTally{.executed = 1, .host_refused = 1});
   CHECK(run.world.all_positive_items_eaten());
-  CHECK(run.world.position() == positive_cells.back());
+  CHECK(run.world.position() == last_cell);
   REQUIRE(run.activities.size() == 1);
   CHECK(run.activities.front().kind == pigpen::agent::ToolKind::eat);
   REQUIRE(run.calls.size() == 2);
@@ -333,6 +367,56 @@ TEST_CASE("eating the final positive item refuses later actions in the batch") {
   CHECK(history->text.find("refused") != std::string::npos);
 }
 
+TEST_CASE("the call tally accounts for every request of a mixed batch") {
+  ScriptedWorld run;
+  static_cast<void>(stand_on_last_positive_item(run.world));
+  run.enqueue(openai_tool_stream({
+      {.id = "bad", .name = "move", .arguments = R"({"direction":"up"})"},
+      {.id = "last-food", .name = "eat", .arguments = "{}"},
+      {.id = "refused", .name = "move", .arguments = R"({"direction":"east"})"},
+      {.id = "unknown", .name = "fly", .arguments = "{}"},
+      // The limit is checked before admission, so a call that is both over
+      // budget and after the objective counts as budget_refused.
+      {.id = "excess", .name = "move", .arguments = R"({"direction":"east"})"},
+  }));
+  run.enqueue(openai_text_stream("All food collected."));
+  run.send();
+  run.finish();
+
+  REQUIRE(run.outcome->status == TurnStatus::completed);
+  REQUIRE(run.outcome->tool_stats);
+  CHECK(run.outcome->tool_stats->calls == 5);
+  CHECK(run.outcome->tool_stats->rejected_calls == 2);
+  CHECK(run.host_refused == 1);
+  const auto tally = run.tally();
+  REQUIRE(tally);
+  CHECK(*tally == pigpen::agent::TurnCallTally{.executed = 1,
+                                               .invalid = 2,
+                                               .budget_refused = 1,
+                                               .host_refused = 1});
+  CHECK(tally->executed + tally->invalid + tally->budget_refused +
+            tally->host_refused ==
+        run.outcome->tool_stats->calls);
+  CHECK(run.world.all_positive_items_eaten());
+  REQUIRE(run.activities.size() == 1);
+  CHECK(run.activities.front().call_id == "last-food");
+  REQUIRE(run.calls.size() == 5);
+  CHECK(run.calls[2].result.text.find(
+            "All positive-value items have been eaten") != std::string::npos);
+  CHECK(run.calls[4].result.text.find("tool call limit") != std::string::npos);
+
+  // Completion resets the host count: the next turn starts from zero.
+  run.enqueue(openai_tool_stream({
+      {.id = "after", .name = "look", .arguments = R"({"direction":"north"})"},
+  }));
+  run.enqueue(openai_text_stream("Done."));
+  run.send();
+  run.finish();
+  REQUIRE(run.outcome->status == TurnStatus::completed);
+  CHECK(run.tally() == pigpen::agent::TurnCallTally{.host_refused = 1});
+  CHECK(run.binding.complete_turn() == 0);
+}
+
 TEST_CASE(
     "Scry transport rejects overlapping sends and delivers cancellation") {
   ScriptedWorld run;
@@ -344,6 +428,7 @@ TEST_CASE(
   run.finish();
   CHECK(run.outcome->status == TurnStatus::cancelled);
   CHECK_FALSE(run.outcome->tool_stats);
+  CHECK_FALSE(run.tally());
   CHECK(run.conversation.messages().empty());
   CHECK_FALSE(run.transport.cancel());
 }

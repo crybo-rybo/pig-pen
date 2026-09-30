@@ -76,7 +76,8 @@ One line per conversation turn, flushed as it completes.
  "error":"","input_tokens":1699,"output_tokens":198,"tool_calls":2,
  "zero_tool_turn":false,"latency_ms":2499,
  "scry_tools":{"rounds":1,"calls":2,"rejected_calls":0,
-   "round_limit_reached":false,"unexecuted_calls":0}}
+   "round_limit_reached":false,"unexecuted_calls":0},
+ "calls":{"executed":2,"invalid":0,"budget_refused":0,"host_refused":0}}
 ```
 
 `status` is `completed`, `cancelled`, or `error`. `tool_calls` is counted from
@@ -91,6 +92,18 @@ Those dropped calls are in neither `calls` nor the activity feed. The whole
 world `tool_calls` still records any actions already observed. A provider token
 limit does return a Completion with statistics, although Pig Pen treats that
 truncated response as a turn error.
+
+`calls` splits `scry_tools.calls` by where each request ended up; the four
+counts always sum to it:
+
+| key | meaning | derived as |
+|---|---|---|
+| `executed` | decoded, admitted, and ran a world action | `tool_calls` |
+| `invalid` | admitted, but an unknown tool or schema-rejected arguments | `calls − rejected_calls − executed` |
+| `budget_refused` | past the four-request limit, checked before admission | `rejected_calls − host_refused` |
+| `host_refused` | refused by Pig Pen's admission hook after the objective was completed or the log failed | counted by Pig Pen |
+
+`calls` is `null` exactly when `scry_tools` is.
 
 Token counts come from the provider; `latency_ms` is measured locally around
 the turn.
@@ -131,6 +144,13 @@ Turns containing Scry budget or admission refusals:
 
 ```sh
 jq -c 'select(.type=="turn" and (.scry_tools.rejected_calls // 0) > 0)' logs/<run>.jsonl
+```
+
+Invalid and over-budget requests per turn:
+
+```sh
+jq -c 'select(.type=="turn" and .calls != null)
+  | {turn, invalid: .calls.invalid, budget_refused: .calls.budget_refused}' logs/<run>.jsonl
 ```
 
 Compare the outcome of several runs:

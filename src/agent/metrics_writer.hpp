@@ -8,6 +8,7 @@
 
 #include "agent/config.hpp"
 #include "agent/episode_runner.hpp"
+#include "agent/episode_turn.hpp"
 #include "agent/events.hpp"
 
 #include <chrono>
@@ -41,9 +42,9 @@ public:
   /// @brief Append one successfully decoded world-tool invocation.
   [[nodiscard]] std::expected<void, std::string>
   record_tool(const ToolActivity &activity);
-  /// @brief Append one finished model turn.
+  /// @brief Append one finished model turn and its call tally.
   [[nodiscard]] std::expected<void, std::string>
-  record_turn(const TurnRecord &record);
+  record_turn(const EpisodeTurn &turn);
   /// @brief Write the final footer; the log accepts nothing afterwards.
   [[nodiscard]] std::expected<void, std::string>
   finish(const EpisodeResult &result, int final_score);

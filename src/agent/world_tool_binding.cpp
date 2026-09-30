@@ -89,13 +89,15 @@ scry::Result<scry::ToolRegistry> WorldToolBinding::registry() {
 }
 
 std::optional<scry::ToolRejection>
-WorldToolBinding::admit(const bool logging_failed) const {
+WorldToolBinding::admit(const bool logging_failed) {
   if (logging_failed) {
+    ++host_refused_calls_;
     return scry::ToolRejection{
         .model_message = "World tools are unavailable because the episode log "
                          "failed. Summarize the actions already taken."};
   }
   if (world_.all_positive_items_eaten()) {
+    ++host_refused_calls_;
     return scry::ToolRejection{
         .model_message = "All positive-value items have been eaten. Summarize "
                          "the completed episode without more tools."};
@@ -119,6 +121,11 @@ void WorldToolBinding::flush_pending_activity() {
   if (activity && on_activity) {
     on_activity(std::move(*activity));
   }
+}
+
+std::uint32_t WorldToolBinding::complete_turn() {
+  flush_pending_activity();
+  return std::exchange(host_refused_calls_, 0U);
 }
 
 } // namespace pigpen::agent

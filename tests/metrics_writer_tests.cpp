@@ -71,17 +71,25 @@ TEST_CASE("metrics log contains a reconcilable header tool turn and footer") {
   REQUIRE(writer->record_tool(activity).has_value());
   REQUIRE(writer
               ->record_turn({
-                  .turn = 1,
-                  .status = pigpen::agent::TurnStatus::completed,
-                  .assistant_text = "ate a berry",
-                  .tool_calls = 1,
-                  .latency = std::chrono::milliseconds{12},
-                  .tool_stats =
-                      pigpen::agent::TurnToolStats{.rounds = 2,
-                                                   .calls = 4,
-                                                   .rejected_calls = 1,
-                                                   .round_limit_reached = true,
-                                                   .unexecuted_calls = 2},
+                  .record =
+                      {
+                          .turn = 1,
+                          .status = pigpen::agent::TurnStatus::completed,
+                          .assistant_text = "ate a berry",
+                          .tool_calls = 1,
+                          .latency = std::chrono::milliseconds{12},
+                          .tool_stats =
+                              pigpen::agent::TurnToolStats{
+                                  .rounds = 2,
+                                  .calls = 4,
+                                  .rejected_calls = 1,
+                                  .round_limit_reached = true,
+                                  .unexecuted_calls = 2},
+                      },
+                  .calls = pigpen::agent::TurnCallTally{.executed = 1,
+                                                        .invalid = 2,
+                                                        .budget_refused = 1,
+                                                        .host_refused = 0},
               })
               .has_value());
   REQUIRE(writer
@@ -120,6 +128,20 @@ TEST_CASE("metrics log contains a reconcilable header tool turn and footer") {
                        {"rejected_calls", 1},
                        {"round_limit_reached", true},
                        {"unexecuted_calls", 2}});
+  CHECK(records[2].at("calls") == nlohmann::json{{"executed", 1},
+                                                 {"invalid", 2},
+                                                 {"budget_refused", 1},
+                                                 {"host_refused", 0}});
+  // The tally is additive: every earlier turn field is still written.
+  std::vector<std::string> turn_keys;
+  for (const auto &[key, value] : records[2].items()) {
+    turn_keys.push_back(key);
+  }
+  CHECK(turn_keys ==
+        std::vector<std::string>{"assistant_text", "calls", "error",
+                                 "input_tokens", "latency_ms", "output_tokens",
+                                 "scry_tools", "status", "tool_calls", "turn",
+                                 "type", "user_message", "zero_tool_turn"});
   REQUIRE(records.back().at("type") == "footer");
   REQUIRE(records.back().at("complete") == true);
   REQUIRE(records.back().at("final_score") == 1);
@@ -138,15 +160,22 @@ TEST_CASE("destroying an unfinished writer still emits an incomplete footer") {
   const auto path = (*created)->path();
   REQUIRE((*created)
               ->record_turn({
-                  .turn = 3,
-                  .status = pigpen::agent::TurnStatus::completed,
-                  .assistant_text = "partial run",
+                  .record =
+                      {
+                          .turn = 3,
+                          .status = pigpen::agent::TurnStatus::completed,
+                          .assistant_text = "partial run",
+                      },
               })
               .has_value());
   created->reset();
 
   const auto records = read_records(path);
   REQUIRE(records.size() == 3);
+  // No Completion statistics means no tally, written as an explicit null.
+  CHECK(records[1].at("scry_tools").is_null());
+  REQUIRE(records[1].contains("calls"));
+  CHECK(records[1].at("calls").is_null());
   REQUIRE(records.front().at("sampling_seed").is_null());
   REQUIRE(records.back().at("type") == "footer");
   REQUIRE(records.back().at("complete") == false);
@@ -179,7 +208,7 @@ TEST_CASE("metrics footer is final and cannot be duplicated") {
           .turns_used = 0,
       },
       0));
-  CHECK_FALSE(writer->record_turn({.turn = 1}));
+  CHECK_FALSE(writer->record_turn({.record = {.turn = 1}}));
 
   const auto records = read_records(path);
   REQUIRE(records.size() == 2);
