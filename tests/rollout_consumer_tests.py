@@ -179,6 +179,7 @@ def test_groups_by_prefix_and_seed(consumer: str, directory: pathlib.Path) -> No
     ids = [json.loads(line)["rollout_id"] for line in records]
     records_path = directory / "grouped-records.jsonl"
     requests_path = directory / "grouped-requests.jsonl"
+    records.append(json.dumps({"type": "batch", "status": "completed", "exit_code": 0}))
     records_path.write_text("\n".join(records) + "\n")
     requests_path.write_text("\n".join(request(i, 1) for i in ids) + "\n")
 
@@ -186,6 +187,7 @@ def test_groups_by_prefix_and_seed(consumer: str, directory: pathlib.Path) -> No
         consumer, "--requests", str(requests_path), "--records", str(records_path)
     )
     check(code == 0, f"exit {code}\nstderr={stderr}")
+    check("batch completed, exit 0" in stderr, f"stderr={stderr}")
     rollouts = by_rollout(output)
     expected = {
         "step17/1/0": ("step17/1", -1.0, 2),
@@ -204,6 +206,110 @@ def test_groups_by_prefix_and_seed(consumer: str, directory: pathlib.Path) -> No
         check(line["group"] == group, f"{rollout_id}: {line!r}")
         check(math.isclose(line["advantage"], advantage), f"{rollout_id}: {line!r}")
         check(line["group_size"] == size, f"{rollout_id}: {line!r}")
+
+
+def test_duplicate_rollout_ids(consumer: str, directory: pathlib.Path) -> None:
+    """An id claimed by two episodes makes every occurrence unusable.
+
+    Each run logged one request under r/1/0; joining either episode against
+    the combined log would train on the other run's trajectory, so both
+    occurrences are dropped and the requests are dropped with them.
+    """
+    records = directory / "dup-records.jsonl"
+    requests = directory / "dup-requests.jsonl"
+    records.write_text(
+        "\n".join(
+            [
+                episode("r/1/0", 1.0),
+                episode("r/1/0", 9.0),
+                episode("r/2/0", 4.0),
+                json.dumps({"type": "batch", "status": "completed", "exit_code": 0}),
+            ]
+        )
+        + "\n"
+    )
+    requests.write_text(
+        "\n".join([request("r/1/0", 1), request("r/2/0", 1), request("r/1/0", 2), ""])
+    )
+
+    output, stderr, code = run_consumer(
+        consumer, "--requests", str(requests), "--records", str(records)
+    )
+    check(code == 0, f"exit {code}\nstderr={stderr}")
+    rollouts = by_rollout(output)
+    check(rollouts.keys() == {"r/2/0"}, f"kept: {sorted(rollouts)}")
+    # The unambiguous episode keeps its own request only, in its own group.
+    check(rollouts["r/2/0"]["advantage"] == 0.0, f"r/2/0: {rollouts['r/2/0']!r}")
+    check(
+        [step["completion"]["text"] for step in rollouts["r/2/0"]["trajectory"]]
+        == ["r/2/0 says 1"],
+        f"trajectory: {rollouts['r/2/0']['trajectory']!r}",
+    )
+    # Two dropped episodes and their requests, all attributed to the dup.
+    check(
+        "dropped 3: duplicate rollout id: r/1/0, r/1/0, r/1/0" in stderr,
+        f"stderr={stderr}",
+    )
+    check("no logged requests" not in stderr, f"stderr={stderr}")
+
+
+def test_records_require_completed_batch(
+    consumer: str, directory: pathlib.Path
+) -> None:
+    """--records never trains on a batch that did not complete."""
+    requests = directory / "aborted-requests.jsonl"
+    requests.write_text(request("r/1/0", 1) + "\n")
+    cases = [
+        # (batch record, exit, fragment of the refusal)
+        (
+            {"type": "batch", "status": "aborted", "exit_code": 1},
+            1,
+            "batch aborted, exit 1: did not complete",
+        ),
+        (
+            {"type": "batch", "status": "interrupted", "exit_code": 130},
+            1,
+            "batch interrupted, exit 130: did not complete",
+        ),
+        # A batch whose status is fine but whose exit code is not.
+        (
+            {"type": "batch", "status": "completed", "exit_code": 2},
+            1,
+            "batch completed, exit 2: did not complete",
+        ),
+        (
+            {"type": "batch", "status": "completed", "exit_code": 0},
+            0,
+            "batch completed, exit 0",
+        ),
+        (
+            {"type": "batch", "status": "completed", "exit_code": 6},
+            0,
+            "batch completed, exit 6",
+        ),
+    ]
+    for index, (batch, expected_code, fragment) in enumerate(cases):
+        records = directory / f"batch-{index}.jsonl"
+        lines = [episode("r/1/0", 4.0), json.dumps(batch)]
+        records.write_text("\n".join(lines) + "\n")
+        output, stderr, code = run_consumer(
+            consumer, "--requests", str(requests), "--records", str(records)
+        )
+        check(code == expected_code, f"{batch}: exit {code}\nstderr={stderr}")
+        check(fragment in stderr, f"{batch}: stderr={stderr}")
+        if expected_code == 1:
+            check(output == [], f"{batch}: emitted {output!r}")
+        else:
+            check(len(output) == 1, f"{batch}: kept {len(output)}")
+
+    # No batch record at all is a refused batch too, not a silent one.
+    records = directory / "batch-missing.jsonl"
+    records.write_text(episode("r/1/0", 4.0) + "\n")
+    output, stderr, code = run_consumer(
+        consumer, "--requests", str(requests), "--records", str(records)
+    )
+    check(code == 1 and output == [], f"exit {code}\nstderr={stderr}")
+    check("no batch record: the worker did not finish" in stderr, f"stderr={stderr}")
 
 
 def test_spawned_worker(consumer: str, directory: pathlib.Path) -> None:
@@ -302,6 +408,8 @@ def main() -> int:
         directory = pathlib.Path(scratch)
         test_canned_join(consumer, directory)
         test_groups_by_prefix_and_seed(consumer, directory)
+        test_duplicate_rollout_ids(consumer, directory)
+        test_records_require_completed_batch(consumer, directory)
         test_spawned_worker(consumer, directory)
         if len(sys.argv) == 3:
             worker = str(pathlib.Path(sys.argv[2]).resolve())

@@ -94,7 +94,8 @@ private:
 
 /// @brief Create and destroy sessions that never send a request, then play
 /// one-turn episodes one at a time, timing creation and destruction apart
-/// from the episode.
+/// from the episode. A run whose episode does not play exactly one turn is
+/// a broken benchmark, not a measurement: the run fails.
 int bench_create(const std::string &url, const std::size_t count) {
   Samples idle_create;
   Samples idle_destroy;
@@ -110,16 +111,25 @@ int bench_create(const std::string &url, const std::size_t count) {
   Samples created;
   Samples played;
   Samples destroyed;
+  std::size_t invalid = 0;
   for (std::size_t index = 0; index < count; ++index) {
     auto started = Clock::now();
     auto session = create(url, 1, index);
     created.add(Clock::now() - started);
     started = Clock::now();
-    static_cast<void>(session->play());
+    const auto played_ok = session->play();
     while (!session->finished()) {
       if (session->pump().callbacks_delivered == 0) {
         std::this_thread::sleep_for(std::chrono::microseconds{50});
       }
+    }
+    const auto turns_played = session->turns().size();
+    if (!played_ok || turns_played != 1) {
+      ++invalid;
+      std::cerr << std::format(
+          "bench error: episode {} did not play one turn ({} turns)\n", index,
+          turns_played);
+      continue;
     }
     played.add(Clock::now() - started);
     started = Clock::now();
@@ -133,7 +143,7 @@ int bench_create(const std::string &url, const std::size_t count) {
              count, idle_create.json(), idle_destroy.json(), created.json(),
              played.json(), destroyed.json())
       << '\n';
-  return 0;
+  return invalid == 0 ? 0 : 1;
 }
 
 /// @brief A Session whose pump() calls are timed.
@@ -164,12 +174,18 @@ private:
 
 /// @brief Run EPISODES episodes PARALLEL at a time through EpisodeBatch, as
 /// the worker does, timing every pass that did not end in the idle sleep.
+///
+/// Every episode must finish on its own and play exactly TURNS turns: a
+/// run where any episode is invalid is a broken benchmark, not a
+/// measurement, so the run fails and the reported throughput counts only
+/// verified completions.
 int bench_batch(const std::string &url, const std::size_t parallel,
                 const std::size_t episodes, const std::uint32_t turns) {
   Samples passes;
   Samples busy_pumps;
   Samples created;
   Clock::duration pumping{};
+  std::vector<std::string> invalid_episodes;
   EpisodeBatch batch{
       episodes, parallel, std::chrono::seconds{300},
       [&](const std::size_t job) -> std::expected<BatchEntry, std::string> {
@@ -179,10 +195,27 @@ int bench_batch(const std::string &url, const std::size_t parallel,
         if (!session->play()) {
           return std::unexpected("could not play");
         }
+        // Kept alive by the episode below and by the callback; the callback
+        // reads its turns while the episode is still alive.
         return BatchEntry{
-            .episode = std::make_shared<TimedEpisode>(std::move(session),
-                                                      busy_pumps, pumping),
-            .on_end = [](const pigpen::agent::EpisodeEnd &) {},
+            .episode =
+                std::make_shared<TimedEpisode>(session, busy_pumps, pumping),
+            .on_end =
+                [session, &invalid_episodes,
+                 turns](const pigpen::agent::EpisodeEnd &end) {
+                  if (end.outcome != pigpen::agent::DriveOutcome::finished) {
+                    invalid_episodes.push_back(std::format(
+                        "episode {} ended: {}", end.job,
+                        pigpen::agent::drive_outcome_name(end.outcome)));
+                    return;
+                  }
+                  const auto turns_played = session->turns().size();
+                  if (turns_played != turns) {
+                    invalid_episodes.push_back(
+                        std::format("episode {} played {} of {} turns", end.job,
+                                    turns_played, turns));
+                  }
+                },
         };
       }};
   std::optional<Clock::time_point> last_pass;
@@ -210,19 +243,26 @@ int bench_batch(const std::string &url, const std::size_t parallel,
   });
   const auto wall = Clock::now() - started;
   const auto wall_s = std::chrono::duration<double>(wall).count();
+  const auto completed = episodes - invalid_episodes.size();
   std::cout
       << std::format(
-             R"({{"bench":"batch","parallel":{},"episodes":{},"turns":{},)"
-             R"("started":{},"error":"{}","wall_ms":{:.0f},"episodes_per_s":{:.1f},)"
-             R"("pump_busy_percent":{:.1f},"idle_sleeps":{},"pass":{},)"
-             R"("pump_with_callbacks":{},"create":{}}})",
-             parallel, episodes, turns, result.started,
+             R"({{"bench":"batch","parallel":{},"episodes":{},"completed_episodes":{},)"
+             R"("turns":{},"started":{},"error":"{}","wall_ms":{:.0f},)"
+             R"("episodes_per_s":{:.1f},"pump_busy_percent":{:.1f},)"
+             R"("idle_sleeps":{},"pass":{},"pump_with_callbacks":{},"create":{}}})",
+             parallel, episodes, completed, turns, result.started,
              result.error.value_or(""), wall_s * 1000,
-             static_cast<double>(episodes) / wall_s,
+             static_cast<double>(completed) / wall_s,
              100 * std::chrono::duration<double>(pumping).count() / wall_s,
              sleeps, passes.json(), busy_pumps.json(), created.json())
       << '\n';
-  return result.error ? 1 : 0;
+  for (const auto &reason : invalid_episodes) {
+    std::cerr << "bench error: " << reason << '\n';
+  }
+  return (result.error || result.started != episodes ||
+          !invalid_episodes.empty())
+             ? 1
+             : 0;
 }
 
 [[nodiscard]] std::size_t number(const std::string_view text) {

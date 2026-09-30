@@ -7,7 +7,10 @@ writes one `episode` record per rollout; the trainer's inference server (or a
 proxy in front of it) logs what it sampled, keyed by that header. This script
 joins the two into (trajectory, reward) pairs, drops what a trainer must not
 train on, and computes GRPO-style group advantages: each reward minus the
-mean reward of its group.
+mean reward of its group. It emits nothing unless the worker's terminal
+`batch` record reports a completed batch, and it drops every occurrence of a
+rollout id claimed by more than one episode record, since the requests under
+such an id cannot be attributed to one run.
 
 A group is the rollouts that share a world seed *and* a rollout-id prefix.
 An id shaped `<prefix>/<seed>/<sample>` (the worker's default, or a trainer's
@@ -57,6 +60,11 @@ from typing import Any
 # rewards are all equal gets advantage 0 rather than a division by zero.
 STD_EPSILON = 1e-6
 
+# Process exit codes a batch whose episodes all finished reports: 0 when
+# every episode was valid, 6 when some episodes or job lines were invalid
+# but the valid rollouts are still usable (worker_main.cpp).
+ACCEPTABLE_BATCH_EXIT_CODES = (0, 6)
+
 
 @dataclass
 class Rollout:
@@ -100,10 +108,16 @@ def group_requests(lines: Iterable[str]) -> dict[str, list[dict[str, Any]]]:
 
 
 def join(records: Iterable[str], requests: Iterable[str]) -> Join:
-    """Pair every valid episode record with its logged requests."""
+    """Pair every valid episode record with its logged requests.
+
+    A rollout id used by more than one episode record is ambiguous: the
+    requests under it cannot be split back across the runs, so every
+    occurrence is dropped rather than joined against the combined log.
+    """
     steps = group_requests(requests)
     result = Join()
-    seen: set[str] = set()
+    episodes: list[dict[str, Any]] = []
+    counts: dict[str, int] = defaultdict(int)
     for record in read_jsonl(records):
         kind = record.get("type")
         if kind == "job_error":
@@ -114,7 +128,15 @@ def join(records: Iterable[str], requests: Iterable[str]) -> Join:
             continue
         if kind != "episode":
             continue
+        counts[record["rollout_id"]] += 1
+        episodes.append(record)
+    ambiguous = {rollout_id for rollout_id, used in counts.items() if used > 1}
+    seen: set[str] = set()
+    for record in episodes:
         rollout_id = record["rollout_id"]
+        if rollout_id in ambiguous:
+            result.dropped["duplicate rollout id"].append(rollout_id)
+            continue
         seen.add(rollout_id)
         reward = record["reward"]
         # An invalid reward is absent, not zero: never train on it.
@@ -137,7 +159,10 @@ def join(records: Iterable[str], requests: Iterable[str]) -> Join:
             )
         )
     for rollout_id in steps.keys() - seen:
-        result.dropped["no worker record"].append(rollout_id)
+        reason = (
+            "duplicate rollout id" if rollout_id in ambiguous else "no worker record"
+        )
+        result.dropped[reason].append(rollout_id)
     return result
 
 
@@ -183,6 +208,25 @@ def run_worker(command: list[str]) -> tuple[list[str], int]:
     return lines, worker.returncode
 
 
+def batch_problem(result: Join) -> str | None:
+    """Why the joined batch is not safe to train on, or None.
+
+    A batch is usable only when the worker's terminal `batch` record says it
+    completed with an acceptable exit code: 0 (all valid) or 6 (some episodes
+    or job lines invalid, the valid rollouts still usable). Anything else —
+    aborted, interrupted, or no batch record at all — means the run did not
+    finish, and emitting pairs would train on a partial batch.
+    """
+    batch = result.batch
+    if batch is None:
+        return "no batch record: the worker did not finish"
+    status = batch.get("status")
+    exit_code = batch.get("exit_code")
+    if status != "completed" or exit_code not in ACCEPTABLE_BATCH_EXIT_CODES:
+        return f"batch {status}, exit {exit_code}: did not complete"
+    return None
+
+
 def summarize(result: Join, out: Any) -> None:
     print(f"kept {len(result.rollouts)} rollouts", file=out)
     for reason, ids in sorted(result.dropped.items()):
@@ -213,7 +257,7 @@ def main(argv: list[str]) -> int:
     if args.worker:
         records, code = run_worker(args.worker)
         # 6 still has valid rollouts; anything else means no usable batch.
-        if code not in (0, 6):
+        if code not in ACCEPTABLE_BATCH_EXIT_CODES:
             print(f"worker exited {code}", file=sys.stderr)
             return 1
     else:
@@ -221,6 +265,12 @@ def main(argv: list[str]) -> int:
             records = file.readlines()
     with open(args.requests, encoding="utf-8") as file:
         result = join(records, file)
+
+    problem = batch_problem(result)
+    if problem is not None:
+        # No usable batch: never emit training pairs from a partial run.
+        print(problem, file=sys.stderr)
+        return 1
 
     add_advantages(result.rollouts, args.normalize)
     for rollout in result.rollouts:
