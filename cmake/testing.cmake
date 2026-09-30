@@ -1,6 +1,6 @@
 # Two Catch2 binaries (the reflection one links scry directly), CLI checks
-# against the headless and worker binaries, and Python loopback tests. No model server or
-# network needed.
+# against the headless and worker binaries, Python loopback tests, and the
+# example rollout consumer. No model server or network needed.
 
 include(CTest)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
@@ -26,6 +26,7 @@ add_executable(
     tests/episode_summary_tests.cpp
     tests/episode_turn_tests.cpp
     tests/gui_options_tests.cpp
+    tests/line_reader_tests.cpp
     tests/metrics_writer_tests.cpp
     tests/prompt_tests.cpp
     tests/reward_tests.cpp
@@ -172,6 +173,21 @@ pigpen_worker_rejects(
   "unknown reward weight \"bogus\""
   --model m --seeds 1 --reward bogus=1
 )
+pigpen_worker_rejects(
+  rejects_jobs_with_seeds
+  "--jobs - cannot be combined with --seeds"
+  --model m --jobs - --seeds 1
+)
+pigpen_worker_rejects(
+  rejects_jobs_with_samples
+  "--jobs - cannot be combined with --samples"
+  --model m --jobs - --samples 2
+)
+pigpen_worker_rejects(
+  rejects_jobs_file
+  "--jobs accepts only - \\(job lines on standard input\\)"
+  --model m --jobs jobs.jsonl
+)
 
 add_test(
   NAME pigpen_worker_integration
@@ -181,6 +197,16 @@ add_test(
     "$<TARGET_FILE:pig-pen-worker>"
 )
 set_tests_properties(pigpen_worker_integration PROPERTIES TIMEOUT 90)
+
+add_test(
+  NAME pigpen_rollout_consumer
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/rollout_consumer_tests.py"
+    "${CMAKE_CURRENT_SOURCE_DIR}/examples/rollout_consumer.py"
+    "$<TARGET_FILE:pig-pen-worker>"
+)
+set_tests_properties(pigpen_rollout_consumer PROPERTIES TIMEOUT 60)
 
 if(UNIX)
   # Raw non-UTF-8 argv bytes cannot be spelled portably, hence Python.

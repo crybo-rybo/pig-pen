@@ -2,11 +2,13 @@
 /// @brief Worker job expansion; the contract is in the header.
 #include "cli/worker_jobs.hpp"
 
+#include "agent/job_spec.hpp"
 #include "agent/session_options.hpp"
 
 #include <algorithm>
 #include <cctype>
 #include <charconv>
+#include <exception>
 #include <limits>
 #include <system_error>
 #include <utility>
@@ -23,6 +25,15 @@ namespace {
     return std::nullopt;
   }
   return seed;
+}
+
+/// @brief Non-empty visible ASCII (0x21..0x7E): a valid header value with
+/// no spaces.
+[[nodiscard]] bool is_visible_ascii(const std::string_view text) {
+  return !text.empty() && std::ranges::all_of(text, [](const char character) {
+    const auto byte = static_cast<unsigned char>(character);
+    return byte >= 0x21U && byte <= 0x7EU;
+  });
 }
 
 /// @brief ASCII case-insensitive equality, as HTTP header names compare.
@@ -91,10 +102,7 @@ ParseResult validate_rollout_prefix(const std::string_view prefix) {
   if (prefix.empty()) {
     return std::unexpected("--rollout-prefix cannot be empty");
   }
-  if (!std::ranges::all_of(prefix, [](const char character) {
-        const auto byte = static_cast<unsigned char>(character);
-        return byte >= 0x21U && byte <= 0x7EU;
-      })) {
+  if (!is_visible_ascii(prefix)) {
     return std::unexpected(
         "--rollout-prefix must be visible ASCII without spaces");
   }
@@ -157,6 +165,50 @@ WorkerJob WorkerJobs::at(const std::size_t index) const {
           sampling_seed_base_
               ? std::optional<std::uint32_t>{*sampling_seed_base_ + sample}
               : std::nullopt,
+  };
+}
+
+JobStream::JobStream(std::string prefix) : prefix_(std::move(prefix)) {}
+
+std::expected<WorkerJob, std::string>
+JobStream::accept(const std::string_view line, const std::size_t number) {
+  try {
+    return accept_or_throw(line, number);
+  } catch (const std::exception &error) {
+    // parse_job_spec() reports bad content itself; this is only a guard, so
+    // no line can ever abort a long-lived worker.
+    return std::unexpected(std::string{"could not read the job: "} +
+                           error.what());
+  }
+}
+
+std::expected<WorkerJob, std::string>
+JobStream::accept_or_throw(const std::string_view line,
+                           const std::size_t number) {
+  auto spec = agent::parse_job_spec(line);
+  if (!spec) {
+    return std::unexpected(std::move(spec.error()));
+  }
+  const auto sample = spec->sample.value_or(0);
+  auto rollout_id =
+      spec->rollout_id.value_or(prefix_ + '/' + std::to_string(spec->seed) +
+                                '/' + std::to_string(sample));
+  if (!is_visible_ascii(rollout_id)) {
+    return std::unexpected(
+        "\"rollout_id\" must be non-empty visible ASCII without spaces");
+  }
+  if (const auto [used, inserted] =
+          rollout_ids_.try_emplace(rollout_id, number);
+      !inserted) {
+    return std::unexpected("rollout id \"" + rollout_id +
+                           "\" was already used on line " +
+                           std::to_string(used->second));
+  }
+  return WorkerJob{
+      .seed = spec->seed,
+      .sample = sample,
+      .rollout_id = std::move(rollout_id),
+      .sampling_seed = spec->sampling_seed,
   };
 }
 

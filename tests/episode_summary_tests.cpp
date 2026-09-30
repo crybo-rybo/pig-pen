@@ -2,7 +2,7 @@
 /// @brief Covers episode facts and summaries built from plain values (a
 /// World, an activity feed, retained turns, and a runner snapshot) without a
 /// Session, and the single JSON serialisation of a summary and of the
-/// worker's episode and batch records built on it.
+/// worker's episode, batch, and job error records built on it.
 
 #include "agent/episode_summary.hpp"
 
@@ -370,6 +370,7 @@ TEST_CASE("a batch record serialises every count", "[summary][json]") {
                                     {"valid", 5},
                                     {"invalid", 1},
                                     {"not_started", 0},
+                                    {"job_errors", 0},
                                     {"duration_ms", 1234},
                                     {"error", nullptr},
                                     {"exit_code", 6}});
@@ -383,6 +384,20 @@ TEST_CASE("a batch record serialises every count", "[summary][json]") {
       }));
   CHECK(aborted.at("error") == "rollout/1/0: bad header");
   CHECK(aborted.at("not_started") == 3);
+  const auto streamed = nlohmann::json::parse(pigpen::agent::to_json_line(
+      pigpen::agent::BatchRecord{.status = "completed", .job_errors = 2}));
+  CHECK(streamed.at("job_errors") == 2);
+}
+
+TEST_CASE("a job error record names the line and the reason",
+          "[summary][json]") {
+  const auto line = pigpen::agent::to_json_line(
+      pigpen::agent::JobErrorRecord{.line = 3, .error = "unknown key \"x\""});
+  CHECK(line == R"({"error":"unknown key \"x\"","line":3,"type":"job_error"})");
+  // An echoed byte that is not UTF-8 cannot break the record.
+  const auto bad = nlohmann::json::parse(pigpen::agent::to_json_line(
+      pigpen::agent::JobErrorRecord{.line = 1, .error = "r\xff"}));
+  CHECK(bad.at("error") == "r\xef\xbf\xbd");
 }
 
 TEST_CASE("records never throw on text that is not UTF-8", "[summary][json]") {

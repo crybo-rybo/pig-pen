@@ -32,8 +32,30 @@ EpisodeBatch::Slot::Slot(const std::size_t job_index, BatchEntry started,
 EpisodeBatch::EpisodeBatch(const std::size_t job_count,
                            const std::size_t parallel,
                            const Clock::duration timeout, Factory factory)
-    : job_count_(job_count), parallel_(std::max<std::size_t>(parallel, 1)),
+    : EpisodeBatch(
+          [job_count](const std::size_t next) {
+            return next < job_count ? JobStatus::ready : JobStatus::exhausted;
+          },
+          parallel, timeout, std::move(factory)) {
+  job_count_ = job_count;
+  // Known up front, so the batch ends in the pass its last job ends.
+  exhausted_ = job_count == 0;
+}
+
+EpisodeBatch::EpisodeBatch(JobSource source, const std::size_t parallel,
+                           const Clock::duration timeout, Factory factory)
+    : source_(std::move(source)), parallel_(std::max<std::size_t>(parallel, 1)),
       timeout_(timeout), factory_(std::move(factory)) {}
+
+JobStatus EpisodeBatch::poll_source() {
+  try {
+    return source_(next_job_);
+  } catch (...) {
+    error_ =
+        exception_message("could not read job " + std::to_string(next_job_));
+    return JobStatus::pending;
+  }
+}
 
 std::optional<BatchResult> EpisodeBatch::step(const Clock::time_point now,
                                               const bool stop_requested) {
@@ -48,8 +70,22 @@ std::optional<BatchResult> EpisodeBatch::step(const Clock::time_point now,
 
   // An error stops the batch exactly as a stop request does.
   const auto stopping = [this] { return stop_requested_ || error_; };
-  while (!stopping() && slots_.size() < parallel_ && next_job_ < job_count_) {
+  while (!stopping() && !exhausted_ && slots_.size() < parallel_) {
+    const auto status = poll_source();
+    if (error_) {
+      progressed_ = true;
+      break;
+    }
+    if (status == JobStatus::exhausted) {
+      exhausted_ = true;
+      progressed_ = true;
+      break;
+    }
+    if (status == JobStatus::pending) {
+      break;
+    }
     const auto job = next_job_++;
+    exhausted_ = job_count_ && next_job_ == *job_count_;
     progressed_ = true;
     try {
       auto entry = factory_(job);
@@ -96,11 +132,12 @@ std::optional<BatchResult> EpisodeBatch::step(const Clock::time_point now,
     slot = slots_.erase(slot);
   }
 
-  if (slots_.empty() && (stopping() || next_job_ == job_count_)) {
+  if (slots_.empty() && (stopping() || exhausted_)) {
+    const auto jobs = job_count_.value_or(next_job_);
     result_ = BatchResult{
-        .jobs = job_count_,
+        .jobs = jobs,
         .started = started_,
-        .not_started = job_count_ - started_,
+        .not_started = jobs - started_,
         .stopped = stop_requested_,
         .error = error_,
         .duration = now - *first_step_,

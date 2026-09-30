@@ -105,6 +105,7 @@ would be read as a preset named `--model`.
 | `PIGPEN_BUILD_GUI` | `ON` | build `pig-pen`; turn off to skip SDL3, ImGui, and OpenGL entirely |
 | `PIGPEN_BUILD_TESTS` | `ON` | build both Catch2 test binaries and register all CTest cases |
 | `PIGPEN_WARNINGS_AS_ERRORS` | `ON` | `-Werror` for pig-pen's own code only |
+| `PIGPEN_BUILD_BENCH` | `OFF` | build `pigpen_session_bench`, the worker scheduling benchmark behind [Training](training.md#performance-notes)'s performance notes |
 | `PIGPEN_SCRY_SOURCE` | *(empty)* | deprecated compatibility alias for a local scry checkout |
 
 The presets set the first three explicitly, so re-running a preset restores

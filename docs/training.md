@@ -34,10 +34,11 @@ client), and gets the rollout id `<prefix>/<seed>/<sample>`, for example
 |---|---|---|
 | `--model NAME` | *(required)* | exact model identifier forwarded to the server |
 | `--base-url URL` | `http://127.0.0.1:11434/v1` | model endpoint |
-| `--seeds LIST` | *(required)* | world seeds: comma-separated seeds and inclusive `A-B` ranges, e.g. `1-3,7`; repeatable |
+| `--seeds LIST` | *(required without `--jobs`)* | world seeds: comma-separated seeds and inclusive `A-B` ranges, e.g. `1-3,7`; repeatable |
 | `--samples INTEGER` | `1` | episodes per world seed, 1–10000 |
+| `--jobs -` | *(off)* | read jobs as JSON lines from stdin instead; see [Streaming jobs](#streaming-jobs-from-stdin) |
 | `--parallel INTEGER` | `1` | episodes in flight at once, 1–256 |
-| `--rollout-prefix TEXT` | `rollout` | first part of every rollout id; visible ASCII, no spaces |
+| `--rollout-prefix TEXT` | `rollout` | first part of every default rollout id; visible ASCII, no spaces |
 | `--sampling-seed-base INTEGER` | *(unset)* | sample *k* is sent with provider sampling seed `BASE + k` |
 | `--timeout-seconds INTEGER` | `300` | per-episode deadline, 1–86400 |
 | `--log-dir DIR` | *(off)* | also write each episode's JSONL log here |
@@ -59,7 +60,9 @@ empty, malformed, or a descending range, a seed appears twice (rollout ids
 must be unique), there would be more than 1,000,000 jobs, `--samples` or
 `--parallel` is 0, `--sampling-seed-base` plus the last sample index would
 exceed 4294967295, both `--sampling-seed` and `--sampling-seed-base` are
-given, or a `--header` names `X-Pigpen-Rollout` or `X-Pigpen-Seed`.
+given, a `--header` names `X-Pigpen-Rollout` or `X-Pigpen-Seed`, `--jobs`
+is given anything but `-`, or `--jobs -` is combined with `--seeds`,
+`--samples`, or `--sampling-seed-base`.
 
 Without `--sampling-seed-base` the provider sampling seed is unset
 (server-random), which is the normal case for training. `--sampling-seed`
@@ -74,6 +77,74 @@ over every session found nothing to do. Nothing is shared between sessions,
 so there is no locking, and every callback runs on that one thread. When an
 episode ends, its record is written, its session (and log) is closed, and
 the next job starts.
+
+## Streaming jobs from stdin
+
+`--jobs -` turns the worker into a long-lived process a trainer drives
+through a pipe, instead of respawning it for every batch. Each line on stdin
+is one job, a JSON object:
+
+```json
+{"seed": 1003}
+{"seed": 1003, "sample": 1, "rollout_id": "step17/1003/1", "sampling_seed": 42}
+```
+
+| key | default | meaning |
+|---|---|---|
+| `seed` | *(required)* | world seed, 0–18446744073709551615 |
+| `sample` | `0` | sample index, 0–4294967295; only a label (it names the default rollout id and is echoed in the record) |
+| `rollout_id` | `<prefix>/<seed>/<sample>` | the job's rollout id: non-empty visible ASCII without spaces, unique within the stream |
+| `sampling_seed` | the batch's `--sampling-seed` | provider sampling seed, 0–4294967295; `null` is the same as leaving it out |
+
+Numbers must be whole (`1003`, not `1003.0` or `1e3`), and any other key is
+rejected so a typo cannot silently change a job. Lines consisting only of
+spaces, tabs, and carriage returns are skipped; a line may end in `\r\n`.
+
+Jobs start in stdin order as soon as a slot is free: the worker takes the
+next line (and reports it if it is not a job) only when it has a free slot,
+and starts it at once, so a trainer can write one job and wait for its record
+before writing the next. Every request still carries `X-Pigpen-Rollout` (the
+job's rollout id) and `X-Pigpen-Seed`. A reader thread takes lines off stdin
+and hands them to the pump loop, which never waits for input: in-flight
+episodes keep running while stdin is quiet. At most 1024 lines are read
+ahead; past that the worker stops reading and the pipe holds the writer back.
+End of input ends the batch once every started episode has its record.
+`SIGINT` and `SIGTERM` behave as for a `--seeds` batch, even while the worker
+is waiting on a stdin that is still open; lines not yet taken are ignored.
+
+A line that is not a valid job does not stop the worker. It gets a
+`job_error` record on stdout, in the order the line was taken, and a line on
+stderr:
+
+```json
+{"type":"job_error","line":5,"error":"rollout id \"step17/1003/1\" was already used on line 2"}
+```
+
+`line` is the one-based line number on stdin, counting every line, blank ones
+included. The errors are `invalid JSON at byte N`, `invalid JSON: a number
+is out of range` (such as `1e400`), `NUL byte at byte N`, `a job must be a
+JSON object`, `key "K" appears twice`, `unknown key "K"`, `"seed" is
+required`, a type or range error naming the key, a bad or repeated
+`rollout_id`, and `line is longer than 65536 bytes`. Nothing in a line's
+content can stop the batch. The batch record counts rejected lines in
+`job_errors`, and any rejected line makes the exit code 6, as an invalid
+episode does, so a trainer that only checks the exit code still notices.
+
+The worker remembers every rollout id of the stream to refuse repeats, and
+never forgets one: about 120 bytes per job for ids of the default shape, so
+about 120 MB per million jobs. A trainer that keeps one worker for a long
+run should restart it now and then, for example once per training step or
+every few hundred thousand jobs; uniqueness is only checked within one
+worker's stream.
+
+If stdin cannot be read (a read error rather than its end, for example stdin
+is a directory or a closed descriptor), the worker stops taking jobs, lets
+the episodes already started finish and write their records, says `input
+error` on stderr, and writes a batch record with status `aborted`, the
+reason in `error` (`could not read standard input: ...`), and exit code 1.
+
+A non-blocking stdin that is merely empty is not an error: the reader waits
+for input on it just as it does on a blocking one.
 
 ## Joining rollouts with the trainer's server
 
@@ -92,6 +163,35 @@ rollout id, order them by arrival, and attach the record's reward to the
 trajectory. `X-Pigpen-Seed` repeats the world seed so the server can group
 samples of one seed (GRPO-style groups) without parsing the id.
 
+[`examples/rollout_consumer.py`](../examples/rollout_consumer.py) is a
+small, standard-library-only reference for this join. It reads the worker's
+records (from a file, or by running the worker), and a request log the
+server or a proxy in front of it writes, one JSON line per request in arrival
+order:
+
+```json
+{"rollout_id": "run42/1003/2", "request": {...}, "completion": {...}}
+```
+
+where `rollout_id` is the `X-Pigpen-Rollout` header, `request` the chat
+request body, and `completion` whatever the server sampled (text, token ids,
+log-probabilities), carried through untouched. It writes one
+`(trajectory, reward)` line per usable rollout, drops invalid rewards,
+rollouts with no logged requests, and requests with no worker record (and
+says so on stderr), and adds a GRPO-style advantage: the reward minus the
+mean reward of the kept rollouts in its group (`--normalize` also divides by
+the group's standard deviation). A group is the rollouts with the same world
+seed and the same rollout-id prefix: an id `<prefix>/<seed>/<sample>`, such
+as the default `run42/1003/2` or a stream's `step17/1003/1`, is grouped as
+`<prefix>/<seed>`, so training steps that reuse a seed never share a
+baseline. An id of any other shape falls back to its seed alone:
+
+```sh
+python3 examples/rollout_consumer.py --requests requests.jsonl --records rollouts.jsonl
+python3 examples/rollout_consumer.py --requests requests.jsonl -- \
+  ./build/dev/pig-pen-worker --model YOUR_MODEL --seeds 1-8 --samples 4
+```
+
 `--header NAME=VALUE` adds more headers, such as a run tag the server routes
 on. Names Pig Pen sets itself are refused on the command line; a malformed
 header, or one the model client manages (`Content-Type`, `Accept`,
@@ -102,7 +202,8 @@ request or log.
 ## Records
 
 stdout is pure JSONL: one `episode` record per started job, in completion
-order (not job order), then one `batch` record. Each line is queued to a
+order (not job order), with `--jobs -` a `job_error` record per rejected
+line among them, then one `batch` record. Each line is queued to a
 bounded buffer the pump drains every pass, so a consumer can stream it and
 a reader that stops consuming can never wedge the pump: once 1 MiB of
 records are buffered the worker treats stdout as failed, like a closed
@@ -171,25 +272,28 @@ The last line, written once every started episode has ended:
 
 ```json
 {"type":"batch","status":"completed","jobs":3,"episodes":3,"valid":3,"invalid":0,
- "not_started":0,"duration_ms":17,"error":null,"exit_code":0}
+ "not_started":0,"job_errors":0,"duration_ms":17,"error":null,"exit_code":0}
 ```
 
 `status` is `completed`, `interrupted` (a signal), or `aborted` (a session
-could not be created, or reporting an episode failed; `error` has the
-reason). `episodes` counts the
+could not be created, reporting an episode failed, or stdin could not be
+read; `error` has the reason). `episodes` counts the
 `episode` lines written, always `valid + invalid`. `not_started` counts jobs
 that never got an episode and therefore have no record: those still queued
 when a signal or abort stopped the batch, plus the job whose session could
-not be created. `exit_code` is the status the process exits with.
+not be created. With `--jobs -`, `jobs` counts the valid job lines the batch
+took (lines never taken because a signal or abort came first are not
+counted anywhere), and `job_errors` the rejected lines; it is always 0
+otherwise. `exit_code` is the status the process exits with.
 
 ## Exit codes
 
 | code | meaning |
 |---|---|
 | `0` | every episode's reward is valid |
-| `1` | a session could not be created (a configuration problem such as a bad `--header` or `--log-dir`), or reporting an episode failed; the batch is aborted: in-flight episodes are cancelled cooperatively and still get their records. Reporting failures are an episode log that could not be finalized, and a stdout that cannot be written (for example the consumer closed the pipe, or stopped reading once 1 MiB of records are buffered): the worker then writes nothing more to stdout, cancels in-flight episodes cooperatively so their logs still get footers, starts no more jobs, and says so on stderr |
+| `1` | a session could not be created (a configuration problem such as a bad `--header` or `--log-dir`), or reporting an episode failed; the batch is aborted: in-flight episodes are cancelled cooperatively and still get their records. Reporting failures are an episode log that could not be finalized, and a stdout that cannot be written (for example the consumer closed the pipe, or stopped reading once 1 MiB of records are buffered): the worker then writes nothing more to stdout, cancels in-flight episodes cooperatively so their logs still get footers, starts no more jobs, and says so on stderr. With `--jobs -`, also a stdin that could not be read (started episodes finish normally) |
 | `2` | invalid command line, including `--model`, `--base-url`, or `--prompt-variant` text that is not valid UTF-8; nothing is written to stdout |
-| `6` | the batch completed but at least one episode's reward is invalid |
+| `6` | the batch completed but at least one episode's reward is invalid, or (with `--jobs -`) at least one job line was rejected |
 | `130` / `143` | `SIGINT` / `SIGTERM`: in-flight episodes are cancelled cooperatively and their records written, normally invalid with reason `stopped` (or `timeout` or `error` if that is how they had already ended), queued jobs are not started, and the batch record says `interrupted` |
 
 When more than one applies, an abort or a stdout failure (1) wins over a
@@ -241,3 +345,54 @@ writes ([Logs](logs.md)): same file naming, same records, with the rollout id
 in both the header and the footer. Logs are off by default because a training
 run may play thousands of episodes; the records on stdout have everything the
 reward needs.
+
+## Performance notes
+
+Two follow-ups the design left open were measured rather than built: a knob
+for `Session::pump()`'s budget (2 ms and 32 callbacks per session per pump)
+and reusing a session's model client across episodes. Reproduce the numbers
+with the benchmark in `tests/bench/` (not part of the test suite):
+
+```sh
+cmake --preset release -B build/bench -DPIGPEN_BUILD_BENCH=ON
+cmake --build build/bench --target pigpen_session_bench
+python3 tests/bench/run_session_bench.py build/bench/pigpen_session_bench
+```
+
+It drives sessions through `EpisodeBatch` exactly as the worker does, against
+a threaded loopback stub that answers every request at once (a `move` +
+`eat` round, then a text answer streamed as 1 or 200 deltas), so it measures
+the worker's own overhead with no inference time at all. These figures are
+from two runs in a release build on a 4-core 2.1 GHz x86-64 container, with
+5-turn episodes and 4 episodes per slot:
+
+| `--parallel` | episodes/s | pump thread busy | pass p50 | pass p99 | pass max | pump with work p99 |
+|---|---|---|---|---|---|---|
+| 8 | 275–360 | 10–16 % | 0.09–0.14 ms | 1.4–1.8 ms | 1.4–4.7 ms | 0.13–0.27 ms |
+| 32 | 310–360 | 13–18 % | 0.03–0.17 ms | 0.8–0.9 ms | 3.2–5.1 ms | 0.17–0.25 ms |
+| 128 | 290–350 | 19–26 % | 0.06–0.22 ms | 1.0–1.3 ms | 11–15 ms | 0.24–0.43 ms |
+
+A pass is one step of every live session, not counting the 1 ms idle sleep.
+The largest passes are the first, which creates all P sessions at once
+(128 × about 0.09 ms), and the ones that also create and destroy sessions.
+Throughput stops growing with P because the Python stub, bound by its
+interpreter lock, is saturated at about 3,000 requests a second, not because of the worker: its
+pump thread stays 75–90 % idle. The 2 ms budget only binds when one session
+has a backlog, and a pump that delivers anything takes 0.02 ms at p50. So
+there are no pump-budget knobs: a smaller budget would only trade fairness
+between sessions that are not competing, and a pass p99 near 1 ms is noise
+next to one model request.
+
+| session lifecycle | p50 | p99 |
+|---|---|---|
+| create (world, registry, conversation, model client and its I/O thread) | 0.06–0.09 ms | 0.14–0.21 ms |
+| destroy after an episode (join the I/O thread, close its connection) | 0.10 ms | 0.24–0.29 ms |
+| a whole one-turn episode (two requests) against the instant stub | 1.3 ms | 2.4–2.5 ms |
+
+Creating and destroying a session costs about 0.2 ms per episode. Against
+the instant stub that is about 15 % of a one-turn episode, and about 3 % of
+a 5-turn one; against a real model, where one request takes tens to
+thousands of milliseconds, it is well under 1 %. Reuse would only pay off
+for a server that answers in about a millisecond, and it would mean
+rebinding the tool registry's captured world, so sessions stay created per
+job.

@@ -21,6 +21,7 @@ set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 option(PIGPEN_BUILD_GUI "Build the Dear ImGui application" ON)
 option(PIGPEN_BUILD_TESTS "Build pig-pen's test suite" ON)
 option(PIGPEN_WARNINGS_AS_ERRORS "Treat warnings in pig-pen code as errors" ON)
+option(PIGPEN_BUILD_BENCH "Build the session scheduling benchmark" OFF)
 set(
   PIGPEN_SCRY_SOURCE
   ""
@@ -53,6 +54,7 @@ add_library(pigpen_agent STATIC
   src/agent/episode_runner.cpp
   src/agent/episode_summary.cpp
   src/agent/episode_turn.cpp
+  src/agent/job_spec.cpp
   src/agent/metrics_writer.cpp
   src/agent/prompt.cpp
   src/agent/reward.cpp
@@ -75,11 +77,13 @@ pigpen_target(pigpen_agent)
 add_library(
   pigpen_cli STATIC
     src/cli/config_options.cpp
+    src/cli/line_reader.cpp
     src/cli/option_parser.cpp
     src/cli/termination_signal.cpp
     src/cli/worker_jobs.cpp
 )
-target_link_libraries(pigpen_cli PUBLIC pigpen_agent)
+find_package(Threads REQUIRED)
+target_link_libraries(pigpen_cli PUBLIC pigpen_agent PRIVATE Threads::Threads)
 pigpen_target(pigpen_cli)
 
 # ImGui-free UI logic shared by the GUI and the tests.
@@ -130,4 +134,12 @@ endif()
 
 if(PIGPEN_BUILD_TESTS)
   include(cmake/testing.cmake)
+endif()
+
+# Not a test: tests/bench/run_session_bench.py drives it against a loopback
+# stub and prints the numbers docs/training.md quotes.
+if(PIGPEN_BUILD_BENCH)
+  add_executable(pigpen_session_bench tests/bench/session_bench.cpp)
+  target_link_libraries(pigpen_session_bench PRIVATE pigpen_agent)
+  pigpen_target(pigpen_session_bench)
 endif()

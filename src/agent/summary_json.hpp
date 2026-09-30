@@ -48,7 +48,7 @@ struct EpisodeRecord {
 /// @brief What the worker reports once its batch has ended.
 struct BatchRecord {
   /// `completed`, `interrupted` (a signal), or `aborted` (a session could
-  /// not be created).
+  /// not be created, a report failed, or stdin could not be read).
   std::string status{};
   std::size_t jobs{};
   /// `episode` records written; every started job writes exactly one.
@@ -58,6 +58,9 @@ struct BatchRecord {
   /// Jobs that never got an episode: queued when the batch stopped, or the
   /// one whose session could not be created.
   std::size_t not_started{};
+  /// Job lines read from stdin that were rejected, each with its own
+  /// `job_error` record; always 0 for jobs from the command line.
+  std::size_t job_errors{};
   std::chrono::milliseconds duration{};
   /// Why the batch was aborted, or empty.
   std::string error{};
@@ -68,5 +71,17 @@ struct BatchRecord {
 /// @brief @p record as the worker's final `batch` line; an empty `error` is
 /// written as null.
 [[nodiscard]] std::string to_json_line(const BatchRecord &record);
+
+/// @brief A job line the worker rejected.
+struct JobErrorRecord {
+  /// One-based line number on stdin, counting every line read.
+  std::size_t line{};
+  /// Why the line is not a job.
+  std::string error{};
+};
+
+/// @brief @p record as the worker's `job_error` line: `type`, `line`, and
+/// `error`.
+[[nodiscard]] std::string to_json_line(const JobErrorRecord &record);
 
 } // namespace pigpen::agent

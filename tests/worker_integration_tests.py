@@ -2,8 +2,10 @@
 
 Covers what the C++ suite cannot: parallel sessions over the real curl/HTTP
 path, the rollout and seed headers on every request, the JSONL records on
-stdout, per-episode logs, and exit codes 0, 1 (stdout closed or stalled, or
-a log that failed to finalize), 2, 6, and 130/143.
+stdout, per-episode logs, jobs read from stdin with `--jobs -` (including
+rejected lines and a producer that waits for each record before writing the
+next job), and exit codes 0, 1 (stdout closed or stalled, or a log that
+failed to finalize), 2, 6, and 130/143.
 
 The stub is a ThreadingHTTPServer: a single-threaded one would serialise the
 worker's parallel sessions and hide scheduling bugs. It scripts each rollout
@@ -694,6 +696,15 @@ def test_usage_errors_exit_2(executable: str) -> None:
         (["--model", "m"], "--seeds is required"),
         (["--model", "m", "--seeds", "1", "--seed", "2"], "--seed is not accepted"),
         (["--model", "m", "--seeds", "3-1"], "must not descend"),
+        (
+            ["--model", "m", "--jobs", "-", "--seeds", "1"],
+            "--jobs - cannot be combined with --seeds",
+        ),
+        (
+            ["--model", "m", "--jobs", "-", "--sampling-seed-base", "1"],
+            "--jobs - cannot be combined with --sampling-seed-base",
+        ),
+        (["--model", "m", "--jobs", "jobs.jsonl"], "--jobs accepts only -"),
     ):
         completed = subprocess.run(
             [executable, *arguments],
@@ -757,6 +768,326 @@ def test_signal_cancels_in_flight(executable: str, signal_number: int) -> None:
     check(subset(batch, expected_batch) == expected_batch, f"batch: {batch!r}")
 
 
+def split_stream_records(
+    records: list[dict[str, Any]], output: str
+) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    """Episode records by rollout id, job errors in order, and the batch."""
+    check(len(records) >= 1, f"no records\n{output}")
+    *body, batch = records
+    check(batch.get("type") == "batch", f"last record is not a batch\n{output}")
+    episodes = [r for r in body if r.get("type") == "episode"]
+    errors = [r for r in body if r.get("type") == "job_error"]
+    check(len(episodes) + len(errors) == len(body), f"stray record\n{output}")
+    by_rollout = {r["rollout_id"]: r for r in episodes}
+    check(len(by_rollout) == len(episodes), f"duplicate rollout ids\n{output}")
+    return by_rollout, errors, batch
+
+
+def test_jobs_from_stdin(executable: str) -> None:
+    """Job lines on stdin: defaults, overrides, and each rejected line."""
+    lines = [
+        '{"seed": 51}',
+        '{"seed": 51, "sample": 1, "sampling_seed": 5}',
+        "not json",
+        '{"seed": 52, "rollout_id": "custom-a"}',
+        '{"seed": 53, "rollout_id": "custom-a"}',
+        "",
+        '{"seed": 54, "samples": 2}',
+        '{"seed": 55, "sampling_seed": null}',
+        '{"seed": 56, "rollout_id": "' + "x" * 70_000 + '"}',
+        '{"seed": 1e400}',
+        '{"seed": 57, "seed": 58}',
+        '{"seed": 59}\0garbage',
+    ]
+    with Stub(play_one_turn) as server:
+        completed = subprocess.run(
+            worker_command(
+                executable,
+                server,
+                *("--jobs", "-", "--parallel", "2", "--rollout-prefix", PREFIX),
+                *("--sampling-seed", "11", "--timeout-seconds", "15"),
+            ),
+            input="\n".join(lines) + "\n",
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        requests = list(server.requests)
+
+    output = f"stdout={completed.stdout}\nstderr={completed.stderr}"
+    check(completed.returncode == 6, f"exit {completed.returncode}\n{output}")
+    records = parse_output(completed.stdout, output)
+    episodes, errors, batch = split_stream_records(records, output)
+
+    # Line numbers count every line, the skipped blank one included.
+    check(
+        errors
+        == [
+            {"type": "job_error", "line": 3, "error": "invalid JSON at byte 2"},
+            {
+                "type": "job_error",
+                "line": 5,
+                "error": 'rollout id "custom-a" was already used on line 4',
+            },
+            {"type": "job_error", "line": 7, "error": 'unknown key "samples"'},
+            {
+                "type": "job_error",
+                "line": 9,
+                "error": "line is longer than 65536 bytes",
+            },
+            # Neither an out-of-range number nor anything else about a line's
+            # content can abort the batch.
+            {
+                "type": "job_error",
+                "line": 10,
+                "error": "invalid JSON: a number is out of range",
+            },
+            {"type": "job_error", "line": 11, "error": 'key "seed" appears twice'},
+            {"type": "job_error", "line": 12, "error": "NUL byte at byte 13"},
+        ],
+        f"job errors: {errors!r}",
+    )
+    # A job line without a sampling seed (or with null) uses --sampling-seed.
+    expected = {
+        f"{PREFIX}/51/0": (51, 0, 11),
+        f"{PREFIX}/51/1": (51, 1, 5),
+        "custom-a": (52, 0, 11),
+        f"{PREFIX}/55/0": (55, 0, 11),
+    }
+    check(episodes.keys() == expected.keys(), f"rollout ids: {sorted(episodes)}")
+    for rollout, (seed, sample, sampling_seed) in expected.items():
+        record = episodes[rollout]
+        fields = {"seed": seed, "sample": sample, "sampling_seed": sampling_seed}
+        check(subset(record, fields) == fields, f"{rollout}: {record!r}")
+        check(record["reward"]["valid"] is True, f"{rollout}: {record!r}")
+    for request in requests:
+        check(request.rollout in expected, f"rollout header: {request!r}")
+        seed, _, sampling_seed = expected[request.rollout]
+        check(request.seed == str(seed), f"seed header: {request!r}")
+        check(request.body.get("seed") == sampling_seed, f"{request.body!r}")
+    check(len(requests) == 8, f"expected two requests per job, got {len(requests)}")
+
+    expected_batch = {
+        "status": "completed",
+        "jobs": 4,
+        "episodes": 4,
+        "valid": 4,
+        "invalid": 0,
+        "not_started": 0,
+        "job_errors": 7,
+        "error": None,
+        "exit_code": 6,
+    }
+    check(subset(batch, expected_batch) == expected_batch, f"batch: {batch!r}")
+    for number in (3, 5, 7, 9, 10, 11, 12):
+        line = f"job line {number} rejected"
+        check(line in completed.stderr, f"missing {line!r} on stderr\n{output}")
+
+
+def start_stdin_worker(
+    executable: str, server: StubServer, *extra: str
+) -> subprocess.Popen[str]:
+    return subprocess.Popen(
+        worker_command(executable, server, "--jobs", "-", *extra),
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+
+def send_job(process: subprocess.Popen[str], job: dict[str, Any]) -> None:
+    process.stdin.write(json.dumps(job) + "\n")
+    process.stdin.flush()
+
+
+def read_record(process: subprocess.Popen[str]) -> dict[str, Any]:
+    line = process.stdout.readline()
+    check(line.endswith("\n"), f"stdout ended early: {line!r}")
+    return json.loads(line)
+
+
+def test_slow_producer(executable: str) -> None:
+    """A long-lived worker: each job runs as soon as its line arrives."""
+    with Stub(play_one_turn) as server:
+        process = start_stdin_worker(executable, server, "--timeout-seconds", "15")
+        watchdog = threading.Timer(45, process.kill)
+        watchdog.start()
+        try:
+            # Each record comes back while stdin is still open, so the
+            # worker neither waits for the end of input nor reads ahead.
+            for seed in (61, 62):
+                send_job(process, {"seed": seed})
+                record = read_record(process)
+                expected = {"type": "episode", "rollout_id": f"rollout/{seed}/0"}
+                check(subset(record, expected) == expected, f"record: {record!r}")
+                check(record["reward"]["valid"] is True, f"record: {record!r}")
+                check(
+                    set(server.counts)
+                    == {f"rollout/{s}/0" for s in range(61, seed + 1)},
+                    f"rollouts so far: {sorted(server.counts)}",
+                )
+            process.stdin.close()
+            batch = read_record(process)
+            stderr = process.stderr.read()
+            process.wait(timeout=30)
+        finally:
+            watchdog.cancel()
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+
+    check(process.returncode == 0, f"exit {process.returncode}\nstderr={stderr}")
+    expected_batch = {
+        "type": "batch",
+        "status": "completed",
+        "jobs": 2,
+        "episodes": 2,
+        "valid": 2,
+        "job_errors": 0,
+        "exit_code": 0,
+    }
+    check(subset(batch, expected_batch) == expected_batch, f"batch: {batch!r}")
+
+
+def test_signal_while_waiting_for_jobs(executable: str) -> None:
+    """A signal ends a worker blocked on stdin that is still open.
+
+    The test holds the pipe's write end until the worker has exited, so the
+    worker's reader thread is inside a read that cannot return: a worker
+    that joined that thread instead of leaving it would never exit.
+    """
+    read_end, write_end = os.pipe()
+    with Stub(play_one_turn) as server:
+        try:
+            process = subprocess.Popen(
+                worker_command(executable, server, "--jobs", "-"),
+                stdin=read_end,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            os.close(read_end)
+            read_end = -1
+            try:
+                os.write(write_end, b'{"seed": 71}\n')
+                record = read_record(process)
+                check(record.get("rollout_id") == "rollout/71/0", f"{record!r}")
+                process.send_signal(signal.SIGINT)
+                # stdin is still open here: only the worker can end this.
+                process.wait(timeout=30)
+                stdout = process.stdout.read()
+                stderr = process.stderr.read()
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+                process.stdout.close()
+                process.stderr.close()
+        finally:
+            if read_end >= 0:
+                os.close(read_end)
+            os.close(write_end)
+
+    output = f"stdout={stdout}\nstderr={stderr}"
+    check(process.returncode == 130, f"exit {process.returncode}\n{output}")
+    batch = json.loads(stdout)
+    expected_batch = {
+        "type": "batch",
+        "status": "interrupted",
+        "jobs": 1,
+        "episodes": 1,
+        "valid": 1,
+        "not_started": 0,
+        "exit_code": 130,
+    }
+    check(subset(batch, expected_batch) == expected_batch, f"batch: {batch!r}")
+
+
+def test_unreadable_stdin_exits_1(executable: str) -> None:
+    """A stdin that cannot be read is an error, not an empty stream."""
+    with (
+        Stub(play_one_turn) as server,
+        tempfile.TemporaryDirectory(prefix="pigpen-stdin-") as directory,
+    ):
+        # Reading a directory fails (EISDIR) rather than reaching its end.
+        descriptor = os.open(directory, os.O_RDONLY)
+        try:
+            completed = subprocess.run(
+                worker_command(executable, server, "--jobs", "-"),
+                stdin=descriptor,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+        finally:
+            os.close(descriptor)
+
+    output = f"stdout={completed.stdout}\nstderr={completed.stderr}"
+    check(completed.returncode == 1, f"exit {completed.returncode}\n{output}")
+    check("input error" in completed.stderr, f"no input diagnostic\n{output}")
+    batch = json.loads(completed.stdout)
+    expected_batch = {
+        "type": "batch",
+        "status": "aborted",
+        "jobs": 0,
+        "episodes": 0,
+        "exit_code": 1,
+    }
+    check(subset(batch, expected_batch) == expected_batch, f"batch: {batch!r}")
+    check(
+        batch["error"].startswith("could not read standard input: "),
+        f"batch error: {batch!r}",
+    )
+
+
+def test_nonblocking_stdin_waits(executable: str) -> None:
+    """A non-blocking stdin that is empty for now is waited on, not an error."""
+    read_end, write_end = os.pipe()
+    os.set_blocking(read_end, False)
+    with Stub(play_one_turn) as server:
+        try:
+            process = subprocess.Popen(
+                worker_command(executable, server, "--jobs", "-"),
+                stdin=read_end,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            os.close(read_end)
+            read_end = -1
+            try:
+                # Give the reader time to find the pipe empty (EAGAIN).
+                time.sleep(0.3)
+                check(process.poll() is None, "worker exited on an empty pipe")
+                os.write(write_end, b'{"seed": 81}\n')
+                record = read_record(process)
+                check(record.get("rollout_id") == "rollout/81/0", f"{record!r}")
+                os.close(write_end)
+                write_end = -1
+                process.wait(timeout=30)
+                stdout = process.stdout.read()
+                stderr = process.stderr.read()
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+                process.stdout.close()
+                process.stderr.close()
+        finally:
+            for descriptor in (read_end, write_end):
+                if descriptor >= 0:
+                    os.close(descriptor)
+
+    output = f"stdout={stdout}\nstderr={stderr}"
+    check(process.returncode == 0, f"exit {process.returncode}\n{output}")
+    batch = json.loads(stdout)
+    expected_batch = {"type": "batch", "status": "completed", "episodes": 1}
+    check(subset(batch, expected_batch) == expected_batch, f"batch: {batch!r}")
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         raise SystemExit("usage: worker_integration_tests.py PIG_PEN_WORKER")
@@ -764,7 +1095,12 @@ def main() -> int:
     test_parallel_batch(executable)
     test_invalid_episodes_exit_6(executable)
     test_usage_errors_exit_2(executable)
+    test_jobs_from_stdin(executable)
+    test_slow_producer(executable)
     if os.name == "posix":
+        test_signal_while_waiting_for_jobs(executable)
+        test_unreadable_stdin_exits_1(executable)
+        test_nonblocking_stdin_waits(executable)
         test_closed_stdout_exits_1(executable)
         test_stalled_stdout_exits_1(executable)
         test_log_finalization_failure_exit_1(executable)

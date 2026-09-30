@@ -32,14 +32,14 @@ ci_cc := if os() == "macos" { "/usr/bin/cc" } else { "gcc-16" }
 
 fmt:
     git ls-files '*.cpp' '*.hpp' | xargs {{clang_format}} -i
-    {{ruff}} format tests
+    {{ruff}} format tests examples
 
 fmt-check:
     git ls-files '*.cpp' '*.hpp' | xargs {{clang_format}} --dry-run --Werror
-    {{ruff}} format --check tests
+    {{ruff}} format --check tests examples
 
 lint:
-    {{ruff}} check tests
+    {{ruff}} check tests examples
 
 # Everything GitHub runs on a PR. Reuses fetched deps in build/<preset>/.
 ci: fmt-check lint (ci-build-test "dev") (ci-build-test "release") (ci-build-test "headless")

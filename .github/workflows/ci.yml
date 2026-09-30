@@ -23,9 +23,9 @@ jobs:
       - name: clang-format
         run: git ls-files '*.cpp' '*.hpp' | xargs clang-format --dry-run --Werror
       - name: ruff format
-        run: ruff format --check tests
+        run: ruff format --check tests examples
       - name: ruff lint
-        run: ruff check tests
+        run: ruff check tests examples
 
   build-and-test:
     name: build & test (${{ matrix.preset }})

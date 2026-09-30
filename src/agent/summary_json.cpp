@@ -146,9 +146,19 @@ std::string to_json_line(const BatchRecord &record) {
       {"valid", record.valid},
       {"invalid", record.invalid},
       {"not_started", record.not_started},
+      {"job_errors", record.job_errors},
       {"duration_ms", record.duration.count()},
       {"error", nullable(record.error)},
       {"exit_code", record.exit_code},
+  };
+  return dump_line(line);
+}
+
+std::string to_json_line(const JobErrorRecord &record) {
+  const nlohmann::json line = {
+      {"type", "job_error"},
+      {"line", record.line},
+      {"error", record.error},
   };
   return dump_line(line);
 }

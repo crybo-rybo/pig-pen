@@ -136,7 +136,9 @@ episode immediately with finish reason `error` and exit 4.
 `pig-pen-worker` plays world seeds × samples episodes, several at a time,
 against a trainer's inference server, labels every request with an
 `X-Pigpen-Rollout` header, and writes one JSON record per episode, with its
-shaped reward, to stdout. It accepts every flag in the table above except
+shaped reward, to stdout. With `--jobs -` it instead reads jobs as JSON lines
+from stdin and keeps running until end of input, so a trainer can drive one
+long-lived worker. It accepts every flag in the table above except
 `--seed` (world seeds come from `--seeds`) and `--input`, and writes no logs
 unless given `--log-dir`. Its interface, record format, and exit codes (`6`
 means at least one episode's reward is invalid) are in

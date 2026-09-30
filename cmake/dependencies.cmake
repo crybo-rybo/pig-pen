@@ -61,7 +61,7 @@ endif()
 FetchContent_Declare(
   scry
   GIT_REPOSITORY https://github.com/crybo-rybo/scry.git
-  GIT_TAG v0.5.0
+  GIT_TAG v0.6.0
   GIT_PROGRESS TRUE
   SYSTEM
   EXCLUDE_FROM_ALL
