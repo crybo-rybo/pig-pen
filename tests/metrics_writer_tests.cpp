@@ -157,6 +157,31 @@ TEST_CASE("destroying an unfinished writer still emits an incomplete footer") {
   std::filesystem::remove_all(directory, ignored);
 }
 
+TEST_CASE("metrics log rejects a tool payload that is not JSON") {
+  const auto directory = test_directory();
+  auto created = pigpen::agent::MetricsWriter::create(
+      directory, pigpen::agent::Config{}, "invalid-payload-test");
+  REQUIRE(created.has_value());
+  auto writer = std::move(*created);
+  const auto path = writer->path();
+
+  CHECK_FALSE(writer->record_tool({
+      .kind = pigpen::agent::ToolKind::eat,
+      .arguments_json = "{not json",
+      .eaten = pigpen::world::ItemType::berry,
+  }));
+  REQUIRE(writer->finish({.reason = pigpen::agent::FinishReason::stopped}, 0)
+              .has_value());
+
+  const auto records = read_records(path);
+  REQUIRE(records.size() == 2);
+  CHECK(records.back().at("tool_call_counts").at("eat") == 0);
+  CHECK(records.back().at("items_eaten").at("berry") == 0);
+
+  std::error_code ignored;
+  std::filesystem::remove_all(directory, ignored);
+}
+
 TEST_CASE("metrics footer is final and cannot be duplicated") {
   const auto directory = test_directory();
   auto created = pigpen::agent::MetricsWriter::create(

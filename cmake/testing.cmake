@@ -13,7 +13,16 @@ FetchContent_Declare(
   SYSTEM
   EXCLUDE_FROM_ALL
 )
-FetchContent_MakeAvailable(Catch2)
+# The tests parse logs and manifests independently of scry's codec.
+FetchContent_Declare(
+  nlohmann_json
+  GIT_REPOSITORY https://github.com/nlohmann/json.git
+  GIT_TAG 65ee68451d8eb2b5f3a30b410476ab83deb3289b
+  GIT_PROGRESS TRUE
+  SYSTEM
+  EXCLUDE_FROM_ALL
+)
+FetchContent_MakeAvailable(Catch2 nlohmann_json)
 list(APPEND CMAKE_MODULE_PATH "${catch2_SOURCE_DIR}/extras")
 include(Catch)
 

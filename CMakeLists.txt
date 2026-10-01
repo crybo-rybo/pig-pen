@@ -59,7 +59,7 @@ add_library(pigpen_agent STATIC
 target_link_libraries(
   pigpen_agent
   PUBLIC pigpen_world
-  PRIVATE nlohmann_json::nlohmann_json scry::scry
+  PRIVATE scry::scry
 )
 pigpen_target(pigpen_agent)
 

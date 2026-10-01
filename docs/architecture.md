@@ -139,7 +139,8 @@ when the GUI or tests are enabled, `pigpen_ui`. `pigpen_agent` links
 `scry::scry` privately: scry carries `-freflection`, so every `pigpen_agent`
 translation unit (and `pigpen_reflection_tests`, which links scry directly)
 compiles with it, while `pigpen_world`, `pigpen_ui`, and both entry points stay
-reflection-free. nlohmann/json is likewise private to `pigpen_agent`'s metrics
-writer. The `pigpen_target()` helper applies C++26 and the warning flags to
+reflection-free. The metrics writer encodes its JSONL records with scry's
+reflected codec, so the runtime has no other JSON library; nlohmann/json is a
+test-only dependency that parses logs and manifests independently. The `pigpen_target()` helper applies C++26 and the warning flags to
 pig-pen's own targets only; fetched dependencies are `SYSTEM`. See
 [Building](building.md).

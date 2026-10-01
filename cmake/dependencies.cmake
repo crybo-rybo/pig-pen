@@ -67,16 +67,7 @@ FetchContent_Declare(
   EXCLUDE_FROM_ALL
 )
 
-FetchContent_Declare(
-  nlohmann_json
-  GIT_REPOSITORY https://github.com/nlohmann/json.git
-  GIT_TAG 65ee68451d8eb2b5f3a30b410476ab83deb3289b
-  GIT_PROGRESS TRUE
-  SYSTEM
-  EXCLUDE_FROM_ALL
-)
-
-FetchContent_MakeAvailable(scry nlohmann_json)
+FetchContent_MakeAvailable(scry)
 
 if(NOT TARGET scry::scry)
   message(FATAL_ERROR "The selected Scry source does not provide scry::scry")

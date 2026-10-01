@@ -13,8 +13,8 @@
 
 Everything else is pinned and fetched at configure time from
 `cmake/dependencies.cmake` or `cmake/testing.cmake`:
-[scry](https://github.com/crybo-rybo/scry), nlohmann/json, SDL3, Dear ImGui, and
-Catch2. The first configure clones them, so it needs network access and takes a
+[scry](https://github.com/crybo-rybo/scry), SDL3, Dear ImGui, and, for the
+tests, Catch2 and nlohmann/json. The first configure clones them, so it needs network access and takes a
 few minutes; later configures reuse `build/<preset>/_deps`.
 
 On Arch:

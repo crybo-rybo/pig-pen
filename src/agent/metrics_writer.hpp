@@ -11,10 +11,10 @@
 #include "agent/events.hpp"
 
 #include <chrono>
+#include <cstddef>
 #include <expected>
 #include <filesystem>
 #include <fstream>
-#include <map>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -24,6 +24,20 @@ namespace pigpen::agent {
 /// @brief Writes one episode's JSONL log and reconciles its summary counts.
 class MetricsWriter final {
 public:
+  /// Footer counters, one per item type and world tool; every one is always
+  /// written, even at zero.
+  struct ItemCounts {
+    std::size_t berry{};
+    std::size_t apple{};
+    std::size_t truffle{};
+    std::size_t toadstool{};
+  };
+  struct ToolCounts {
+    std::size_t move{};
+    std::size_t look{};
+    std::size_t eat{};
+  };
+
   /// @brief Create the log directory and file, then write the header line.
   /// @return The writer, or a message when the directory or file cannot be
   /// created or the header cannot be written.
@@ -63,11 +77,8 @@ private:
   std::filesystem::path path_{};
   std::ofstream stream_{};
   std::chrono::steady_clock::time_point started_{};
-  // Pre-seeded so the footer always lists every tool and item, even at zero.
-  std::map<std::string, std::size_t> tool_counts_{
-      {"move", 0}, {"look", 0}, {"eat", 0}};
-  std::map<std::string, std::size_t> eaten_counts_{
-      {"berry", 0}, {"apple", 0}, {"truffle", 0}, {"toadstool", 0}};
+  ToolCounts tool_counts_{};
+  ItemCounts eaten_counts_{};
   std::uint32_t turns_recorded_{};
   int last_score_{};
   bool finalized_{false};
