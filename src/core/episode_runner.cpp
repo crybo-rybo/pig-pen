@@ -1,13 +1,13 @@
 /// @file episode_runner.cpp
 /// @brief EpisodeRunner implementation; the contract is in the header.
-#include "agent/episode_runner.hpp"
+#include "core/episode_runner.hpp"
 
-#include "agent/prompt.hpp"
+#include "core/prompt.hpp"
 
 #include <algorithm>
 #include <utility>
 
-namespace pigpen::agent {
+namespace pigpen::core {
 
 EpisodeRunner::EpisodeRunner(ITurnTransport &transport,
                              const std::uint32_t turn_budget,
@@ -269,4 +269,4 @@ std::string_view finish_reason_name(const FinishReason reason) noexcept {
   return "unknown";
 }
 
-} // namespace pigpen::agent
+} // namespace pigpen::core

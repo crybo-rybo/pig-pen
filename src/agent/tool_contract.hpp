@@ -9,7 +9,7 @@
 /// Requires C++26 reflection: include it only from pigpen_agent.
 #pragma once
 
-#include "agent/tool_responses.hpp"
+#include "core/tool_responses.hpp"
 #include "world/world.hpp"
 
 #include <scry/reflection.hpp>
@@ -27,8 +27,8 @@ struct DirectionArguments {
 };
 
 static_assert(scry::reflection::ToolArguments<DirectionArguments>);
-static_assert(scry::reflection::SupportedValue<MoveToolResponse>);
-static_assert(scry::reflection::SupportedValue<LookToolResponse>);
-static_assert(scry::reflection::SupportedValue<EatToolResponse>);
+static_assert(scry::reflection::SupportedValue<core::MoveToolResponse>);
+static_assert(scry::reflection::SupportedValue<core::LookToolResponse>);
+static_assert(scry::reflection::SupportedValue<core::EatToolResponse>);
 
 } // namespace pigpen::agent

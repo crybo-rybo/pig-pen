@@ -1,13 +1,13 @@
 /// @file prompt.cpp
 /// @brief Assembles the system prompt and per-turn nudge text from a Config.
-#include "agent/prompt.hpp"
+#include "core/prompt.hpp"
 
 #include "world/world.hpp"
 
 #include <format>
 #include <string>
 
-namespace pigpen::agent {
+namespace pigpen::core {
 namespace {
 
 constexpr std::string_view embodiment =
@@ -118,4 +118,4 @@ std::string build_turn_prompt(const std::size_t turn,
   return prompt;
 }
 
-} // namespace pigpen::agent
+} // namespace pigpen::core

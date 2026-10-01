@@ -7,7 +7,7 @@
 #include <optional>
 #include <string>
 
-namespace pigpen::agent {
+namespace pigpen::core {
 
 /// @brief Hard limit on tool requests per turn, enforced by Scry before
 /// dispatch; unknown tools and invalid arguments also spend this budget.
@@ -42,4 +42,4 @@ struct Config {
   friend bool operator==(const Config &, const Config &) = default;
 };
 
-} // namespace pigpen::agent
+} // namespace pigpen::core

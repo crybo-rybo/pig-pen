@@ -2,15 +2,15 @@
 /// @brief Typed world actions behind Scry's admission and budget checks.
 ///
 /// Plain C++23: no JSON, schema, or reflection code lives here. The Scry
-/// toolbox in world_tool_binding.hpp decodes tool arguments, calls these
+/// toolbox in agent/world_tool_binding.hpp decodes tool arguments, calls these
 /// actions, and encodes their responses.
 #pragma once
 
-#include "agent/config.hpp"
-#include "agent/tool_responses.hpp"
+#include "core/config.hpp"
+#include "core/tool_responses.hpp"
 #include "world/world.hpp"
 
-namespace pigpen::agent {
+namespace pigpen::core {
 
 /// @brief Owns world semantics and scenario visibility; Scry owns schemas,
 /// marshalling, admission, and the per-turn limit.
@@ -32,4 +32,4 @@ private:
   bool reward_feedback_;
 };
 
-} // namespace pigpen::agent
+} // namespace pigpen::core

@@ -6,9 +6,9 @@
 /// abnormal shutdown leaves a finalized record.
 #pragma once
 
-#include "agent/config.hpp"
-#include "agent/episode_runner.hpp"
-#include "agent/events.hpp"
+#include "core/config.hpp"
+#include "core/episode_runner.hpp"
+#include "core/events.hpp"
 
 #include <chrono>
 #include <cstddef>
@@ -43,7 +43,7 @@ public:
   /// created or the header cannot be written.
   [[nodiscard]] static std::expected<std::unique_ptr<MetricsWriter>,
                                      std::string>
-  create(const std::filesystem::path &log_directory, const Config &config,
+  create(const std::filesystem::path &log_directory, const core::Config &config,
          std::string prompt_variant);
 
   /// @brief Writes an incomplete "abandoned" footer if none was written yet.
@@ -54,13 +54,13 @@ public:
 
   /// @brief Append one successfully decoded world-tool invocation.
   [[nodiscard]] std::expected<void, std::string>
-  record_tool(const ToolActivity &activity);
+  record_tool(const core::ToolActivity &activity);
   /// @brief Append one finished model turn.
   [[nodiscard]] std::expected<void, std::string>
-  record_turn(const TurnRecord &record);
+  record_turn(const core::TurnRecord &record);
   /// @brief Write the final footer; the log accepts nothing afterwards.
   [[nodiscard]] std::expected<void, std::string>
-  finish(const EpisodeResult &result, int final_score);
+  finish(const core::EpisodeResult &result, int final_score);
 
   [[nodiscard]] const std::filesystem::path &path() const noexcept {
     return path_;

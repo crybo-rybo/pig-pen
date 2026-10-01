@@ -161,7 +161,7 @@ The world, the score, and the log always record the truth.
 | `reward_feedback` | `--no-reward-feedback` turns it off | on: a successful `eat` returns numeric `reward` and `score`. Off: those fixed response fields are `null`. |
 | `opaque_look` | `--opaque-look` turns it on | on: `look` reports an occupied cell as `"something"` instead of naming the item. |
 
-The system prompt is assembled in `src/agent/prompt.cpp` and describes the
+The system prompt is assembled in `src/core/prompt.cpp` and describes the
 coordinate system, the three tools, the flags in force, and the turn and
 tool-round budgets. Each turn is then advanced by a short generated nudge.
 Human guidance is queued FIFO and delivered in its own labelled section, one

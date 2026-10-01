@@ -22,11 +22,11 @@
 namespace {
 
 using namespace std::chrono_literals;
-using pigpen::agent::TurnStatus;
+using pigpen::core::TurnStatus;
 using scry::testing::openai_text_stream;
 using scry::testing::openai_tool_stream;
 
-scry::Harness make_harness(pigpen::agent::Config config,
+scry::Harness make_harness(pigpen::core::Config config,
                            pigpen::agent::WorldToolBinding &binding,
                            scry::testing::ScriptedTransport &script,
                            const std::size_t max_result_bytes) {
@@ -59,7 +59,7 @@ void pump_until(scry::Harness &harness, Predicate done,
 }
 
 struct ScriptedWorld {
-  explicit ScriptedWorld(pigpen::agent::Config config = {},
+  explicit ScriptedWorld(pigpen::core::Config config = {},
                          std::size_t max_result_bytes = 4096)
       : binding(world, config),
         harness(make_harness(config, binding, script, max_result_bytes)),
@@ -76,7 +76,7 @@ struct ScriptedWorld {
                        },
                    .on_turn_finished =
                        [this] { binding.flush_pending_activity(); }}) {
-    binding.on_activity = [this](pigpen::agent::ToolActivity activity) {
+    binding.on_activity = [this](pigpen::core::ToolActivity activity) {
       activities.push_back(std::move(activity));
     };
   }
@@ -102,9 +102,9 @@ struct ScriptedWorld {
   scry::Harness harness;
   scry::Conversation conversation;
   pigpen::agent::ScryTurnTransport transport;
-  std::vector<pigpen::agent::ToolActivity> activities;
+  std::vector<pigpen::core::ToolActivity> activities;
   std::vector<scry::ToolCall> calls;
-  std::optional<pigpen::agent::TurnOutcome> outcome;
+  std::optional<pigpen::core::TurnOutcome> outcome;
   bool logging_failed{false};
 };
 
@@ -117,7 +117,7 @@ static_assert(
 TEST_CASE(
     "Scry publicly encodes typed arguments and responses for observability") {
   pigpen::world::World world{9};
-  pigpen::agent::WorldTools tools{world};
+  pigpen::core::WorldTools tools{world};
   const auto moved = tools.move(pigpen::world::Direction::east);
   const auto arguments =
       scry::reflection::encode(pigpen::agent::DirectionArguments{
@@ -233,7 +233,7 @@ TEST_CASE("Scry bounds requested calls across batches and resets each turn") {
 
 TEST_CASE(
     "round limits preserve executed actions and history for the next turn") {
-  pigpen::agent::Config config;
+  pigpen::core::Config config;
   config.max_tool_rounds = 1;
   ScriptedWorld run{config};
   run.enqueue(openai_tool_stream({
@@ -274,7 +274,7 @@ TEST_CASE(
 TEST_CASE("logging failure stops a batch after an action without discarding "
           "history") {
   ScriptedWorld run;
-  run.binding.on_activity = [&run](pigpen::agent::ToolActivity activity) {
+  run.binding.on_activity = [&run](pigpen::core::ToolActivity activity) {
     run.activities.push_back(std::move(activity));
     run.logging_failed = true;
   };
@@ -346,7 +346,7 @@ TEST_CASE("eating the final positive item refuses later actions in the batch") {
   CHECK(run.world.all_positive_items_eaten());
   CHECK(run.world.position() == positive_cells.back());
   REQUIRE(run.activities.size() == 1);
-  CHECK(run.activities.front().kind == pigpen::agent::ToolKind::eat);
+  CHECK(run.activities.front().kind == pigpen::core::ToolKind::eat);
   REQUIRE(run.calls.size() == 2);
   CHECK_FALSE(run.calls[0].is_error);
   CHECK(run.calls[1].is_error);
@@ -415,7 +415,7 @@ TEST_CASE("a turn with an undelivered terminal callback blocks the next "
 
 TEST_CASE("the provider sampling seed is sent only when configured") {
   const auto sent_seed = [](const std::optional<std::uint32_t> seed) {
-    pigpen::agent::Config config;
+    pigpen::core::Config config;
     config.sampling_seed = seed;
     ScriptedWorld run{config};
     run.enqueue(openai_text_stream("Seeded."));

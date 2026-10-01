@@ -1,13 +1,13 @@
 /// @file world_tools.cpp
 /// @brief WorldTools implementation; the contract is in the header.
-#include "agent/world_tools.hpp"
+#include "core/world_tools.hpp"
 
 #include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
-namespace pigpen::agent {
+namespace pigpen::core {
 
 WorldTools::WorldTools(world::World &world, const Config &config)
     : world_(world), opaque_look_(config.opaque_look),
@@ -60,4 +60,4 @@ EatToolResponse WorldTools::eat() {
   return response;
 }
 
-} // namespace pigpen::agent
+} // namespace pigpen::core

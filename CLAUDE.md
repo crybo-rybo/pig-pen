@@ -46,12 +46,11 @@ ctest --preset dev -R world                      # by CTest name
 The suite needs no model server and no network. Warnings are errors for
 pig-pen code only. Formatting is enforced by `.github/workflows/ci.yml` with
 clang-format 22.1.8 (use the same major locally). `.clang-tidy` is advisory
-and only runs on the C++23 TUs (`src/world`, `src/ui`, and `pigpen_core`'s
-`episode_runner.cpp`, `prompt.cpp`, `world_tools.cpp`); clang cannot parse the
-`-freflection` TUs.
+and only runs on the C++23 TUs (`src/world`, `src/core`, `src/ui`); clang
+cannot parse the `-freflection` TUs in `src/agent`.
 
 Conventions the formatter can't enforce: project includes are quoted and
-rooted at `src/` (`"agent/config.hpp"`, never `"config.hpp"`); files are
+rooted at `src/` (`"core/config.hpp"`, never `"config.hpp"`); files are
 `snake_case`, tests end `_tests`; types are `CamelCase`, interfaces take an
 `I` prefix, functions/variables/constants/enumerators are `snake_case`, and
 private members take a trailing underscore. No `using namespace` outside
@@ -59,25 +58,26 @@ function or TU scope.
 
 ## Architecture
 
-See `docs/architecture.md` for the layers (`src/world`, `src/agent`, `src/ui`,
-`src/app`). `Session` is the reset unit: there is no partial reset.
+See `docs/architecture.md` for the layers (`src/world`, `src/core`, `src/agent`,
+`src/ui`, `src/app`). `Session` is the reset unit: there is no partial reset.
 
 Key invariants to preserve:
 
 - **C++26 reflection is the tool boundary, and only `pigpen_agent` uses it.**
   The annotated arguments in `tool_contract.hpp` and the plain response
-  aggregates in `tool_responses.hpp` are the model-facing contract; scry
+  aggregates in `core/tool_responses.hpp` are the model-facing contract; scry
   derives JSON Schemas from them at compile time and does all decode/encode.
   Adding or renaming an enum value changes schema, decode, and encode from the
   one declaration. `WorldTools` never touches JSON; protocol failures (unknown
   tool, undecodable args) belong to scry and never reach it. Everything else is
-  C++23: `pigpen_world`, `pigpen_core` (runner, prompt, `WorldTools`),
-  `pigpen_ui`, both entry points, and `pigpen_tests`. `pigpen_agent` (toolbox,
-  transport, reflected JSONL writer, `Session`) links scry and requests C++26
-  privately, so neither leaks to what links it. `pigpen_core` never links
-  scry, so a `<scry/...>` include there fails to compile. Put code in
-  `pigpen_agent` only when reflection replaces hand-written shape code, and
-  keep its public headers C++23-parseable.
+  C++23: `pigpen_world`, `pigpen_core` (`src/core`, namespace `pigpen::core`:
+  runner, prompt, `WorldTools`), `pigpen_ui`, both entry points, and
+  `pigpen_tests`. `pigpen_agent` (`src/agent`: toolbox, transport, reflected
+  JSONL writer, `Session`) links scry and requests C++26 privately, so neither
+  leaks to what links it. `pigpen_core` never links scry, so a `<scry/...>`
+  include there fails to compile. Put code in `src/agent` only when reflection
+  replaces hand-written shape code, and keep its public headers
+  C++23-parseable.
 - **Application callbacks run on the pump thread.** Scry owns its I/O worker. Both front ends drive
   `Session::pump()` from their own loop (GUI per frame, CLI in a sleep-1ms
   loop). Cancellation is cooperative: an episode isn't finished until the

@@ -15,7 +15,7 @@
 #include <string_view>
 #include <vector>
 
-namespace pigpen::agent {
+namespace pigpen::core {
 
 /// @brief The closed set of world tools exposed to the model.
 enum class ToolKind : std::uint8_t {
@@ -96,4 +96,4 @@ struct ToolActivity {
 /// of a session.
 using ToolActivityFeed = std::vector<ToolActivity>;
 
-} // namespace pigpen::agent
+} // namespace pigpen::core

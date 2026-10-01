@@ -111,7 +111,7 @@ struct [[= scry::reflection::tag{"tool"}]] ToolRecord {
   std::string_view call_id{};
   std::uint32_t round{};
   std::uint32_t index{};
-  ToolKind tool{};
+  core::ToolKind tool{};
   /// Scry's canonical payloads, spliced verbatim after validation.
   scry::Json args{};
   scry::Json result{};
@@ -124,14 +124,14 @@ struct [[= scry::reflection::tag{"tool"}]] ToolRecord {
 
 struct [[= scry::reflection::tag{"turn"}]] TurnLogRecord {
   std::uint32_t turn{};
-  TurnStatus status{};
+  core::TurnStatus status{};
   std::string_view user_message{};
   std::string_view assistant_text{};
   std::string_view error{};
   std::uint64_t input_tokens{};
   std::uint64_t output_tokens{};
   std::size_t tool_calls{};
-  std::optional<TurnToolStats> scry_tools{};
+  std::optional<core::TurnToolStats> scry_tools{};
   bool zero_tool_turn{};
   std::int64_t latency_ms{};
 };
@@ -183,13 +183,13 @@ write_line(std::ofstream &stream, const std::filesystem::path &path,
 }
 
 [[nodiscard]] std::size_t &count_of(MetricsWriter::ToolCounts &counts,
-                                    const ToolKind kind) {
+                                    const core::ToolKind kind) {
   switch (kind) {
-  case ToolKind::move:
+  case core::ToolKind::move:
     return counts.move;
-  case ToolKind::look:
+  case core::ToolKind::look:
     return counts.look;
-  case ToolKind::eat:
+  case core::ToolKind::eat:
     return counts.eat;
   }
   std::unreachable();
@@ -199,7 +199,7 @@ write_line(std::ofstream &stream, const std::filesystem::path &path,
 
 std::expected<std::unique_ptr<MetricsWriter>, std::string>
 MetricsWriter::create(const std::filesystem::path &log_directory,
-                      const Config &config, std::string prompt_variant) {
+                      const core::Config &config, std::string prompt_variant) {
   std::error_code directory_error;
   std::filesystem::create_directories(log_directory, directory_error);
   if (directory_error) {
@@ -248,7 +248,8 @@ MetricsWriter::create(const std::filesystem::path &log_directory,
                         .toadstool = world::World::default_toadstool_count},
               .turn_budget = config.turn_budget,
               .max_tool_rounds = config.max_tool_rounds,
-              .max_world_tool_calls_per_turn = max_world_tool_calls_per_turn,
+              .max_world_tool_calls_per_turn =
+                  core::max_world_tool_calls_per_turn,
               .known_item_values = config.known_item_values,
               .reward_feedback = config.reward_feedback,
               .opaque_look = config.opaque_look,
@@ -275,7 +276,7 @@ MetricsWriter::~MetricsWriter() {
 }
 
 std::expected<void, std::string>
-MetricsWriter::record_tool(const ToolActivity &activity) {
+MetricsWriter::record_tool(const core::ToolActivity &activity) {
   if (finalized_) {
     return std::unexpected("cannot record a tool after the metrics footer");
   }
@@ -308,7 +309,7 @@ MetricsWriter::record_tool(const ToolActivity &activity) {
 }
 
 std::expected<void, std::string>
-MetricsWriter::record_turn(const TurnRecord &record) {
+MetricsWriter::record_turn(const core::TurnRecord &record) {
   if (finalized_) {
     return std::unexpected("cannot record a turn after the metrics footer");
   }
@@ -325,16 +326,17 @@ MetricsWriter::record_turn(const TurnRecord &record) {
           .output_tokens = record.output_tokens,
           .tool_calls = record.tool_calls,
           .scry_tools = record.tool_stats,
-          .zero_tool_turn =
-              record.status == TurnStatus::completed && record.tool_calls == 0U,
+          .zero_tool_turn = record.status == core::TurnStatus::completed &&
+                            record.tool_calls == 0U,
           .latency_ms = record.latency.count(),
       });
 }
 
 std::expected<void, std::string>
-MetricsWriter::finish(const EpisodeResult &result, const int final_score) {
-  return write_footer(finish_reason_name(result.reason), result.turns_used,
-                      result.error, final_score, true);
+MetricsWriter::finish(const core::EpisodeResult &result,
+                      const int final_score) {
+  return write_footer(core::finish_reason_name(result.reason),
+                      result.turns_used, result.error, final_score, true);
 }
 
 std::expected<void, std::string> MetricsWriter::write_footer(

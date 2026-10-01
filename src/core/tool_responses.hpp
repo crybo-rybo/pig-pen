@@ -13,7 +13,7 @@
 #include <string>
 #include <vector>
 
-namespace pigpen::agent {
+namespace pigpen::core {
 
 /// @brief World result for an admitted `move` call.
 struct MoveToolResponse {
@@ -48,4 +48,4 @@ struct EatToolResponse {
   std::optional<int> score{};
 };
 
-} // namespace pigpen::agent
+} // namespace pigpen::core

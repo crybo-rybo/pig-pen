@@ -5,7 +5,7 @@
 /// WorldTools takes world values and returns the plain response types, so
 /// everything here runs without reflection, JSON, a scry registry, or a model.
 
-#include "agent/world_tools.hpp"
+#include "core/world_tools.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -14,8 +14,8 @@
 
 namespace {
 
-using pigpen::agent::Config;
-using pigpen::agent::WorldTools;
+using pigpen::core::Config;
+using pigpen::core::WorldTools;
 using pigpen::world::Direction;
 using pigpen::world::Position;
 using pigpen::world::World;

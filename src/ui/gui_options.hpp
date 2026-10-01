@@ -2,7 +2,7 @@
 /// @brief Command-line parsing for the GUI entry point.
 #pragma once
 
-#include "agent/config.hpp"
+#include "core/config.hpp"
 
 #include <expected>
 #include <span>
@@ -15,7 +15,7 @@ namespace pigpen::ui {
 struct GuiOptions {
   /// Config seeded with any `--model` / `--base-url` values; other fields
   /// keep their defaults and are edited in the Controls panel.
-  agent::Config config{};
+  core::Config config{};
   /// `--help` was requested; the caller prints usage and exits 0.
   bool help{};
 };

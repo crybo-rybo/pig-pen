@@ -7,7 +7,7 @@
 /// machine — including cancellation ordering — is exercised without a model
 /// or network.
 
-#include "agent/episode_runner.hpp"
+#include "core/episode_runner.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -17,7 +17,7 @@
 #include <utility>
 #include <vector>
 
-using namespace pigpen::agent;
+using namespace pigpen::core;
 
 namespace {
 

@@ -50,9 +50,9 @@ pigpen_target(pigpen_world)
 # The runtime that needs no reflection: the turn loop, prompts, and world
 # actions. It never links scry, so a <scry/...> include here cannot compile.
 add_library(pigpen_core STATIC
-  src/agent/episode_runner.cpp
-  src/agent/prompt.cpp
-  src/agent/world_tools.cpp
+  src/core/episode_runner.cpp
+  src/core/prompt.cpp
+  src/core/world_tools.cpp
 )
 target_link_libraries(pigpen_core PUBLIC pigpen_world)
 pigpen_target(pigpen_core)

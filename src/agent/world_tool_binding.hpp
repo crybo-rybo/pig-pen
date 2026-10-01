@@ -3,9 +3,9 @@
 /// world transition with the exact payload Scry dispatched.
 #pragma once
 
-#include "agent/events.hpp"
 #include "agent/tool_contract.hpp"
-#include "agent/world_tools.hpp"
+#include "core/events.hpp"
+#include "core/world_tools.hpp"
 
 #include <scry/scry.hpp>
 
@@ -25,7 +25,7 @@ namespace pigpen::agent {
 /// pending.
 class WorldToolBinding final {
 public:
-  WorldToolBinding(world::World &world, const Config &config);
+  WorldToolBinding(world::World &world, const core::Config &config);
   WorldToolBinding(const WorldToolBinding &) = delete;
   WorldToolBinding &operator=(const WorldToolBinding &) = delete;
 
@@ -42,25 +42,26 @@ public:
 
   // clang-format off: keep each P3394 annotation on its own line.
   [[= scry::reflection::tool{"Move one cell north, south, east, or west."}]]
-  MoveToolResponse move(const scry::ToolCallContext &context,
+  core::MoveToolResponse move(const scry::ToolCallContext &context,
                         DirectionArguments arguments);
   [[= scry::reflection::tool{"Scan every cell in one direction to the wall."}]]
-  LookToolResponse look(const scry::ToolCallContext &context,
+  core::LookToolResponse look(const scry::ToolCallContext &context,
                         DirectionArguments arguments);
   [[= scry::reflection::tool{"Eat the item on the current cell, if present."}]]
-  EatToolResponse eat(const scry::ToolCallContext &context);
+  core::EatToolResponse eat(const scry::ToolCallContext &context);
   // clang-format on
 
   /// Called only for decoded, admitted world actions.
-  std::function<void(ToolActivity)> on_activity{};
+  std::function<void(core::ToolActivity)> on_activity{};
 
 private:
-  ToolActivity &stage(const scry::ToolCallContext &context, ToolKind kind,
-                      ToolOutcome outcome, world::Position before);
+  core::ToolActivity &stage(const scry::ToolCallContext &context,
+                            core::ToolKind kind, core::ToolOutcome outcome,
+                            world::Position before);
 
   world::World &world_;
-  WorldTools tools_;
-  std::optional<ToolActivity> pending_{};
+  core::WorldTools tools_;
+  std::optional<core::ToolActivity> pending_{};
 };
 
 } // namespace pigpen::agent

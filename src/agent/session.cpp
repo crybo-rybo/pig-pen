@@ -4,9 +4,9 @@
 #include "agent/session.hpp"
 
 #include "agent/metrics_writer.hpp"
-#include "agent/prompt.hpp"
 #include "agent/scry_transport.hpp"
 #include "agent/world_tool_binding.hpp"
+#include "core/prompt.hpp"
 
 #include <scry/scry.hpp>
 
@@ -19,7 +19,8 @@
 namespace pigpen::agent {
 
 struct Session::Impl {
-  Impl(Config initial_config, std::unique_ptr<MetricsWriter> initial_metrics,
+  Impl(core::Config initial_config,
+       std::unique_ptr<MetricsWriter> initial_metrics,
        std::unique_ptr<world::World> initial_world,
        std::unique_ptr<WorldToolBinding> initial_tools,
        scry::Harness initial_harness, scry::Conversation initial_conversation)
@@ -41,7 +42,7 @@ struct Session::Impl {
             [this] { return world->all_positive_items_eaten(); },
             {
                 .on_turn_finished =
-                    [this](const TurnRecord &record) {
+                    [this](const core::TurnRecord &record) {
                       if (auto status = metrics->record_turn(record); !status) {
                         metrics_error = std::move(status.error());
                       }
@@ -50,7 +51,7 @@ struct Session::Impl {
                       }
                     },
                 .on_episode_finished =
-                    [this](const EpisodeResult &result) {
+                    [this](const core::EpisodeResult &result) {
                       if (auto status = metrics->finish(result, world->score());
                           !status) {
                         metrics_error = std::move(status.error());
@@ -58,7 +59,7 @@ struct Session::Impl {
                     },
             },
             [this] { return activities.size(); }) {
-    tools->on_activity = [this](ToolActivity activity) {
+    tools->on_activity = [this](core::ToolActivity activity) {
       activity.tick = activities.size() + 1U;
       activity.turn = runner.snapshot().turns_used + 1U;
       activities.push_back(std::move(activity));
@@ -68,35 +69,35 @@ struct Session::Impl {
     };
   }
 
-  Config config;
+  core::Config config;
   std::unique_ptr<world::World> world;
-  ToolActivityFeed activities{};
+  core::ToolActivityFeed activities{};
   std::unique_ptr<MetricsWriter> metrics;
   // Destruction runs in reverse: bindings and world outlive the harness.
   std::unique_ptr<WorldToolBinding> tools;
   scry::Harness harness;
   scry::Conversation conversation;
   ScryTurnTransport transport;
-  EpisodeRunner runner;
+  core::EpisodeRunner runner;
   std::string metrics_error{};
 };
 
 std::expected<std::shared_ptr<Session>, std::string>
-Session::create(Config config, std::filesystem::path log_directory,
+Session::create(core::Config config, std::filesystem::path log_directory,
                 std::string prompt_variant) {
   if (config.turn_budget == 0) {
     return std::unexpected("turn budget must be greater than zero");
   }
-  if (config.turn_budget > turn_budget_limit) {
+  if (config.turn_budget > core::turn_budget_limit) {
     return std::unexpected("turn budget must not exceed " +
-                           std::to_string(turn_budget_limit));
+                           std::to_string(core::turn_budget_limit));
   }
-  if (config.max_tool_rounds > tool_rounds_limit) {
+  if (config.max_tool_rounds > core::tool_rounds_limit) {
     return std::unexpected("maximum tool rounds must not exceed " +
-                           std::to_string(tool_rounds_limit));
+                           std::to_string(core::tool_rounds_limit));
   }
   auto conversation = scry::Conversation::create(
-      {.system_prompt = build_system_prompt(config)});
+      {.system_prompt = core::build_system_prompt(config)});
   if (!conversation) {
     return std::unexpected(conversation.error().message);
   }
@@ -163,12 +164,14 @@ void Session::clear_pending_user_inputs() {
   impl_->runner.clear_pending_user_inputs();
 }
 
-const Config &Session::config() const noexcept { return impl_->config; }
+const core::Config &Session::config() const noexcept { return impl_->config; }
 const world::World &Session::world() const noexcept { return *impl_->world; }
-const ToolActivityFeed &Session::tool_activities() const noexcept {
+const core::ToolActivityFeed &Session::tool_activities() const noexcept {
   return impl_->activities;
 }
-const EpisodeRunner &Session::runner() const noexcept { return impl_->runner; }
+const core::EpisodeRunner &Session::runner() const noexcept {
+  return impl_->runner;
+}
 
 const std::filesystem::path &Session::metrics_path() const noexcept {
   return impl_->metrics->path();

@@ -1,6 +1,6 @@
-# Advisory only. clang cannot parse the -freflection TUs (pigpen_agent), so run
-# it on the C++23 ones: src/world, src/ui, and pigpen_core's files in src/agent.
-#   clang-tidy -p build/dev src/world/world.cpp src/agent/episode_runner.cpp
+# Advisory only. clang cannot parse the -freflection TUs (src/agent), so run it
+# on the C++23 ones in src/world, src/core, and src/ui:
+#   clang-tidy -p build/dev src/world/world.cpp src/core/episode_runner.cpp
 Checks: >
   bugprone-*,
   modernize-*,

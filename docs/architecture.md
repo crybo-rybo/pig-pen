@@ -1,9 +1,9 @@
 # Architecture
 
-Pig Pen is a C++23 application in three layers plus two thin entry points, with
-C++26 reflection confined to the one library that talks to Scry. The point of
-the layering is that everything except the final transport integration is
-testable without a window or a model server.
+Pig Pen is a C++23 application in four layers plus two thin entry points, with
+C++26 reflection confined to `src/agent`, the one layer that talks to Scry. The
+point of the layering is that everything except the final transport integration
+is testable without a window or a model server.
 
 ```
 src/app/main.cpp              src/app/headless_main.cpp
@@ -11,13 +11,13 @@ src/app/main.cpp              src/app/headless_main.cpp
         ▼                             ▼
    src/ui/  ─────────────►  agent::Session  ◄─────────────
    AppUi, WorldAnimation          │
-                                  ├── EpisodeRunner   turn loop, play/pause/stop
+                                  ├── core::EpisodeRunner   turn loop, play/pause/stop
                                   ├── ScryTurnTransport ──► scry::Harness ──► HTTP
-                                  ├── WorldTools      typed actions and visibility
-                                  ├── WorldToolBinding reflected scry::ToolRegistry
-                                  ├── ToolActivity    typed semantics + exact payloads
-                                  ├── MetricsWriter   JSONL
-                                  └── world::World    the simulation
+                                  ├── core::WorldTools      typed actions and visibility
+                                  ├── WorldToolBinding      Scry toolbox over WorldTools
+                                  ├── core::ToolActivity    typed semantics + exact payloads
+                                  ├── MetricsWriter         reflected JSONL
+                                  └── world::World          the simulation
 ```
 
 ## `src/world` — the simulation
@@ -28,21 +28,33 @@ Actions return typed results (`MoveResult`, `LookResult`, `EatResult`) with
 enumerated failures rather than strings, and `dump()` gives a canonical
 serialisation used for determinism tests. Details in [World and tools](world.md).
 
-## `src/agent` — the runtime
+## `src/core` — the runtime, without reflection
+
+Plain C++23 in namespace `pigpen::core`, built as `pigpen_core`. Nothing here
+can include a Scry header.
 
 | unit | responsibility |
 |---|---|
 | `config.hpp` | `Config`: endpoint, model, seed, budgets, and the three model-visibility flags shared by both front ends |
 | `prompt.cpp` | builds the system prompt from `Config` and per-turn instructions from feedback and optional human guidance |
-| `tool_responses.hpp` | flat response aggregates, including world outcome fields; plain C++23 that Scry reflects over |
-| `tool_contract.hpp` | the annotated `DirectionArguments` and the checks that every argument and response type is reflectable; together with `tool_responses.hpp`, the model-facing contract |
+| `tool_responses.hpp` | flat response aggregates, including world outcome fields; Scry reflects over them in `src/agent` |
 | `world_tools.cpp` | typed world actions and scenario visibility; it takes world values and contains no JSON, reflection, budgets, or schema code |
-| `world_tool_binding.cpp` | the Scry toolbox (`move`, `look`, `eat`), world-action admission policy, and correlation of typed transitions with Scry dispatch observations |
 | `events.hpp` | `ToolActivity` and its append-only feed: typed application semantics plus exact canonical argument/result text from Scry |
 | `turn_transport.hpp` | `ITurnTransport`, the interface a "send one turn, get callbacks" implementation must satisfy |
-| `scry_transport.cpp` | the real implementation, over `scry::Harness` / `scry::Conversation` |
 | `episode_runner.cpp` | the state machine: `idle → playing ⇄ paused → finished`, turn budget, cooperative cancellation, transcript, and observers for turn/episode completion |
-| `metrics_writer.cpp` | JSONL header/tool/turn/footer, with a footer guaranteed even on abnormal shutdown |
+
+## `src/agent` — the Scry integration
+
+C++26 with reflection in namespace `pigpen::agent`, built as `pigpen_agent`.
+Only code where reflection replaces hand-written shape code lives here, and its
+public headers stay C++23-parseable so the front ends can include them.
+
+| unit | responsibility |
+|---|---|
+| `tool_contract.hpp` | the annotated `DirectionArguments` and the checks that every argument and response type is reflectable; together with `core/tool_responses.hpp`, the model-facing contract |
+| `world_tool_binding.cpp` | the Scry toolbox (`move`, `look`, `eat`) over `core::WorldTools`, world-action admission policy, and correlation of typed transitions with Scry dispatch observations |
+| `scry_transport.cpp` | the real `ITurnTransport`, over `scry::Harness` / `scry::Conversation` |
+| `metrics_writer.cpp` | JSONL header/tool/turn/footer as reflected records, with a footer guaranteed even on abnormal shutdown |
 | `session.cpp` | composes all of the above into one owned object |
 
 Two seams make this testable. `ITurnTransport` lets `EpisodeRunner` be driven
@@ -143,8 +155,8 @@ kernel and the C++26 code around it.
 | library | standard | sources |
 |---|---|---|
 | `pigpen_world` | C++23 | `src/world` |
-| `pigpen_core` | C++23 | `episode_runner.cpp`, `prompt.cpp`, `world_tools.cpp`, and the headers they need |
-| `pigpen_agent` | C++26 + `-freflection` | `world_tool_binding.cpp`, `scry_transport.cpp`, `metrics_writer.cpp`, `session.cpp` |
+| `pigpen_core` | C++23 | `src/core` |
+| `pigpen_agent` | C++26 + `-freflection` | `src/agent` |
 | `pigpen_ui` (GUI or tests) | C++23 | `gui_options.cpp`, `world_animation.cpp`; links `pigpen_core` only |
 
 `pigpen_core` never links `scry::scry`, so a `<scry/...>` include there (direct,

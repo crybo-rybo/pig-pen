@@ -2,7 +2,7 @@
 /// @brief Panel drawing and widget state for the Dear ImGui front end.
 #include "ui/app_ui.hpp"
 
-#include "agent/episode_runner.hpp"
+#include "core/episode_runner.hpp"
 #include "world/world.hpp"
 
 #include <imgui.h>
@@ -61,15 +61,15 @@ constexpr std::array scenario_presets{
 /// @brief Case-insensitive activity-log filter over tick, turn, tool name,
 /// outcome, and the exact argument/result JSON text.
 /// @param lowercase_filter Already trimmed and lowercased.
-[[nodiscard]] bool matches_filter(const agent::ToolActivity &activity,
+[[nodiscard]] bool matches_filter(const core::ToolActivity &activity,
                                   const std::string_view lowercase_filter) {
   if (lowercase_filter.empty()) {
     return true;
   }
   auto searchable = std::to_string(activity.tick) + " " +
                     std::to_string(activity.turn) + " " +
-                    std::string{agent::tool_kind_name(activity.kind)} + " " +
-                    std::string{agent::tool_outcome_name(activity.outcome)} +
+                    std::string{core::tool_kind_name(activity.kind)} + " " +
+                    std::string{core::tool_outcome_name(activity.outcome)} +
                     " " + activity.arguments_json + " " + activity.result_json;
   return lowercase(std::move(searchable)).find(lowercase_filter) !=
          std::string::npos;
@@ -144,29 +144,29 @@ void draw_item(ImDrawList &draw_list, const world::ItemType item,
   }
 }
 
-[[nodiscard]] const char *role_name(const agent::TranscriptRole role) noexcept {
+[[nodiscard]] const char *role_name(const core::TranscriptRole role) noexcept {
   switch (role) {
-  case agent::TranscriptRole::automatic:
+  case core::TranscriptRole::automatic:
     return "Automatic instructions";
-  case agent::TranscriptRole::guidance:
+  case core::TranscriptRole::guidance:
     return "Human guidance";
-  case agent::TranscriptRole::assistant:
+  case core::TranscriptRole::assistant:
     return "Model narration";
-  case agent::TranscriptRole::error:
+  case core::TranscriptRole::error:
     return "Error";
   }
   return "Unknown";
 }
 
-[[nodiscard]] ImVec4 role_color(const agent::TranscriptRole role) noexcept {
+[[nodiscard]] ImVec4 role_color(const core::TranscriptRole role) noexcept {
   switch (role) {
-  case agent::TranscriptRole::automatic:
+  case core::TranscriptRole::automatic:
     return {0.48F, 0.72F, 1.0F, 1.0F};
-  case agent::TranscriptRole::guidance:
+  case core::TranscriptRole::guidance:
     return {0.78F, 0.64F, 1.0F, 1.0F};
-  case agent::TranscriptRole::assistant:
+  case core::TranscriptRole::assistant:
     return {0.52F, 0.92F, 0.72F, 1.0F};
-  case agent::TranscriptRole::error:
+  case core::TranscriptRole::error:
     return {1.0F, 0.4F, 0.4F, 1.0F};
   }
   return {1.0F, 1.0F, 1.0F, 1.0F};
@@ -175,14 +175,14 @@ void draw_item(ImDrawList &draw_list, const world::ItemType item,
 /// @brief Human-readable transcript label for a decoded call, including the
 /// budget or world failure reason when the action changed nothing.
 [[nodiscard]] std::string
-decoded_call_label(const agent::ToolActivity &activity) {
-  auto label = std::string{agent::tool_kind_name(activity.kind)};
+decoded_call_label(const core::ToolActivity &activity) {
+  auto label = std::string{core::tool_kind_name(activity.kind)};
   if (activity.direction) {
     label += " " + std::string{world::direction_name(*activity.direction)};
   }
   if (!activity.succeeded()) {
     label +=
-        " (failed: " + std::string{agent::tool_outcome_name(activity.outcome)} +
+        " (failed: " + std::string{core::tool_outcome_name(activity.outcome)} +
         ")";
   }
   return label;
@@ -190,7 +190,7 @@ decoded_call_label(const agent::ToolActivity &activity) {
 
 } // namespace
 
-AppUi::AppUi(const agent::Config &initial_config)
+AppUi::AppUi(const core::Config &initial_config)
     : controls_{initial_config},
       turn_budget_{static_cast<int>(initial_config.turn_budget)},
       max_tool_rounds_{static_cast<int>(initial_config.max_tool_rounds)},
@@ -236,7 +236,7 @@ void AppUi::draw() {
   draw_guidance_panel();
 }
 
-agent::Config AppUi::config_from_controls() const {
+core::Config AppUi::config_from_controls() const {
   auto config = controls_;
   config.base_url = trim(controls_.base_url);
   config.model = trim(controls_.model);
@@ -281,7 +281,7 @@ void AppUi::queue_guidance() {
     visible_error_ = "Create a session before queuing guidance.";
     return;
   }
-  if (session_->runner().snapshot().state == agent::RunState::finished) {
+  if (session_->runner().snapshot().state == core::RunState::finished) {
     visible_error_ = "This episode is finished; Reset before queuing guidance.";
     return;
   }
@@ -399,7 +399,7 @@ void AppUi::draw_world_panel() {
     const auto alpha = static_cast<int>(80.0F + pulse * 175.0F);
     const auto origin = cell_center(static_cast<float>(effect->origin.x),
                                     static_cast<float>(effect->origin.y));
-    if (effect->kind == agent::ToolKind::look && effect->direction) {
+    if (effect->kind == core::ToolKind::look && effect->direction) {
       auto endpoint = origin;
       switch (*effect->direction) {
       case world::Direction::north:
@@ -419,7 +419,7 @@ void AppUi::draw_world_panel() {
                          std::max(2.0F, cell_size * 0.08F));
       draw_list->AddCircle(origin, cell_size * (0.25F + 0.12F * pulse),
                            IM_COL32(94, 225, 255, alpha), 24, 2.0F);
-    } else if (effect->kind == agent::ToolKind::eat) {
+    } else if (effect->kind == core::ToolKind::eat) {
       draw_list->AddCircle(
           origin, cell_size * (0.2F + effect->progress * 0.48F),
           IM_COL32(255, 215, 92, alpha), 32, std::max(2.0F, cell_size * 0.07F));
@@ -524,17 +524,17 @@ void AppUi::draw_transcript_panel() {
     ImGui::TextDisabled("The first automatic turn will appear here.");
   }
   for (const auto &entry : transcript) {
-    if (entry.role == agent::TranscriptRole::assistant) {
+    if (entry.role == core::TranscriptRole::assistant) {
       ImGui::TextColored({0.95F, 0.78F, 0.32F, 1.0F},
                          "Turn %u · Decoded world-tool calls", entry.turn);
       // The activity feed is appended in turn order.
       const auto calls = std::ranges::equal_range(
-          activities, std::size_t{entry.turn}, {}, &agent::ToolActivity::turn);
+          activities, std::size_t{entry.turn}, {}, &core::ToolActivity::turn);
       for (const auto &activity : calls) {
         const auto arguments = compact(activity.arguments_json, 72U);
         const auto result = compact(activity.result_json, 110U);
         ImGui::TextColored({0.95F, 0.78F, 0.32F, 1.0F}, "  %s",
-                           agent::tool_kind_name(activity.kind).data());
+                           core::tool_kind_name(activity.kind).data());
         ImGui::SameLine();
         ImGui::TextDisabled("%s -> %s", arguments.c_str(), result.c_str());
       }
@@ -615,7 +615,7 @@ void AppUi::draw_event_log_panel() {
       ImGui::Text("%zu", activity.turn);
       ImGui::TableSetColumnIndex(2);
       ImGui::TextColored({0.85F, 0.72F, 0.35F, 1.0F}, "%s",
-                         agent::tool_kind_name(activity.kind).data());
+                         core::tool_kind_name(activity.kind).data());
 
       const auto arguments_short = compact(activity.arguments_json);
       const auto result_short = compact(activity.result_json);
@@ -684,10 +684,10 @@ void AppUi::draw_controls_panel() {
   // Clamp to the ranges Session::create accepts as soon as they are edited.
   ImGui::InputInt("Turn budget", &turn_budget_);
   turn_budget_ =
-      std::clamp(turn_budget_, 1, static_cast<int>(agent::turn_budget_limit));
+      std::clamp(turn_budget_, 1, static_cast<int>(core::turn_budget_limit));
   ImGui::InputInt("Tool rounds / turn", &max_tool_rounds_);
   max_tool_rounds_ = std::clamp(max_tool_rounds_, 1,
-                                static_cast<int>(agent::tool_rounds_limit));
+                                static_cast<int>(core::tool_rounds_limit));
   ImGui::InputDouble("Temperature", &controls_.temperature, 0.1, 0.5, "%.2f");
   controls_.temperature = std::clamp(controls_.temperature, 0.0, 2.0);
   if (ImGui::IsItemHovered()) {
@@ -712,12 +712,12 @@ void AppUi::draw_controls_panel() {
 
   ImGui::SeparatorText("Episode");
   const auto snapshot =
-      session_ ? session_->runner().snapshot() : agent::EpisodeSnapshot{};
-  const auto can_play = !session_ || snapshot.state == agent::RunState::idle ||
-                        snapshot.state == agent::RunState::paused;
+      session_ ? session_->runner().snapshot() : core::EpisodeSnapshot{};
+  const auto can_play = !session_ || snapshot.state == core::RunState::idle ||
+                        snapshot.state == core::RunState::paused;
   ImGui::BeginDisabled(!can_play);
-  if (ImGui::Button(snapshot.state == agent::RunState::paused ? "Resume"
-                                                              : "Play")) {
+  if (ImGui::Button(snapshot.state == core::RunState::paused ? "Resume"
+                                                             : "Play")) {
     if (session_) {
       static_cast<void>(session_->play());
     } else {
@@ -726,14 +726,13 @@ void AppUi::draw_controls_panel() {
   }
   ImGui::EndDisabled();
   ImGui::SameLine();
-  ImGui::BeginDisabled(!session_ || snapshot.state != agent::RunState::playing);
+  ImGui::BeginDisabled(!session_ || snapshot.state != core::RunState::playing);
   if (ImGui::Button("Pause")) {
     static_cast<void>(session_->pause());
   }
   ImGui::EndDisabled();
   ImGui::SameLine();
-  ImGui::BeginDisabled(!session_ ||
-                       snapshot.state == agent::RunState::finished);
+  ImGui::BeginDisabled(!session_ || snapshot.state == core::RunState::finished);
   if (ImGui::Button("Stop")) {
     static_cast<void>(session_->stop());
   }
@@ -744,7 +743,7 @@ void AppUi::draw_controls_panel() {
   }
 
   if (session_) {
-    ImGui::Text("State: %s", agent::run_state_name(snapshot.state).data());
+    ImGui::Text("State: %s", core::run_state_name(snapshot.state).data());
     if (config_from_controls() != session_->config()) {
       ImGui::TextColored({1.0F, 0.78F, 0.28F, 1.0F},
                          "Pending settings apply on Reset.");
@@ -795,18 +794,18 @@ void AppUi::draw_stats_panel() {
 
   if (snapshot.finish_reason) {
     ImGui::Text("Finished: %s",
-                agent::finish_reason_name(*snapshot.finish_reason).data());
+                core::finish_reason_name(*snapshot.finish_reason).data());
   } else {
-    ImGui::Text("State: %s%s", agent::run_state_name(snapshot.state).data(),
+    ImGui::Text("State: %s%s", core::run_state_name(snapshot.state).data(),
                 snapshot.turn_in_flight ? " (model turn active)" : "");
   }
 
   const auto &activities = session_->tool_activities();
-  const auto calls_to = [&activities](const agent::ToolKind kind) {
+  const auto calls_to = [&activities](const core::ToolKind kind) {
     return static_cast<std::size_t>(
-        std::ranges::count(activities, kind, &agent::ToolActivity::kind));
+        std::ranges::count(activities, kind, &core::ToolActivity::kind));
   };
-  const auto eat_attempts = calls_to(agent::ToolKind::eat);
+  const auto eat_attempts = calls_to(core::ToolKind::eat);
   const auto successful_eats = static_cast<std::size_t>(
       std::ranges::count_if(activities, [](const auto &activity) {
         return activity.eaten.has_value();
@@ -826,8 +825,8 @@ void AppUi::draw_stats_panel() {
         world::ItemType::toadstool,
     };
     const std::array<std::pair<const char *, std::size_t>, 4> tools{
-        std::pair{"move", calls_to(agent::ToolKind::move)},
-        std::pair{"look", calls_to(agent::ToolKind::look)},
+        std::pair{"move", calls_to(core::ToolKind::move)},
+        std::pair{"look", calls_to(core::ToolKind::look)},
         std::pair{"eat attempts", eat_attempts},
         std::pair{"decoded calls", activities.size()},
     };
@@ -880,9 +879,9 @@ void AppUi::draw_guidance_panel() {
   }
   if (session_) {
     if (std::ranges::any_of(session_->runner().guidance(),
-                            [](const agent::GuidanceEntry &entry) {
+                            [](const core::GuidanceEntry &entry) {
                               return entry.status ==
-                                     agent::GuidanceStatus::pending;
+                                     core::GuidanceStatus::pending;
                             })) {
       if (ImGui::Button("Clear pending")) {
         session_->clear_pending_user_inputs();
@@ -894,7 +893,7 @@ void AppUi::draw_guidance_panel() {
     std::optional<std::uint64_t> remove_id;
     for (const auto &entry : session_->runner().guidance()) {
       ImGui::PushID(static_cast<int>(entry.id));
-      if (entry.status == agent::GuidanceStatus::pending) {
+      if (entry.status == core::GuidanceStatus::pending) {
         ImGui::TextColored({1.0F, 0.78F, 0.28F, 1.0F},
                            "Pending for turn %u: %s", entry.turn,
                            entry.text.c_str());

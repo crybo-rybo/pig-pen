@@ -31,7 +31,7 @@ namespace {
 
 TEST_CASE("session rejects unsafe or incomplete runtime configuration") {
   const auto directory = session_test_directory();
-  pigpen::agent::Config config;
+  pigpen::core::Config config;
   config.model = "registry.example/pig-model:Q4_K_M";
 
   config.base_url = "localhost:11434/v1";
@@ -74,7 +74,7 @@ TEST_CASE("session rejects unsafe or incomplete runtime configuration") {
 TEST_CASE("session atomically owns a seeded world registered harness and "
           "truthful log") {
   const auto directory = session_test_directory();
-  pigpen::agent::Config config;
+  pigpen::core::Config config;
   config.model = "registry.example/pig-model:Q4_K_M";
   config.seed = 2026;
   config.temperature = 0.2;
@@ -86,7 +86,7 @@ TEST_CASE("session atomically owns a seeded world registered harness and "
     const auto &session = *created;
     CHECK(session->config() == config);
     CHECK(session->world().seed() == 2026);
-    CHECK(session->runner().snapshot().state == pigpen::agent::RunState::idle);
+    CHECK(session->runner().snapshot().state == pigpen::core::RunState::idle);
     CHECK(session->tool_activities().empty());
     CHECK(session->metrics_error().empty());
     log_path = session->metrics_path();

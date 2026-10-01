@@ -7,7 +7,8 @@
 
 namespace pigpen::agent {
 
-WorldToolBinding::WorldToolBinding(world::World &world, const Config &config)
+WorldToolBinding::WorldToolBinding(world::World &world,
+                                   const core::Config &config)
     : world_(world), tools_(world, config) {}
 
 scry::Result<scry::ToolRegistry> WorldToolBinding::registry() {
@@ -22,41 +23,45 @@ scry::Result<scry::ToolRegistry> WorldToolBinding::registry() {
   return registry;
 }
 
-MoveToolResponse WorldToolBinding::move(const scry::ToolCallContext &context,
-                                        const DirectionArguments arguments) {
+core::MoveToolResponse
+WorldToolBinding::move(const scry::ToolCallContext &context,
+                       const DirectionArguments arguments) {
   const auto before = world_.position();
   auto response = tools_.move(arguments.direction);
-  stage(context, ToolKind::move,
-        response.reason ? ToolOutcome::blocked_by_wall : ToolOutcome::succeeded,
+  stage(context, core::ToolKind::move,
+        response.reason ? core::ToolOutcome::blocked_by_wall
+                        : core::ToolOutcome::succeeded,
         before)
       .direction = arguments.direction;
   return response;
 }
 
-LookToolResponse WorldToolBinding::look(const scry::ToolCallContext &context,
-                                        const DirectionArguments arguments) {
+core::LookToolResponse
+WorldToolBinding::look(const scry::ToolCallContext &context,
+                       const DirectionArguments arguments) {
   const auto before = world_.position();
   auto response = tools_.look(arguments.direction);
-  stage(context, ToolKind::look, ToolOutcome::succeeded, before).direction =
-      arguments.direction;
+  stage(context, core::ToolKind::look, core::ToolOutcome::succeeded, before)
+      .direction = arguments.direction;
   return response;
 }
 
-EatToolResponse WorldToolBinding::eat(const scry::ToolCallContext &context) {
+core::EatToolResponse
+WorldToolBinding::eat(const scry::ToolCallContext &context) {
   const auto before = world_.position();
   auto response = tools_.eat();
-  stage(context, ToolKind::eat,
-        response.reason ? ToolOutcome::nothing_to_eat : ToolOutcome::succeeded,
+  stage(context, core::ToolKind::eat,
+        response.reason ? core::ToolOutcome::nothing_to_eat
+                        : core::ToolOutcome::succeeded,
         before)
       .eaten = response.ate;
   return response;
 }
 
-ToolActivity &WorldToolBinding::stage(const scry::ToolCallContext &context,
-                                      const ToolKind kind,
-                                      const ToolOutcome outcome,
-                                      const world::Position before) {
-  return pending_.emplace(ToolActivity{
+core::ToolActivity &WorldToolBinding::stage(
+    const scry::ToolCallContext &context, const core::ToolKind kind,
+    const core::ToolOutcome outcome, const world::Position before) {
+  return pending_.emplace(core::ToolActivity{
       .kind = kind,
       .outcome = outcome,
       .arguments_json = "null",
