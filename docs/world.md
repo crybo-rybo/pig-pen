@@ -42,7 +42,8 @@ libraries, so a seed means the same pen on every supported compiler.
 ## Tools
 
 The model gets exactly three tools. Their JSON Schemas are compile-time
-artifacts generated from the declarations in `tool_contract.hpp`; member names
+artifacts generated from the declarations in `tool_contract.hpp` and
+`tool_responses.hpp`; member names
 become property names and the `world::Direction` enumerators become the accepted
 strings. Generated object schemas set `additionalProperties: false`, so extra
 arguments are rejected rather than ignored.

@@ -4,6 +4,7 @@
 #pragma once
 
 #include "agent/events.hpp"
+#include "agent/tool_contract.hpp"
 #include "agent/world_tools.hpp"
 
 #include <scry/scry.hpp>

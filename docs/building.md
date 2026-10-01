@@ -108,8 +108,10 @@ preset named `--model`.
 The presets set the first three explicitly, so re-running a preset restores
 them even over a cache configured with them off.
 
-Pig Pen is intentionally a reflection-first C++26 application. Configuration
-rejects non-GNU compilers and GCC versions older than 16. Scry performs an
+Pig Pen confines C++26 reflection to `pigpen_agent` and builds everything else
+as C++23 (see [Architecture](architecture.md#build-layout)), but that library
+and Scry still need GCC 16, so configuration rejects non-GNU compilers and GCC
+versions older than 16. Scry performs an
 additional compile probe for the exact P2996/P3394 annotation-query surface
 Pig Pen uses.
 

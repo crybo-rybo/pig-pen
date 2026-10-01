@@ -25,7 +25,7 @@ scry::Result<scry::ToolRegistry> WorldToolBinding::registry() {
 MoveToolResponse WorldToolBinding::move(const scry::ToolCallContext &context,
                                         const DirectionArguments arguments) {
   const auto before = world_.position();
-  auto response = tools_.move(arguments);
+  auto response = tools_.move(arguments.direction);
   stage(context, ToolKind::move,
         response.reason ? ToolOutcome::blocked_by_wall : ToolOutcome::succeeded,
         before)
@@ -36,7 +36,7 @@ MoveToolResponse WorldToolBinding::move(const scry::ToolCallContext &context,
 LookToolResponse WorldToolBinding::look(const scry::ToolCallContext &context,
                                         const DirectionArguments arguments) {
   const auto before = world_.position();
-  auto response = tools_.look(arguments);
+  auto response = tools_.look(arguments.direction);
   stage(context, ToolKind::look, ToolOutcome::succeeded, before).direction =
       arguments.direction;
   return response;

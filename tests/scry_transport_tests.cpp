@@ -110,6 +110,30 @@ struct ScriptedWorld {
 
 } // namespace
 
+static_assert(
+    scry::reflection::input_schema_v<pigpen::agent::DirectionArguments> ==
+    R"({"additionalProperties":false,"properties":{"direction":{"description":"Cardinal direction: north, south, east, or west","enum":["north","south","east","west"],"type":"string"}},"required":["direction"],"type":"object"})");
+
+TEST_CASE(
+    "Scry publicly encodes typed arguments and responses for observability") {
+  pigpen::world::World world{9};
+  pigpen::agent::WorldTools tools{world};
+  const auto moved = tools.move(pigpen::world::Direction::east);
+  const auto arguments =
+      scry::reflection::encode(pigpen::agent::DirectionArguments{
+          .direction = pigpen::world::Direction::east});
+  const auto response = scry::reflection::encode(moved);
+
+  REQUIRE(arguments.has_value());
+  REQUIRE(response.has_value());
+  CHECK(arguments->text == R"({"direction":"east"})");
+  const auto response_json = nlohmann::json::parse(response->text);
+  CHECK(response_json.at("ok") == true);
+  CHECK(response_json.at("position") == nlohmann::json{{"x", 6}, {"y", 5}});
+  CHECK(response_json.at("reason").is_null());
+  CHECK_FALSE(response_json.contains("result"));
+}
+
 TEST_CASE("world tools export their reflected contract without a harness") {
   pigpen::world::World world{37};
   pigpen::agent::WorldToolBinding binding{world, {}};

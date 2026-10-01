@@ -1,8 +1,9 @@
 # Architecture
 
-Pig Pen is a C++26 application in three layers plus two thin entry points. The
-point of the layering is that everything except the final transport integration
-is testable without a window or a model server.
+Pig Pen is a C++23 application in three layers plus two thin entry points, with
+C++26 reflection confined to the one library that talks to Scry. The point of
+the layering is that everything except the final transport integration is
+testable without a window or a model server.
 
 ```
 src/app/main.cpp              src/app/headless_main.cpp
@@ -33,9 +34,10 @@ serialisation used for determinism tests. Details in [World and tools](world.md)
 |---|---|
 | `config.hpp` | `Config`: endpoint, model, seed, budgets, and the three model-visibility flags shared by both front ends |
 | `prompt.cpp` | builds the system prompt from `Config` and per-turn instructions from feedback and optional human guidance |
-| `tool_contract.hpp` | reflected argument and flat response declarations, including world outcome fields; these C++ types are the model-facing contract |
-| `world_tools.cpp` | typed world actions and scenario visibility; it contains no JSON parsing, budgets, or schema code |
-| `world_tool_binding.cpp` | standalone reflected registry, world-action admission policy, and correlation of typed transitions with Scry dispatch observations |
+| `tool_responses.hpp` | flat response aggregates, including world outcome fields; plain C++23 that Scry reflects over |
+| `tool_contract.hpp` | the annotated `DirectionArguments` and the checks that every argument and response type is reflectable; together with `tool_responses.hpp`, the model-facing contract |
+| `world_tools.cpp` | typed world actions and scenario visibility; it takes world values and contains no JSON, reflection, budgets, or schema code |
+| `world_tool_binding.cpp` | the Scry toolbox (`move`, `look`, `eat`), world-action admission policy, and correlation of typed transitions with Scry dispatch observations |
 | `events.hpp` | `ToolActivity` and its append-only feed: typed application semantics plus exact canonical argument/result text from Scry |
 | `turn_transport.hpp` | `ITurnTransport`, the interface a "send one turn, get callbacks" implementation must satisfy |
 | `scry_transport.cpp` | the real implementation, over `scry::Harness` / `scry::Conversation` |
@@ -46,8 +48,9 @@ serialisation used for determinism tests. Details in [World and tools](world.md)
 Two seams make this testable. `ITurnTransport` lets `EpisodeRunner` be driven
 by a scripted transport in `tests/episode_runner_tests.cpp`, so the whole turn
 loop — including stop-cancels-in-flight-turn — is covered without a model.
-`WorldTools` accepts and returns only reflected C++ values, so world behavior,
-fixed response shapes, and scenario visibility are tested without JSON or a registry.
+`WorldTools` takes world values and returns the plain response types, so world
+behavior, fixed response shapes, and scenario visibility are tested without
+reflection, JSON, or a registry.
 The public `scry::testing` component exercises the real bindings, transport, tool
 budgets, and transactional history with scripted provider streams.
 
@@ -134,13 +137,28 @@ transcript and activity feed, and the exit-code policy described in
 
 `CMakeLists.txt` describes Pig Pen's own targets; `cmake/dependencies.cmake`
 pins and fetches the runtime dependencies and `cmake/testing.cmake` adds Catch2
-and the suite. The static libraries are `pigpen_world`, `pigpen_agent`, and,
-when the GUI or tests are enabled, `pigpen_ui`. `pigpen_agent` links
-`scry::scry` privately: scry carries `-freflection`, so every `pigpen_agent`
-translation unit (and `pigpen_reflection_tests`, which links scry directly)
-compiles with it, while `pigpen_world`, `pigpen_ui`, and both entry points stay
-reflection-free. The metrics writer encodes its JSONL records with scry's
-reflected codec, so the runtime has no other JSON library; nlohmann/json is a
-test-only dependency that parses logs and manifests independently. The `pigpen_target()` helper applies C++26 and the warning flags to
-pig-pen's own targets only; fetched dependencies are `SYSTEM`. See
-[Building](building.md).
+and the suite. It mirrors Scry's own split between its reflection-free C++23
+kernel and the C++26 code around it.
+
+| library | standard | sources |
+|---|---|---|
+| `pigpen_world` | C++23 | `src/world` |
+| `pigpen_core` | C++23 | `episode_runner.cpp`, `prompt.cpp`, `world_tools.cpp`, and the headers they need |
+| `pigpen_agent` | C++26 + `-freflection` | `world_tool_binding.cpp`, `scry_transport.cpp`, `metrics_writer.cpp`, `session.cpp` |
+| `pigpen_ui` (GUI or tests) | C++23 | `gui_options.cpp`, `world_animation.cpp`; links `pigpen_core` only |
+
+`pigpen_core` never links `scry::scry`, so a `<scry/...>` include there (direct,
+or through `tool_contract.hpp`) fails to compile: the boundary is enforced by
+linkage, not by convention. `pigpen_agent` links scry privately and requests
+C++26 privately, so neither the standard nor `-freflection` reaches what links
+it: both entry points, `pigpen_ui`, and `pigpen_tests` compile as C++23. Only
+`pigpen_agent` and `pigpen_reflection_tests` compile with reflection. Public
+agent headers (`session.hpp`, `metrics_writer.hpp`) stay C++23-parseable for
+that reason. Code belongs in `pigpen_agent` only when reflection replaces
+hand-written shape code there: the tool contract and toolbox, the transport,
+and the reflected JSONL records. The metrics writer encodes those records with
+Scry's codec, so the runtime has no other JSON library; nlohmann/json is a
+test-only dependency that parses logs and manifests independently.
+
+The `pigpen_target()` helper applies C++23 and the warning flags to pig-pen's
+own targets only; fetched dependencies are `SYSTEM`. See [Building](building.md).

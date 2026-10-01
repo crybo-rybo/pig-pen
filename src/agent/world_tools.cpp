@@ -13,8 +13,8 @@ WorldTools::WorldTools(world::World &world, const Config &config)
     : world_(world), opaque_look_(config.opaque_look),
       reward_feedback_(config.reward_feedback) {}
 
-MoveToolResponse WorldTools::move(const DirectionArguments arguments) {
-  const auto moved = world_.move(arguments.direction);
+MoveToolResponse WorldTools::move(const world::Direction direction) {
+  const auto moved = world_.move(direction);
   return {
       .ok = moved.ok,
       .item_here = moved.item_here,
@@ -23,8 +23,8 @@ MoveToolResponse WorldTools::move(const DirectionArguments arguments) {
   };
 }
 
-LookToolResponse WorldTools::look(const DirectionArguments arguments) {
-  const auto looked = world_.look(arguments.direction);
+LookToolResponse WorldTools::look(const world::Direction direction) {
+  const auto looked = world_.look(direction);
   std::vector<LookToolCell> cells;
   cells.reserve(looked.cells.size());
   for (const auto &cell : looked.cells) {
@@ -40,7 +40,7 @@ LookToolResponse WorldTools::look(const DirectionArguments arguments) {
   }
   return {
       .ok = true,
-      .direction = arguments.direction,
+      .direction = direction,
       .cells = std::move(cells),
       .wall_at_distance = looked.wall_at_distance,
   };
