@@ -1,91 +1,75 @@
 /// @file world_tool_binding.cpp
-/// @brief Reflected registration and correlation with Scry dispatch results.
+/// @brief Toolbox registration and correlation with Scry dispatch results.
 #include "agent/world_tool_binding.hpp"
 
-#include <scry/reflection.hpp>
-
-#include <functional>
-#include <type_traits>
+#include <memory>
 #include <utility>
 
 namespace pigpen::agent {
-namespace {
-
-[[nodiscard]] ToolOutcome tool_outcome(const MoveToolResponse &response) {
-  return response.reason ? ToolOutcome::blocked_by_wall
-                         : ToolOutcome::succeeded;
-}
-
-[[nodiscard]] ToolOutcome tool_outcome(const LookToolResponse &) {
-  return ToolOutcome::succeeded;
-}
-
-[[nodiscard]] ToolOutcome tool_outcome(const EatToolResponse &response) {
-  return response.reason ? ToolOutcome::nothing_to_eat : ToolOutcome::succeeded;
-}
-
-} // namespace
 
 WorldToolBinding::WorldToolBinding(world::World &world, const Config &config)
     : world_(world), tools_(world, config) {}
 
-template <typename Arguments, typename Invoke>
-scry::Status WorldToolBinding::add(scry::ToolRegistry &registry,
-                                   const ToolKind kind, std::string description,
-                                   Invoke invoke) {
-  return registry.add<Arguments>(
-      {.name = std::string{tool_kind_name(kind)},
-       .description = std::move(description)},
-      [this, kind, invoke](const scry::ToolCallContext &context,
-                           const Arguments arguments) {
-        const auto before = world_.position();
-        auto response = std::invoke(invoke, tools_, arguments);
-        pending_ = ToolActivity{
-            .kind = kind,
-            .outcome = tool_outcome(response),
-            .arguments_json = "null",
-            .result_json = "null",
-            .before = before,
-            .after = world_.position(),
-            .score_after = world_.score(),
-            .scry_turn_id = context.turn_id.value,
-            .call_id = std::string{context.call_id},
-            .round = context.round,
-            .index = context.index,
-            .result_dispatched = false,
-        };
-        if constexpr (std::is_same_v<Arguments, DirectionArguments>) {
-          pending_->direction = arguments.direction;
-        }
-        if constexpr (std::is_same_v<decltype(response), EatToolResponse>) {
-          pending_->eaten = response.ate;
-        }
-        return response;
-      });
-}
-
 scry::Result<scry::ToolRegistry> WorldToolBinding::registry() {
   scry::ToolRegistry registry;
-  auto added =
-      add<DirectionArguments>(registry, ToolKind::move,
-                              "Move one cell north, south, east, or west.",
-                              &WorldTools::move)
-          .and_then([&] {
-            return add<DirectionArguments>(
-                registry, ToolKind::look,
-                "Scan every cell in one direction to the wall.",
-                &WorldTools::look);
-          })
-          .and_then([&] {
-            return add<EatArguments>(
-                registry, ToolKind::eat,
-                "Eat the item on the current cell, if present.",
-                &WorldTools::eat);
-          });
+  // The session owns this binding and outlives the harness, so the registry
+  // borrows it through a non-owning pointer.
+  auto added = registry.add(
+      std::shared_ptr<WorldToolBinding>{this, [](WorldToolBinding *) {}});
   if (!added) {
     return std::unexpected(std::move(added.error()));
   }
   return registry;
+}
+
+MoveToolResponse WorldToolBinding::move(const scry::ToolCallContext &context,
+                                        const DirectionArguments arguments) {
+  const auto before = world_.position();
+  auto response = tools_.move(arguments);
+  stage(context, ToolKind::move,
+        response.reason ? ToolOutcome::blocked_by_wall : ToolOutcome::succeeded,
+        before)
+      .direction = arguments.direction;
+  return response;
+}
+
+LookToolResponse WorldToolBinding::look(const scry::ToolCallContext &context,
+                                        const DirectionArguments arguments) {
+  const auto before = world_.position();
+  auto response = tools_.look(arguments);
+  stage(context, ToolKind::look, ToolOutcome::succeeded, before).direction =
+      arguments.direction;
+  return response;
+}
+
+EatToolResponse WorldToolBinding::eat(const scry::ToolCallContext &context) {
+  const auto before = world_.position();
+  auto response = tools_.eat();
+  stage(context, ToolKind::eat,
+        response.reason ? ToolOutcome::nothing_to_eat : ToolOutcome::succeeded,
+        before)
+      .eaten = response.ate;
+  return response;
+}
+
+ToolActivity &WorldToolBinding::stage(const scry::ToolCallContext &context,
+                                      const ToolKind kind,
+                                      const ToolOutcome outcome,
+                                      const world::Position before) {
+  return pending_.emplace(ToolActivity{
+      .kind = kind,
+      .outcome = outcome,
+      .arguments_json = "null",
+      .result_json = "null",
+      .before = before,
+      .after = world_.position(),
+      .score_after = world_.score(),
+      .scry_turn_id = context.turn_id.value,
+      .call_id = std::string{context.call_id},
+      .round = context.round,
+      .index = context.index,
+      .result_dispatched = false,
+  });
 }
 
 std::optional<scry::ToolRejection>

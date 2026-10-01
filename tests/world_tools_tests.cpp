@@ -21,7 +21,6 @@ namespace {
 
 using pigpen::agent::Config;
 using pigpen::agent::DirectionArguments;
-using pigpen::agent::EatArguments;
 using pigpen::agent::WorldTools;
 using pigpen::world::Direction;
 using pigpen::world::Position;
@@ -70,9 +69,6 @@ struct ItemViewpoint {
 static_assert(
     scry::reflection::input_schema_v<DirectionArguments> ==
     R"({"additionalProperties":false,"properties":{"direction":{"description":"Cardinal direction: north, south, east, or west","enum":["north","south","east","west"],"type":"string"}},"required":["direction"],"type":"object"})");
-static_assert(
-    scry::reflection::input_schema_v<EatArguments> ==
-    R"({"additionalProperties":false,"properties":{},"required":[],"type":"object"})");
 
 TEST_CASE("Move returns a fixed typed result for success and wall failure") {
   World world{37};
@@ -130,7 +126,7 @@ TEST_CASE(
   move_to(feedback_world, placement.position);
   WorldTools feedback_tools{feedback_world};
 
-  const auto revealed = feedback_tools.eat({});
+  const auto revealed = feedback_tools.eat();
   REQUIRE(revealed.ok);
   CHECK(revealed.ate == placement.item);
   CHECK(revealed.reward == pigpen::world::item_reward(placement.item));
@@ -141,7 +137,7 @@ TEST_CASE(
   Config config;
   config.reward_feedback = false;
   WorldTools hidden_tools{hidden_world, config};
-  const auto hidden = hidden_tools.eat({});
+  const auto hidden = hidden_tools.eat();
   REQUIRE(hidden.ok);
   CHECK_FALSE(hidden.reward);
   CHECK_FALSE(hidden.score);

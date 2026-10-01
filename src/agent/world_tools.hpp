@@ -23,7 +23,7 @@ public:
   [[nodiscard]] LookToolResponse look(DirectionArguments arguments);
   /// @note Reward and score are omitted when Config::reward_feedback is
   /// off; the world still scores truthfully.
-  [[nodiscard]] EatToolResponse eat(EatArguments arguments);
+  [[nodiscard]] EatToolResponse eat();
 
 private:
   world::World &world_;

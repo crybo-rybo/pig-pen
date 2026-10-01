@@ -127,8 +127,9 @@ TEST_CASE("world tools export their reflected contract without a harness") {
       nlohmann::json::parse(
           scry::reflection::input_schema_v<pigpen::agent::DirectionArguments>));
   CHECK(tools[2].at("input_schema") ==
-        nlohmann::json::parse(
-            scry::reflection::input_schema_v<pigpen::agent::EatArguments>));
+        nlohmann::json::parse(R"({"additionalProperties":false,)"
+                              R"("properties":{},"required":[],)"
+                              R"("type":"object"})"));
   CHECK(world.position() == pigpen::world::World::spawn);
 }
 

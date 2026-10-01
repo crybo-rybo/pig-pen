@@ -53,13 +53,15 @@ budgets, and transactional history with scripted provider streams.
 
 ### Reflection is the tool boundary
 
-`WorldToolBinding` builds a standalone `scry::ToolRegistry` with reflected
-`DirectionArguments` and `EatArguments` handlers before the harness is created.
-Scry derives closed JSON Schemas at compile time, strictly decodes arguments,
-invokes the typed handler on the pump thread, and encodes its response. Scoped
-enum identifiers supply the JSON strings from the same C++ declaration.
+`WorldToolBinding` is a Scry toolbox: its `move`, `look`, and `eat` member
+functions carry `scry::reflection::tool` annotations, and `registry()` adds the
+binding to a standalone `scry::ToolRegistry` before the harness is created. Scry
+names each tool after its function, derives closed JSON Schemas at compile time
+from the parameters (`DirectionArguments`, or none for `eat`), strictly decodes
+arguments, invokes the member on the pump thread, and encodes its response.
+Scoped enum identifiers supply the JSON strings from the same C++ declaration.
 
-Contextual handlers retain the typed world transition and Scry's turn/call ID,
+Each member takes a leading `scry::ToolCallContext` and retains the typed world transition and Scry's turn/call ID,
 round, and batch index. The subsequent `on_tool_call` observation supplies the
 exact canonical arguments and result posted for the provider. One pending
 transition suffices because dispatch and observation are serial. There is no

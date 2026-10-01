@@ -27,9 +27,6 @@ struct DirectionArguments {
   // clang-format on
 };
 
-/// @brief Reflected input for a tool that accepts no arguments.
-struct EatArguments {};
-
 /// @brief World result for an admitted `move` call.
 struct MoveToolResponse {
   bool ok{};
@@ -64,7 +61,6 @@ struct EatToolResponse {
 };
 
 static_assert(scry::reflection::ToolArguments<DirectionArguments>);
-static_assert(scry::reflection::ToolArguments<EatArguments>);
 static_assert(scry::reflection::SupportedValue<MoveToolResponse>);
 static_assert(scry::reflection::SupportedValue<LookToolResponse>);
 static_assert(scry::reflection::SupportedValue<EatToolResponse>);

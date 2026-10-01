@@ -46,7 +46,7 @@ LookToolResponse WorldTools::look(const DirectionArguments arguments) {
   };
 }
 
-EatToolResponse WorldTools::eat(const EatArguments /*arguments*/) {
+EatToolResponse WorldTools::eat() {
   const auto eaten = world_.eat();
   EatToolResponse response{
       .ok = eaten.ok,
