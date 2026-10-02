@@ -22,11 +22,11 @@
 namespace {
 
 using namespace std::chrono_literals;
-using pigpen::agent::TurnStatus;
+using pigpen::core::TurnStatus;
 using scry::testing::openai_text_stream;
 using scry::testing::openai_tool_stream;
 
-scry::Harness make_harness(pigpen::agent::Config config,
+scry::Harness make_harness(pigpen::core::Config config,
                            pigpen::agent::WorldToolBinding &binding,
                            scry::testing::ScriptedTransport &script,
                            const std::size_t max_result_bytes) {
@@ -59,7 +59,7 @@ void pump_until(scry::Harness &harness, Predicate done,
 }
 
 struct ScriptedWorld {
-  explicit ScriptedWorld(pigpen::agent::Config config = {},
+  explicit ScriptedWorld(pigpen::core::Config config = {},
                          std::size_t max_result_bytes = 4096)
       : binding(world, config),
         harness(make_harness(config, binding, script, max_result_bytes)),
@@ -76,7 +76,7 @@ struct ScriptedWorld {
                        },
                    .on_turn_finished =
                        [this] { binding.flush_pending_activity(); }}) {
-    binding.on_activity = [this](pigpen::agent::ToolActivity activity) {
+    binding.on_activity = [this](pigpen::core::ToolActivity activity) {
       activities.push_back(std::move(activity));
     };
   }
@@ -102,13 +102,37 @@ struct ScriptedWorld {
   scry::Harness harness;
   scry::Conversation conversation;
   pigpen::agent::ScryTurnTransport transport;
-  std::vector<pigpen::agent::ToolActivity> activities;
+  std::vector<pigpen::core::ToolActivity> activities;
   std::vector<scry::ToolCall> calls;
-  std::optional<pigpen::agent::TurnOutcome> outcome;
+  std::optional<pigpen::core::TurnOutcome> outcome;
   bool logging_failed{false};
 };
 
 } // namespace
+
+static_assert(
+    scry::reflection::input_schema_v<pigpen::agent::DirectionArguments> ==
+    R"({"additionalProperties":false,"properties":{"direction":{"description":"Cardinal direction: north, south, east, or west","enum":["north","south","east","west"],"type":"string"}},"required":["direction"],"type":"object"})");
+
+TEST_CASE(
+    "Scry publicly encodes typed arguments and responses for observability") {
+  pigpen::world::World world{9};
+  pigpen::core::WorldTools tools{world};
+  const auto moved = tools.move(pigpen::world::Direction::east);
+  const auto arguments =
+      scry::reflection::encode(pigpen::agent::DirectionArguments{
+          .direction = pigpen::world::Direction::east});
+  const auto response = scry::reflection::encode(moved);
+
+  REQUIRE(arguments.has_value());
+  REQUIRE(response.has_value());
+  CHECK(arguments->text == R"({"direction":"east"})");
+  const auto response_json = nlohmann::json::parse(response->text);
+  CHECK(response_json.at("ok") == true);
+  CHECK(response_json.at("position") == nlohmann::json{{"x", 6}, {"y", 5}});
+  CHECK(response_json.at("reason").is_null());
+  CHECK_FALSE(response_json.contains("result"));
+}
 
 TEST_CASE("world tools export their reflected contract without a harness") {
   pigpen::world::World world{37};
@@ -127,8 +151,9 @@ TEST_CASE("world tools export their reflected contract without a harness") {
       nlohmann::json::parse(
           scry::reflection::input_schema_v<pigpen::agent::DirectionArguments>));
   CHECK(tools[2].at("input_schema") ==
-        nlohmann::json::parse(
-            scry::reflection::input_schema_v<pigpen::agent::EatArguments>));
+        nlohmann::json::parse(R"({"additionalProperties":false,)"
+                              R"("properties":{},"required":[],)"
+                              R"("type":"object"})"));
   CHECK(world.position() == pigpen::world::World::spawn);
 }
 
@@ -208,7 +233,7 @@ TEST_CASE("Scry bounds requested calls across batches and resets each turn") {
 
 TEST_CASE(
     "round limits preserve executed actions and history for the next turn") {
-  pigpen::agent::Config config;
+  pigpen::core::Config config;
   config.max_tool_rounds = 1;
   ScriptedWorld run{config};
   run.enqueue(openai_tool_stream({
@@ -249,7 +274,7 @@ TEST_CASE(
 TEST_CASE("logging failure stops a batch after an action without discarding "
           "history") {
   ScriptedWorld run;
-  run.binding.on_activity = [&run](pigpen::agent::ToolActivity activity) {
+  run.binding.on_activity = [&run](pigpen::core::ToolActivity activity) {
     run.activities.push_back(std::move(activity));
     run.logging_failed = true;
   };
@@ -321,7 +346,7 @@ TEST_CASE("eating the final positive item refuses later actions in the batch") {
   CHECK(run.world.all_positive_items_eaten());
   CHECK(run.world.position() == positive_cells.back());
   REQUIRE(run.activities.size() == 1);
-  CHECK(run.activities.front().kind == pigpen::agent::ToolKind::eat);
+  CHECK(run.activities.front().kind == pigpen::core::ToolKind::eat);
   REQUIRE(run.calls.size() == 2);
   CHECK_FALSE(run.calls[0].is_error);
   CHECK(run.calls[1].is_error);
@@ -390,7 +415,7 @@ TEST_CASE("a turn with an undelivered terminal callback blocks the next "
 
 TEST_CASE("the provider sampling seed is sent only when configured") {
   const auto sent_seed = [](const std::optional<std::uint32_t> seed) {
-    pigpen::agent::Config config;
+    pigpen::core::Config config;
     config.sampling_seed = seed;
     ScriptedWorld run{config};
     run.enqueue(openai_text_stream("Seeded."));

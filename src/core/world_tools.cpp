@@ -1,20 +1,20 @@
 /// @file world_tools.cpp
 /// @brief WorldTools implementation; the contract is in the header.
-#include "agent/world_tools.hpp"
+#include "core/world_tools.hpp"
 
 #include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
-namespace pigpen::agent {
+namespace pigpen::core {
 
 WorldTools::WorldTools(world::World &world, const Config &config)
     : world_(world), opaque_look_(config.opaque_look),
       reward_feedback_(config.reward_feedback) {}
 
-MoveToolResponse WorldTools::move(const DirectionArguments arguments) {
-  const auto moved = world_.move(arguments.direction);
+MoveToolResponse WorldTools::move(const world::Direction direction) {
+  const auto moved = world_.move(direction);
   return {
       .ok = moved.ok,
       .item_here = moved.item_here,
@@ -23,8 +23,8 @@ MoveToolResponse WorldTools::move(const DirectionArguments arguments) {
   };
 }
 
-LookToolResponse WorldTools::look(const DirectionArguments arguments) {
-  const auto looked = world_.look(arguments.direction);
+LookToolResponse WorldTools::look(const world::Direction direction) {
+  const auto looked = world_.look(direction);
   std::vector<LookToolCell> cells;
   cells.reserve(looked.cells.size());
   for (const auto &cell : looked.cells) {
@@ -40,13 +40,13 @@ LookToolResponse WorldTools::look(const DirectionArguments arguments) {
   }
   return {
       .ok = true,
-      .direction = arguments.direction,
+      .direction = direction,
       .cells = std::move(cells),
       .wall_at_distance = looked.wall_at_distance,
   };
 }
 
-EatToolResponse WorldTools::eat(const EatArguments /*arguments*/) {
+EatToolResponse WorldTools::eat() {
   const auto eaten = world_.eat();
   EatToolResponse response{
       .ok = eaten.ok,
@@ -60,4 +60,4 @@ EatToolResponse WorldTools::eat(const EatArguments /*arguments*/) {
   return response;
 }
 
-} // namespace pigpen::agent
+} // namespace pigpen::core

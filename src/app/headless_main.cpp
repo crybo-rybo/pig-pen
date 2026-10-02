@@ -4,8 +4,8 @@
 /// Everything here is argv parsing, SIGINT/SIGTERM handling, incremental
 /// printing of the transcript and activity feed, and the exit-code policy
 /// from docs/running.md. Episode behavior itself lives in agent::Session.
-#include "agent/episode_runner.hpp"
 #include "agent/session.hpp"
+#include "core/episode_runner.hpp"
 
 #include <charconv>
 #include <chrono>
@@ -46,7 +46,7 @@ extern "C" void request_termination(const int signal_number) noexcept {
 }
 
 struct Options {
-  pigpen::agent::Config config{};
+  pigpen::core::Config config{};
   std::filesystem::path log_directory{"logs"};
   std::chrono::seconds timeout{300};
   std::string prompt_variant{"default"};
@@ -189,10 +189,10 @@ Exit codes: 0 success, 1 runtime error, 2 invalid options, 3 timeout,
     } else if (name == "--sampling-seed") {
       result = integer(config.sampling_seed.emplace(), 0, u32_max);
     } else if (name == "--turns") {
-      result = integer(config.turn_budget, 1, pigpen::agent::turn_budget_limit);
+      result = integer(config.turn_budget, 1, pigpen::core::turn_budget_limit);
     } else if (name == "--max-tool-rounds") {
       result =
-          integer(config.max_tool_rounds, 1, pigpen::agent::tool_rounds_limit);
+          integer(config.max_tool_rounds, 1, pigpen::core::tool_rounds_limit);
     } else if (name == "--temperature") {
       result = temperature();
     } else if (name == "--timeout-seconds") {
@@ -226,15 +226,15 @@ Exit codes: 0 success, 1 runtime error, 2 invalid options, 3 timeout,
 }
 
 [[nodiscard]] std::string_view
-transcript_role_name(const pigpen::agent::TranscriptRole role) noexcept {
+transcript_role_name(const pigpen::core::TranscriptRole role) noexcept {
   switch (role) {
-  case pigpen::agent::TranscriptRole::automatic:
+  case pigpen::core::TranscriptRole::automatic:
     return "automatic";
-  case pigpen::agent::TranscriptRole::guidance:
+  case pigpen::core::TranscriptRole::guidance:
     return "guidance";
-  case pigpen::agent::TranscriptRole::assistant:
+  case pigpen::core::TranscriptRole::assistant:
     return "assistant";
-  case pigpen::agent::TranscriptRole::error:
+  case pigpen::core::TranscriptRole::error:
     return "error";
   }
   return "unknown";
@@ -259,9 +259,9 @@ void print_updates(const pigpen::agent::Session &session,
   for (std::size_t index = 0; index < transcript.size(); ++index) {
     const auto &entry = transcript[index];
     auto &emitted = cursor.transcript_offsets[index];
-    if (entry.role != pigpen::agent::TranscriptRole::assistant) {
+    if (entry.role != pigpen::core::TranscriptRole::assistant) {
       if (index >= previous_size) {
-        auto &stream = entry.role == pigpen::agent::TranscriptRole::error
+        auto &stream = entry.role == pigpen::core::TranscriptRole::error
                            ? std::cerr
                            : std::cout;
         stream << transcript_role_name(entry.role) << "[turn=" << entry.turn
@@ -285,7 +285,7 @@ void print_updates(const pigpen::agent::Session &session,
        ++cursor.activities_printed) {
     const auto &activity = activities[cursor.activities_printed];
     std::cout << "tool[turn=" << activity.turn << ",tick=" << activity.tick
-              << "] " << pigpen::agent::tool_kind_name(activity.kind)
+              << "] " << pigpen::core::tool_kind_name(activity.kind)
               << " args=" << activity.arguments_json
               << " result=" << activity.result_json << " position=("
               << activity.before.x << ',' << activity.before.y << ")->("
@@ -311,7 +311,7 @@ void print_updates(const pigpen::agent::Session &session,
             << " seed=" << config.seed << " turns=" << config.turn_budget
             << " max_tool_rounds=" << config.max_tool_rounds
             << " max_world_tool_calls_per_turn="
-            << pigpen::agent::max_world_tool_calls_per_turn
+            << pigpen::core::max_world_tool_calls_per_turn
             << " max_output_tokens=" << config.max_output_tokens
             << " temperature=" << config.temperature << " sampling_seed=";
   if (config.sampling_seed) {
@@ -349,7 +349,7 @@ void print_updates(const pigpen::agent::Session &session,
     const auto pump = session->pump();
     print_updates(*session, cursor);
     if (session->runner().snapshot().state ==
-        pigpen::agent::RunState::finished) {
+        pigpen::core::RunState::finished) {
       break;
     }
 
@@ -377,7 +377,7 @@ void print_updates(const pigpen::agent::Session &session,
   const auto snapshot = session->runner().snapshot();
   std::cout << "summary finish_reason="
             << (snapshot.finish_reason
-                    ? pigpen::agent::finish_reason_name(*snapshot.finish_reason)
+                    ? pigpen::core::finish_reason_name(*snapshot.finish_reason)
                     : "unfinished")
             << " turns_used=" << snapshot.turns_used
             << " turn_budget=" << snapshot.turn_budget
@@ -397,7 +397,7 @@ void print_updates(const pigpen::agent::Session &session,
     return timeout_exit;
   }
   // Only the timeout path can leave the loop unfinished, so the reason is set.
-  using enum pigpen::agent::FinishReason;
+  using enum pigpen::core::FinishReason;
   if (const auto reason = *snapshot.finish_reason;
       reason == error || reason == cancelled || reason == stopped) {
     if (!snapshot.error.empty()) {

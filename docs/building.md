@@ -13,8 +13,8 @@
 
 Everything else is pinned and fetched at configure time from
 `cmake/dependencies.cmake` or `cmake/testing.cmake`:
-[scry](https://github.com/crybo-rybo/scry), nlohmann/json, SDL3, Dear ImGui, and
-Catch2. The first configure clones them, so it needs network access and takes a
+[scry](https://github.com/crybo-rybo/scry), SDL3, Dear ImGui, and, for the
+tests, Catch2 and nlohmann/json. The first configure clones them, so it needs network access and takes a
 few minutes; later configures reuse `build/<preset>/_deps`.
 
 On Arch:
@@ -108,8 +108,10 @@ preset named `--model`.
 The presets set the first three explicitly, so re-running a preset restores
 them even over a cache configured with them off.
 
-Pig Pen is intentionally a reflection-first C++26 application. Configuration
-rejects non-GNU compilers and GCC versions older than 16. Scry performs an
+Pig Pen confines C++26 reflection to `pigpen_agent` and builds everything else
+as C++23 (see [Architecture](architecture.md#build-layout)), but that library
+and Scry still need GCC 16, so configuration rejects non-GNU compilers and GCC
+versions older than 16. Scry performs an
 additional compile probe for the exact P2996/P3394 annotation-query surface
 Pig Pen uses.
 

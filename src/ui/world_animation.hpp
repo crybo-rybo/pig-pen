@@ -2,7 +2,7 @@
 /// @brief Converts the tool-activity feed into a played-back visual timeline.
 #pragma once
 
-#include "agent/events.hpp"
+#include "core/events.hpp"
 #include "world/world.hpp"
 
 #include <cstddef>
@@ -19,7 +19,7 @@ struct AnimatedPosition {
 
 /// @brief A look or eat action currently being played back.
 struct VisualEffect {
-  agent::ToolKind kind{agent::ToolKind::look};
+  core::ToolKind kind{core::ToolKind::look};
   world::Position origin{};
   /// Set for look effects; eat has no direction.
   std::optional<world::Direction> direction{};
@@ -44,7 +44,7 @@ public:
   /// @brief Consumes new activities and advances playback to @p now_seconds.
   /// @param world_position Authoritative blob position, adopted once the
   /// queue drains so animation can never drift from the simulation.
-  void update(const agent::ToolActivityFeed &activities,
+  void update(const core::ToolActivityFeed &activities,
               world::Position world_position, double now_seconds);
 
   /// @brief Where to draw the blob this frame.
@@ -60,7 +60,7 @@ public:
 
 private:
   struct Step {
-    agent::ToolKind kind{agent::ToolKind::move};
+    core::ToolKind kind{core::ToolKind::move};
     world::Position before{};
     world::Position after{};
     std::optional<world::Direction> direction{};

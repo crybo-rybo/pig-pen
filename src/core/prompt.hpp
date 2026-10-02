@@ -5,13 +5,13 @@
 /// turn feedback and separately labelled human guidance.
 #pragma once
 
-#include "agent/config.hpp"
+#include "core/config.hpp"
 
 #include <cstddef>
 #include <string>
 #include <string_view>
 
-namespace pigpen::agent {
+namespace pigpen::core {
 
 /// @brief Builds the stable embodiment and experiment instructions for one
 /// episode.
@@ -33,4 +33,4 @@ build_turn_prompt(std::size_t turn, std::size_t turn_budget,
                   bool recover_zero_tool_turn = false,
                   std::size_t unexecuted_tool_calls = 0);
 
-} // namespace pigpen::agent
+} // namespace pigpen::core

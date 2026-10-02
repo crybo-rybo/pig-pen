@@ -1,6 +1,6 @@
-# Two Catch2 binaries (the reflection one links scry directly), CLI checks
-# against the headless binary, and Python loopback tests. No model server or
-# network needed.
+# Two Catch2 binaries (a C++23 one, and a reflection one that links scry),
+# CLI checks against the headless binary, and Python loopback tests. No model
+# server or network needed.
 
 include(CTest)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
@@ -13,10 +13,21 @@ FetchContent_Declare(
   SYSTEM
   EXCLUDE_FROM_ALL
 )
-FetchContent_MakeAvailable(Catch2)
+# The tests parse logs and manifests independently of scry's codec.
+FetchContent_Declare(
+  nlohmann_json
+  GIT_REPOSITORY https://github.com/nlohmann/json.git
+  GIT_TAG 65ee68451d8eb2b5f3a30b410476ab83deb3289b
+  GIT_PROGRESS TRUE
+  SYSTEM
+  EXCLUDE_FROM_ALL
+)
+FetchContent_MakeAvailable(Catch2 nlohmann_json)
 list(APPEND CMAKE_MODULE_PATH "${catch2_SOURCE_DIR}/extras")
 include(Catch)
 
+# C++23 test TUs. They link the reflection layer's objects (Session,
+# MetricsWriter) through pigpen_agent but never include a scry header.
 add_executable(
   pigpen_tests
     tests/episode_runner_tests.cpp
@@ -26,20 +37,18 @@ add_executable(
     tests/session_tests.cpp
     tests/world_animation_tests.cpp
     tests/world_tests.cpp
+    tests/world_tools_tests.cpp
 )
 target_link_libraries(
   pigpen_tests
-  PRIVATE Catch2::Catch2WithMain nlohmann_json::nlohmann_json pigpen_ui
+  PRIVATE Catch2::Catch2WithMain nlohmann_json::nlohmann_json pigpen_agent
+          pigpen_ui
 )
 pigpen_target(pigpen_tests)
 catch_discover_tests(pigpen_tests)
 
-# scry::scry carries -freflection into these TUs.
-add_executable(
-  pigpen_reflection_tests
-    tests/world_tools_tests.cpp
-    tests/scry_transport_tests.cpp
-)
+# scry::scry carries C++26 and -freflection into these TUs.
+add_executable(pigpen_reflection_tests tests/scry_transport_tests.cpp)
 target_link_libraries(
   pigpen_reflection_tests
   PRIVATE

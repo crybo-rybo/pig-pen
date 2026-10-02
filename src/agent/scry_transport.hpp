@@ -3,8 +3,8 @@
 /// scry::Conversation — the one real transport; tests use scripted ones.
 #pragma once
 
-#include "agent/config.hpp"
-#include "agent/turn_transport.hpp"
+#include "core/config.hpp"
+#include "core/turn_transport.hpp"
 
 #include <scry/scry.hpp>
 
@@ -14,7 +14,7 @@ namespace pigpen::agent {
 
 /// Pig Pen's provider and turn policies, shared with scripted integration
 /// tests.
-[[nodiscard]] scry::Config scry_config(const Config &config,
+[[nodiscard]] scry::Config scry_config(const core::Config &config,
                                        std::string api_key = {});
 
 struct ScryToolObservers {
@@ -30,7 +30,7 @@ struct ScryToolObservers {
 /// concurrently. The scry::Turn handle is the whole state: it reports whether
 /// a turn is still live, and destruction cancels and disconnects it so no
 /// callback can outlive this transport.
-class ScryTurnTransport final : public ITurnTransport {
+class ScryTurnTransport final : public core::ITurnTransport {
 public:
   ScryTurnTransport(scry::Harness &harness, scry::Conversation &conversation,
                     ScryToolObservers observers = {});
@@ -44,7 +44,7 @@ public:
   /// @return An error while the previous turn has not delivered its terminal
   /// callback, or when scry rejects the send.
   [[nodiscard]] std::expected<void, std::string>
-  send(std::string user_message, TurnCallbacks callbacks) override;
+  send(std::string user_message, core::TurnCallbacks callbacks) override;
   bool cancel() noexcept override;
 
 private:

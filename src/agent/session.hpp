@@ -6,9 +6,9 @@
 /// starting over means destroying the session and creating a new one.
 #pragma once
 
-#include "agent/config.hpp"
-#include "agent/episode_runner.hpp"
-#include "agent/events.hpp"
+#include "core/config.hpp"
+#include "core/episode_runner.hpp"
+#include "core/events.hpp"
 #include "world/world.hpp"
 
 #include <cstddef>
@@ -38,7 +38,7 @@ public:
   /// conversation, and already-open metrics log.
   /// @return The session, or a human-readable rejection message.
   [[nodiscard]] static std::expected<std::shared_ptr<Session>, std::string>
-  create(Config config, std::filesystem::path log_directory = "logs",
+  create(core::Config config, std::filesystem::path log_directory = "logs",
          std::string prompt_variant = "default");
 
   ~Session();
@@ -60,12 +60,12 @@ public:
   [[nodiscard]] bool remove_pending_user_input(std::uint64_t id);
   void clear_pending_user_inputs();
 
-  [[nodiscard]] const Config &config() const noexcept;
+  [[nodiscard]] const core::Config &config() const noexcept;
   /// @brief The simulation; mutated only through registered tools.
   [[nodiscard]] const world::World &world() const noexcept;
   /// @brief Append-only feed of successfully decoded tool activity.
-  [[nodiscard]] const ToolActivityFeed &tool_activities() const noexcept;
-  [[nodiscard]] const EpisodeRunner &runner() const noexcept;
+  [[nodiscard]] const core::ToolActivityFeed &tool_activities() const noexcept;
+  [[nodiscard]] const core::EpisodeRunner &runner() const noexcept;
   [[nodiscard]] const std::filesystem::path &metrics_path() const noexcept;
   /// @brief Last metrics-write failure, or empty; a failure is terminal.
   [[nodiscard]] const std::string &metrics_error() const noexcept;

@@ -42,7 +42,8 @@ libraries, so a seed means the same pen on every supported compiler.
 ## Tools
 
 The model gets exactly three tools. Their JSON Schemas are compile-time
-artifacts generated from the declarations in `tool_contract.hpp`; member names
+artifacts generated from the declarations in `tool_contract.hpp` and
+`tool_responses.hpp`; member names
 become property names and the `world::Direction` enumerators become the accepted
 strings. Generated object schemas set `additionalProperties: false`, so extra
 arguments are rejected rather than ignored.
@@ -160,7 +161,7 @@ The world, the score, and the log always record the truth.
 | `reward_feedback` | `--no-reward-feedback` turns it off | on: a successful `eat` returns numeric `reward` and `score`. Off: those fixed response fields are `null`. |
 | `opaque_look` | `--opaque-look` turns it on | on: `look` reports an occupied cell as `"something"` instead of naming the item. |
 
-The system prompt is assembled in `src/agent/prompt.cpp` and describes the
+The system prompt is assembled in `src/core/prompt.cpp` and describes the
 coordinate system, the three tools, the flags in force, and the turn and
 tool-round budgets. Each turn is then advanced by a short generated nudge.
 Human guidance is queued FIFO and delivered in its own labelled section, one

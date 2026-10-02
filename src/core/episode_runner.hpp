@@ -7,7 +7,7 @@
 /// the metrics footer be written before exit.
 #pragma once
 
-#include "agent/turn_transport.hpp"
+#include "core/turn_transport.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -16,7 +16,7 @@
 #include <string>
 #include <vector>
 
-namespace pigpen::agent {
+namespace pigpen::core {
 
 /// @brief Lifecycle of one episode as driven by EpisodeRunner.
 enum class RunState : std::uint8_t {
@@ -195,4 +195,4 @@ private:
 /// @brief Stable lowercase name used in logs and the CLI.
 [[nodiscard]] std::string_view finish_reason_name(FinishReason reason) noexcept;
 
-} // namespace pigpen::agent
+} // namespace pigpen::core

@@ -6,15 +6,15 @@
 /// abnormal shutdown leaves a finalized record.
 #pragma once
 
-#include "agent/config.hpp"
-#include "agent/episode_runner.hpp"
-#include "agent/events.hpp"
+#include "core/config.hpp"
+#include "core/episode_runner.hpp"
+#include "core/events.hpp"
 
 #include <chrono>
+#include <cstddef>
 #include <expected>
 #include <filesystem>
 #include <fstream>
-#include <map>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -24,12 +24,26 @@ namespace pigpen::agent {
 /// @brief Writes one episode's JSONL log and reconciles its summary counts.
 class MetricsWriter final {
 public:
+  /// Footer counters, one per item type and world tool; every one is always
+  /// written, even at zero.
+  struct ItemCounts {
+    std::size_t berry{};
+    std::size_t apple{};
+    std::size_t truffle{};
+    std::size_t toadstool{};
+  };
+  struct ToolCounts {
+    std::size_t move{};
+    std::size_t look{};
+    std::size_t eat{};
+  };
+
   /// @brief Create the log directory and file, then write the header line.
   /// @return The writer, or a message when the directory or file cannot be
   /// created or the header cannot be written.
   [[nodiscard]] static std::expected<std::unique_ptr<MetricsWriter>,
                                      std::string>
-  create(const std::filesystem::path &log_directory, const Config &config,
+  create(const std::filesystem::path &log_directory, const core::Config &config,
          std::string prompt_variant);
 
   /// @brief Writes an incomplete "abandoned" footer if none was written yet.
@@ -40,13 +54,13 @@ public:
 
   /// @brief Append one successfully decoded world-tool invocation.
   [[nodiscard]] std::expected<void, std::string>
-  record_tool(const ToolActivity &activity);
+  record_tool(const core::ToolActivity &activity);
   /// @brief Append one finished model turn.
   [[nodiscard]] std::expected<void, std::string>
-  record_turn(const TurnRecord &record);
+  record_turn(const core::TurnRecord &record);
   /// @brief Write the final footer; the log accepts nothing afterwards.
   [[nodiscard]] std::expected<void, std::string>
-  finish(const EpisodeResult &result, int final_score);
+  finish(const core::EpisodeResult &result, int final_score);
 
   [[nodiscard]] const std::filesystem::path &path() const noexcept {
     return path_;
@@ -63,11 +77,8 @@ private:
   std::filesystem::path path_{};
   std::ofstream stream_{};
   std::chrono::steady_clock::time_point started_{};
-  // Pre-seeded so the footer always lists every tool and item, even at zero.
-  std::map<std::string, std::size_t> tool_counts_{
-      {"move", 0}, {"look", 0}, {"eat", 0}};
-  std::map<std::string, std::size_t> eaten_counts_{
-      {"berry", 0}, {"apple", 0}, {"truffle", 0}, {"toadstool", 0}};
+  ToolCounts tool_counts_{};
+  ItemCounts eaten_counts_{};
   std::uint32_t turns_recorded_{};
   int last_score_{};
   bool finalized_{false};

@@ -26,7 +26,7 @@ namespace {
 
 } // namespace
 
-scry::Config scry_config(const Config &config, std::string api_key) {
+scry::Config scry_config(const core::Config &config, std::string api_key) {
   return {
       .base_url = config.base_url,
       .api_key = std::move(api_key),
@@ -37,7 +37,7 @@ scry::Config scry_config(const Config &config, std::string api_key) {
                    .seed = config.sampling_seed},
       .reasoning_mode = scry::ReasoningMode::disabled,
       .max_tool_rounds = config.max_tool_rounds,
-      .max_tool_calls_per_turn = max_world_tool_calls_per_turn,
+      .max_tool_calls_per_turn = core::max_world_tool_calls_per_turn,
       .tool_round_limit = scry::ToolRoundLimitPolicy::complete,
   };
 }
@@ -59,7 +59,8 @@ ScryTurnTransport::~ScryTurnTransport() {
 }
 
 std::expected<void, std::string>
-ScryTurnTransport::send(std::string user_message, TurnCallbacks callbacks) {
+ScryTurnTransport::send(std::string user_message,
+                        core::TurnCallbacks callbacks) {
   // Scry clears Conversation::busy() once it ingests the terminal event, which
   // can precede delivery of on_finished under a limited callback budget.
   // Replacing turn_ then would leave the old callback, which captures this,
@@ -103,8 +104,8 @@ ScryTurnTransport::send(std::string user_message, TurnCallbacks callbacks) {
                   callback({
                       .status = finished.error().category ==
                                         scry::ErrorCategory::cancelled
-                                    ? TurnStatus::cancelled
-                                    : TurnStatus::error,
+                                    ? core::TurnStatus::cancelled
+                                    : core::TurnStatus::error,
                       .text = {},
                       .error = std::move(finished.error().message),
                   });
@@ -113,14 +114,14 @@ ScryTurnTransport::send(std::string user_message, TurnCallbacks callbacks) {
                 const auto reason_error =
                     finish_reason_error(finished->finish_reason);
                 callback({
-                    .status = reason_error.empty() ? TurnStatus::completed
-                                                   : TurnStatus::error,
+                    .status = reason_error.empty() ? core::TurnStatus::completed
+                                                   : core::TurnStatus::error,
                     .text = std::move(finished->text),
                     .error = reason_error,
                     .input_tokens = finished->usage.input_tokens,
                     .output_tokens = finished->usage.output_tokens,
                     .tool_stats =
-                        TurnToolStats{
+                        core::TurnToolStats{
                             .rounds = finished->tool_round_count,
                             .calls = finished->tool_call_count,
                             .rejected_calls =

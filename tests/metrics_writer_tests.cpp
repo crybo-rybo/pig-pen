@@ -40,7 +40,7 @@ read_records(const std::filesystem::path &path) {
 
 TEST_CASE("metrics log contains a reconcilable header tool turn and footer") {
   const auto directory = test_directory();
-  pigpen::agent::Config config;
+  pigpen::core::Config config;
   config.seed = 42;
   config.turn_budget = 2;
   config.temperature = 0.5;
@@ -51,11 +51,11 @@ TEST_CASE("metrics log contains a reconcilable header tool turn and footer") {
   auto writer = std::move(*created);
   const auto path = writer->path();
 
-  const pigpen::agent::ToolActivity activity{
+  const pigpen::core::ToolActivity activity{
       .tick = 1,
       .turn = 1,
-      .kind = pigpen::agent::ToolKind::eat,
-      .outcome = pigpen::agent::ToolOutcome::succeeded,
+      .kind = pigpen::core::ToolKind::eat,
+      .outcome = pigpen::core::ToolOutcome::succeeded,
       .arguments_json = "{}",
       .result_json =
           R"({"ate":"berry","ok":true,"reason":null,"reward":1,"score":1})",
@@ -72,22 +72,22 @@ TEST_CASE("metrics log contains a reconcilable header tool turn and footer") {
   REQUIRE(writer
               ->record_turn({
                   .turn = 1,
-                  .status = pigpen::agent::TurnStatus::completed,
+                  .status = pigpen::core::TurnStatus::completed,
                   .assistant_text = "ate a berry",
                   .tool_calls = 1,
                   .latency = std::chrono::milliseconds{12},
                   .tool_stats =
-                      pigpen::agent::TurnToolStats{.rounds = 2,
-                                                   .calls = 4,
-                                                   .rejected_calls = 1,
-                                                   .round_limit_reached = true,
-                                                   .unexecuted_calls = 2},
+                      pigpen::core::TurnToolStats{.rounds = 2,
+                                                  .calls = 4,
+                                                  .rejected_calls = 1,
+                                                  .round_limit_reached = true,
+                                                  .unexecuted_calls = 2},
               })
               .has_value());
   REQUIRE(writer
               ->finish(
                   {
-                      .reason = pigpen::agent::FinishReason::turn_budget,
+                      .reason = pigpen::core::FinishReason::turn_budget,
                       .turns_used = 1,
                   },
                   1)
@@ -133,13 +133,13 @@ TEST_CASE("metrics log contains a reconcilable header tool turn and footer") {
 TEST_CASE("destroying an unfinished writer still emits an incomplete footer") {
   const auto directory = test_directory();
   auto created = pigpen::agent::MetricsWriter::create(
-      directory, pigpen::agent::Config{}, "default");
+      directory, pigpen::core::Config{}, "default");
   REQUIRE(created.has_value());
   const auto path = (*created)->path();
   REQUIRE((*created)
               ->record_turn({
                   .turn = 3,
-                  .status = pigpen::agent::TurnStatus::completed,
+                  .status = pigpen::core::TurnStatus::completed,
                   .assistant_text = "partial run",
               })
               .has_value());
@@ -157,10 +157,35 @@ TEST_CASE("destroying an unfinished writer still emits an incomplete footer") {
   std::filesystem::remove_all(directory, ignored);
 }
 
+TEST_CASE("metrics log rejects a tool payload that is not JSON") {
+  const auto directory = test_directory();
+  auto created = pigpen::agent::MetricsWriter::create(
+      directory, pigpen::core::Config{}, "invalid-payload-test");
+  REQUIRE(created.has_value());
+  auto writer = std::move(*created);
+  const auto path = writer->path();
+
+  CHECK_FALSE(writer->record_tool({
+      .kind = pigpen::core::ToolKind::eat,
+      .arguments_json = "{not json",
+      .eaten = pigpen::world::ItemType::berry,
+  }));
+  REQUIRE(writer->finish({.reason = pigpen::core::FinishReason::stopped}, 0)
+              .has_value());
+
+  const auto records = read_records(path);
+  REQUIRE(records.size() == 2);
+  CHECK(records.back().at("tool_call_counts").at("eat") == 0);
+  CHECK(records.back().at("items_eaten").at("berry") == 0);
+
+  std::error_code ignored;
+  std::filesystem::remove_all(directory, ignored);
+}
+
 TEST_CASE("metrics footer is final and cannot be duplicated") {
   const auto directory = test_directory();
   auto created = pigpen::agent::MetricsWriter::create(
-      directory, pigpen::agent::Config{}, "finalization-test");
+      directory, pigpen::core::Config{}, "finalization-test");
   REQUIRE(created.has_value());
   auto writer = std::move(*created);
   const auto path = writer->path();
@@ -168,14 +193,14 @@ TEST_CASE("metrics footer is final and cannot be duplicated") {
   REQUIRE(writer
               ->finish(
                   {
-                      .reason = pigpen::agent::FinishReason::stopped,
+                      .reason = pigpen::core::FinishReason::stopped,
                       .turns_used = 0,
                   },
                   0)
               .has_value());
   CHECK_FALSE(writer->finish(
       {
-          .reason = pigpen::agent::FinishReason::stopped,
+          .reason = pigpen::core::FinishReason::stopped,
           .turns_used = 0,
       },
       0));

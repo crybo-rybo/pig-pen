@@ -2,8 +2,8 @@
 /// @brief The Dear ImGui front end: session ownership and panel drawing.
 #pragma once
 
-#include "agent/config.hpp"
 #include "agent/session.hpp"
+#include "core/config.hpp"
 #include "ui/world_animation.hpp"
 
 #include <cstddef>
@@ -23,7 +23,7 @@ class AppUi final {
 public:
   /// @brief Seeds the controls from @p initial_config; a non-empty model
   /// identifier creates and auto-starts a session immediately.
-  explicit AppUi(const agent::Config &initial_config);
+  explicit AppUi(const core::Config &initial_config);
 
   /// @brief Advances the session and the animation timeline; call once per
   /// frame, before draw().
@@ -35,7 +35,7 @@ public:
 
 private:
   /// @brief The Config the controls describe; Session::create validates it.
-  [[nodiscard]] agent::Config config_from_controls() const;
+  [[nodiscard]] core::Config config_from_controls() const;
   /// @brief Replaces the session with one built from the controls — the only
   /// way settings changes are applied. Failures surface in visible_error_.
   void recreate_session(bool auto_play);
@@ -55,7 +55,7 @@ private:
 
   /// Settings for the next session. turn_budget, max_tool_rounds, and
   /// sampling_seed are edited through the widget mirrors below instead.
-  agent::Config controls_{};
+  core::Config controls_{};
   int turn_budget_{};
   int max_tool_rounds_{};
   bool use_sampling_seed_{};

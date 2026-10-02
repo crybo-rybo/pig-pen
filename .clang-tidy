@@ -1,5 +1,6 @@
-# Advisory only. clang cannot parse the -freflection TUs (all of src/agent), so
-# run it on src/world and src/ui:  clang-tidy -p build/dev src/world/world.cpp
+# Advisory only. clang cannot parse the -freflection TUs (src/agent), so run it
+# on the C++23 ones in src/world, src/core, and src/ui:
+#   clang-tidy -p build/dev src/world/world.cpp src/core/episode_runner.cpp
 Checks: >
   bugprone-*,
   modernize-*,

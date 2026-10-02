@@ -20,13 +20,13 @@ void WorldAnimationState::set_speed(const float speed) noexcept {
   speed_ = std::clamp(speed, 0.1F, 8.0F);
 }
 
-void WorldAnimationState::update(const agent::ToolActivityFeed &activities,
+void WorldAnimationState::update(const core::ToolActivityFeed &activities,
                                  const world::Position world_position,
                                  const double now_seconds) {
   for (; activity_cursor_ < activities.size(); ++activity_cursor_) {
     const auto &activity = activities[activity_cursor_];
     // A wall-blocked move has nothing to show.
-    if (activity.kind != agent::ToolKind::move ||
+    if (activity.kind != core::ToolKind::move ||
         activity.before != activity.after) {
       pending_.push_back({.kind = activity.kind,
                           .before = activity.before,
@@ -45,7 +45,7 @@ void WorldAnimationState::update(const agent::ToolActivityFeed &activities,
       active_started_ = step_started;
     }
     const auto duration =
-        (active_->kind == agent::ToolKind::move ? 0.150 : 0.230) /
+        (active_->kind == core::ToolKind::move ? 0.150 : 0.230) /
         static_cast<double>(speed_);
     const auto elapsed = now_seconds - active_started_;
     if (elapsed < duration) {
@@ -66,7 +66,7 @@ void WorldAnimationState::update(const agent::ToolActivityFeed &activities,
 
 std::optional<VisualEffect>
 WorldAnimationState::active_effect() const noexcept {
-  if (!active_ || active_->kind == agent::ToolKind::move) {
+  if (!active_ || active_->kind == core::ToolKind::move) {
     return std::nullopt;
   }
   return VisualEffect{.kind = active_->kind,

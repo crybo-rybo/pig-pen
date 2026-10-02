@@ -14,14 +14,14 @@
 namespace {
 
 /// @brief Builds a successful eastward move, varying only the animation fields.
-[[nodiscard]] pigpen::agent::ToolActivity
+[[nodiscard]] pigpen::core::ToolActivity
 move_activity(const std::uint64_t tick, const pigpen::world::Position before,
               const pigpen::world::Position after) {
   return {
       .tick = tick,
       .turn = 1,
-      .kind = pigpen::agent::ToolKind::move,
-      .outcome = pigpen::agent::ToolOutcome::succeeded,
+      .kind = pigpen::core::ToolKind::move,
+      .outcome = pigpen::core::ToolOutcome::succeeded,
       .arguments_json = R"({"direction":"east"})",
       .before = before,
       .after = after,
@@ -34,7 +34,7 @@ move_activity(const std::uint64_t tick, const pigpen::world::Position before,
 TEST_CASE("burst moves animate sequentially instead of teleporting") {
   pigpen::ui::WorldAnimationState animation;
   animation.reset({.x = 5, .y = 5});
-  const pigpen::agent::ToolActivityFeed activities{
+  const pigpen::core::ToolActivityFeed activities{
       move_activity(1, {.x = 5, .y = 5}, {.x = 6, .y = 5}),
       move_activity(2, {.x = 6, .y = 5}, {.x = 7, .y = 5}),
   };
@@ -61,12 +61,12 @@ TEST_CASE("burst moves animate sequentially instead of teleporting") {
 TEST_CASE("look and eat activities become ordered transient effects") {
   pigpen::ui::WorldAnimationState animation;
   animation.reset({.x = 5, .y = 5});
-  const pigpen::agent::ToolActivityFeed activities{
+  const pigpen::core::ToolActivityFeed activities{
       {
           .tick = 1,
           .turn = 1,
-          .kind = pigpen::agent::ToolKind::look,
-          .outcome = pigpen::agent::ToolOutcome::succeeded,
+          .kind = pigpen::core::ToolKind::look,
+          .outcome = pigpen::core::ToolOutcome::succeeded,
           .arguments_json = R"({"direction":"north"})",
           .before = {.x = 5, .y = 5},
           .after = {.x = 5, .y = 5},
@@ -75,8 +75,8 @@ TEST_CASE("look and eat activities become ordered transient effects") {
       {
           .tick = 2,
           .turn = 1,
-          .kind = pigpen::agent::ToolKind::eat,
-          .outcome = pigpen::agent::ToolOutcome::succeeded,
+          .kind = pigpen::core::ToolKind::eat,
+          .outcome = pigpen::core::ToolOutcome::succeeded,
           .before = {.x = 5, .y = 5},
           .after = {.x = 5, .y = 5},
       },
@@ -85,14 +85,14 @@ TEST_CASE("look and eat activities become ordered transient effects") {
   animation.update(activities, {.x = 5, .y = 5}, 2.0);
   auto effect = animation.active_effect();
   REQUIRE(effect.has_value());
-  CHECK(effect->kind == pigpen::agent::ToolKind::look);
+  CHECK(effect->kind == pigpen::core::ToolKind::look);
   REQUIRE(effect->direction.has_value());
   CHECK(*effect->direction == pigpen::world::Direction::north);
 
   animation.update(activities, {.x = 5, .y = 5}, 2.231);
   effect = animation.active_effect();
   REQUIRE(effect.has_value());
-  CHECK(effect->kind == pigpen::agent::ToolKind::eat);
+  CHECK(effect->kind == pigpen::core::ToolKind::eat);
 
   animation.update(activities, {.x = 5, .y = 5}, 2.461);
   CHECK_FALSE(animation.active_effect().has_value());
@@ -103,7 +103,7 @@ TEST_CASE("animation speed changes move duration") {
   pigpen::ui::WorldAnimationState animation;
   animation.reset({.x = 1, .y = 1});
   animation.set_speed(2.0F);
-  const pigpen::agent::ToolActivityFeed activities{
+  const pigpen::core::ToolActivityFeed activities{
       move_activity(1, {.x = 1, .y = 1}, {.x = 2, .y = 1}),
   };
 
@@ -116,11 +116,11 @@ TEST_CASE("animation speed changes move duration") {
 TEST_CASE("wall-blocked moves do not animate movement") {
   pigpen::ui::WorldAnimationState animation;
   animation.reset({.x = 5, .y = 5});
-  const pigpen::agent::ToolActivityFeed activities{{
+  const pigpen::core::ToolActivityFeed activities{{
       .tick = 1,
       .turn = 1,
-      .kind = pigpen::agent::ToolKind::move,
-      .outcome = pigpen::agent::ToolOutcome::blocked_by_wall,
+      .kind = pigpen::core::ToolKind::move,
+      .outcome = pigpen::core::ToolOutcome::blocked_by_wall,
       .arguments_json = R"({"direction":"north"})",
       .before = {.x = 5, .y = 5},
       .after = {.x = 5, .y = 5},

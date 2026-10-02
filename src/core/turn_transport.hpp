@@ -14,7 +14,7 @@
 #include <string>
 #include <string_view>
 
-namespace pigpen::agent {
+namespace pigpen::core {
 
 /// @brief How one model turn ended.
 enum class TurnStatus : std::uint8_t {
@@ -68,4 +68,4 @@ public:
   virtual bool cancel() noexcept = 0;
 };
 
-} // namespace pigpen::agent
+} // namespace pigpen::core
