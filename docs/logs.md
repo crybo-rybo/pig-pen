@@ -1,25 +1,26 @@
 # Logs
 
-Every session — CLI or GUI — writes one JSONL file:
+Each session in the CLI or the GUI writes one JSONL file:
 
 ```
 logs/<timestamp>-<model>-<seed>.jsonl
 ```
 
-for example `logs/20260807-064512-538-acme_pig-model_Q4_K_M-42.jsonl`. The timestamp is
-local time down to the millisecond, and characters that are awkward in
-filenames are replaced with `_`. If the name somehow collides, a `-1`, `-2`, …
-suffix is appended; an existing log is never overwritten. Use `--log-dir` to
-write somewhere other than `logs/`.
+An example is `logs/20260807-064512-538-acme_pig-model_Q4_K_M-42.jsonl`. The
+timestamp is in local time, with milliseconds. Pig Pen replaces characters that
+are not easy to use in file names with `_`. If a file with the same name
+exists, Pig Pen adds a suffix: `-1`, `-2`, and so on. Pig Pen never overwrites
+a log. To write to a directory other than `logs/`, use `--log-dir`.
 
-A file always has exactly one `header` line first and one `footer` line last,
-with `tool` and `turn` records in between, in the order they happened. Object
-keys are written in sorted order; the examples below group them for
-readability instead.
+Each file has exactly one `header` line at the start and one `footer` line at
+the end. Between them, the file has `tool` and `turn` records in the sequence
+in which they occurred. Pig Pen writes object keys in sorted order. The
+examples below put the keys in groups to make them easier to read.
 
 ## `header`
 
-Written when the session is created, before the model is contacted.
+Pig Pen writes the header when it creates the session, before it connects to
+the model.
 
 ```json
 {"type":"header","model":"acme/pig-model:Q4_K_M","base_url":"http://127.0.0.1:11434/v1",
@@ -30,20 +31,23 @@ Written when the session is created, before the model is contacted.
    "known_item_values":true,"reward_feedback":true,"opaque_look":false}}
 ```
 
-`prompt_variant` is whatever you passed to `--prompt-variant`, or the GUI
-preset name. `temperature` records model sampling separately from the
-deterministic world `seed`. `sampling_seed` is the provider sampling seed from
-`--sampling-seed` or the GUI, or `null` when none was sent. `max_output_tokens` records the per-request
-limit Pig Pen asks the provider to apply. `max_world_tool_calls_per_turn`
-records the request cap enforced by Scry (invalid requests also count). Everything needed to describe
-the run is in this line, although model sampling is not guaranteed to be
-reproducible, even with a sampling seed.
+| field | description |
+|---|---|
+| `prompt_variant` | The value of `--prompt-variant`, or the name of the GUI preset. |
+| `temperature` | The model sampling temperature. Pig Pen records it separately from the deterministic world `seed`. |
+| `sampling_seed` | The provider sampling seed from `--sampling-seed` or the GUI. If Pig Pen did not send a sampling seed, the value is `null`. |
+| `max_output_tokens` | The token limit for each request. Pig Pen asks the provider to apply this limit. |
+| `max_world_tool_calls_per_turn` | The request limit that Scry enforces. Requests that are not valid also count. |
+
+This line has all the data that is necessary to describe the run. But model
+sampling can give different results when you run it again, also with a
+sampling seed.
 
 ## `tool`
 
-One line per successfully decoded reflected world-tool invocation. Calls Scry
-rejects during admission, budget, protocol, or schema validation do not enter Pig Pen's world
-layer and therefore do not produce a `tool` record.
+Pig Pen writes one line for each decoded world-tool call. Some calls do not get
+to the Pig Pen world layer, because Scry rejects them during admission, budget,
+protocol, or schema validation. These calls do not make a `tool` record.
 
 ```json
 {"type":"tool","turn":1,"tick":2,"tool":"look",
@@ -53,21 +57,20 @@ layer and therefore do not produce a `tool` record.
  "before":{"x":5,"y":5},"after":{"x":5,"y":5},"action_executed":true,"result_dispatched":true,"score_after":0}
 ```
 
-`tick` is a monotonic counter across the whole episode. `before`/`after` are
-the blob's position either side of the call — identical for `look`, `eat`, a
-wall-blocked `move`. `action_executed` remains `true` for these world records;
-refused calls never enter the feed. `scry_turn_id`, `call_id`, `round` (one-based),
-and `index` (zero-based within the batch) come from Scry's contextual handler.
-`turn` is Pig Pen's episode turn number. `args` and `result` are copied from
-Scry's dispatch observation, exactly as posted for the provider, so a log made
-with `--opaque-look` shows `"something"` here too.
-`result_dispatched: false` marks a world action whose result could not be posted
-because the turn failed during dispatch; `args` and `result` are then `null`,
-while the typed transition and score remain truthful.
+| field | description |
+|---|---|
+| `tick` | A counter that increases across the full episode. |
+| `turn` | The Pig Pen episode turn number. |
+| `before`, `after` | The position of the blob before and after the call. These values are the same for `look`, for `eat`, and for a `move` that a wall blocks. |
+| `action_executed` | Always `true` for these world records. Refused calls never go into the activity feed. |
+| `scry_turn_id`, `call_id`, `round`, `index` | Values from the Scry contextual handler. `round` starts at one. `index` starts at zero in the batch. |
+| `args`, `result` | Copies from the Scry dispatch observation, exactly as Scry posted them for the provider. For example, a log with `--opaque-look` also shows `"something"` here. |
+| `result_dispatched` | `false` for a world action whose result Scry could not post, because the turn failed during dispatch. Then `args` and `result` are `null`, but the typed transition and the score are still correct. |
 
 ## `turn`
 
-One line per conversation turn, flushed as it completes.
+Pig Pen writes one line for each conversation turn. It flushes the line when
+the turn completes.
 
 ```json
 {"type":"turn","turn":1,"status":"completed",
@@ -79,21 +82,28 @@ One line per conversation turn, flushed as it completes.
    "round_limit_reached":false,"unexecuted_calls":0}}
 ```
 
-`status` is `completed`, `cancelled`, or `error`. `tool_calls` is counted from
-successfully decoded reflected handler invocations for this turn and
-`zero_tool_turn` makes narration-only or invalid-call-only turns easy to query.
-`scry_tools` comes from Scry's completion: `calls` includes unknown, undecodable,
-and refused requests; `rejected_calls` counts admission/budget refusals, not
-decode errors. `rounds` counts dispatched rounds. `round_limit_reached` and
-`unexecuted_calls` report requests dropped when the round cap completes a turn.
-Those dropped calls are in neither `calls` nor the activity feed. The whole
-`scry_tools` value is `null` when Scry fails/cancels without a Completion;
-world `tool_calls` still records any actions already observed. A provider token
-limit does return a Completion with statistics, although Pig Pen treats that
-truncated response as a turn error.
+| field | description |
+|---|---|
+| `status` | `completed`, `cancelled`, or `error`. |
+| `tool_calls` | The number of reflected handler calls in this turn that Scry decoded successfully. |
+| `zero_tool_turn` | `true` for a turn with only narration, or with only calls that are not valid. Use it to find these turns easily in a query. |
+| `input_tokens`, `output_tokens` | Token counts from the provider. |
+| `latency_ms` | The duration of the turn. Pig Pen measures it locally. |
+| `scry_tools` | Statistics from the Scry completion. Refer to the table below. |
 
-Token counts come from the provider; `latency_ms` is measured locally around
-the turn.
+The `scry_tools` value has these fields:
+
+| field | description |
+|---|---|
+| `calls` | All requests. This count includes unknown requests, undecodable requests, and refused requests. |
+| `rejected_calls` | Admission refusals and budget refusals. This count does not include decode errors. |
+| `rounds` | The number of dispatched rounds. |
+| `round_limit_reached`, `unexecuted_calls` | The requests that Scry dropped when the round limit completed the turn. These dropped calls are not in `calls`, and they are not in the activity feed. |
+
+If Scry fails or cancels without a Completion, the full `scry_tools` value is
+`null`. In that case, `tool_calls` still records the world actions that Pig Pen
+observed before. A provider token limit gives a Completion with statistics. But
+Pig Pen sees that truncated response as a turn error.
 
 ## `footer`
 
@@ -104,36 +114,42 @@ the turn.
  "turns_used":2,"duration_ms":3186}
 ```
 
-`complete: true` means the episode reached a terminal state on its own —
-`turn_budget`, `objective_complete`, `stopped`, `cancelled`, or `error`. If the
-process exits, the window closes, or the session is reset mid-episode, the
-writer still emits a footer, but with `complete: false` and
-`finish_reason: "abandoned"`. A footer is final: nothing can be recorded after
-it, and it cannot be written twice.
+`complete: true` shows that the episode got to a terminal state without outside
+interruption. The terminal states are `turn_budget`, `objective_complete`,
+`stopped`, `cancelled`, and `error`.
 
-## Reading a log
+Sometimes the episode does not get to a terminal state. For example, the
+process stops, the window closes, or the user resets the session during the
+episode. In these cases, the writer still writes a footer, but with
+`complete: false` and `finish_reason: "abandoned"`. A footer is final. The
+writer cannot record data after the footer, and it cannot write the footer two
+times.
 
-Header, footer, and every decoded world-tool call at a glance:
+## Read a log
+
+To see the header, the footer, and all decoded world-tool calls together, use
+this command:
 
 ```sh
 jq -s '{header: first, footer: last, tools: [.[] | select(.type == "tool")]}' \
   logs/<run>.jsonl
 ```
 
-Just the executed world-call trace:
+To see only the trace of the world-tool calls that ran, use this command:
 
 ```sh
 jq -r 'select(.type=="tool")
   | "\(.tick) \(.tool) \(.args) -> \(.result | tostring[0:80])"' logs/<run>.jsonl
 ```
 
-Turns containing Scry budget or admission refusals:
+To find the turns that have Scry budget refusals or admission refusals, use
+this command:
 
 ```sh
 jq -c 'select(.type=="turn" and (.scry_tools.rejected_calls // 0) > 0)' logs/<run>.jsonl
 ```
 
-Compare the outcome of several runs:
+To compare the outcomes of many runs, use this command:
 
 ```sh
 for f in logs/*.jsonl; do
@@ -142,6 +158,6 @@ for f in logs/*.jsonl; do
 done
 ```
 
-Since the world is seed-deterministic, two runs with the same seed and turn
-budget differ only in what the model did — the ordered `tool` records line up
-directly.
+The seed fully sets the world. If two runs have the same seed and turn budget,
+only the actions of the model are different. You can compare the `tool`
+records of the two runs directly, line by line.

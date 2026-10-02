@@ -1,11 +1,11 @@
-# Testing
+# Test Pig Pen
 
 ```sh
 just test              # build the dev preset, then run ctest
-just ci                # format + lint + dev/release/headless — what GitHub runs on a PR
+just ci                # format + lint + dev/release/headless (the GitHub PR checks)
 ```
 
-or, without `just`:
+If you do not use `just`, use these commands:
 
 ```sh
 cmake --preset dev
@@ -13,59 +13,73 @@ cmake --build --preset dev
 ctest --preset dev
 ```
 
-The suite completes in a few seconds. **No external model server or external
-network access is required** after dependencies have been fetched. Unit tests
-use fake transports and Scry's public scripted transport; the CLI integration test runs real Scry/Curl
-traffic against a loopback stub, so the suite remains safe to run offline.
+The suite completes in a few seconds. After the configure step gets the
+dependencies, **an external model server and external network access are not
+necessary**. The unit tests use fake transports and the public scripted
+transport from Scry. The CLI integration test sends real Scry and curl traffic
+to a loopback stub. You can run the full suite offline.
 
-Configuration itself is part of the reflection gate: it requires GCC 16+ and a
-Python 3 interpreter, asks Scry to probe the P2996/P3394 facilities it uses,
-and fails before compilation if that surface is unavailable.
+The configure step is also a check for reflection support. It does these
+steps:
 
-## What runs
+1. It makes sure that GCC 16 or later and a Python 3 interpreter are
+   available.
+2. It asks Scry to probe for the P2996/P3394 features that Pig Pen uses.
+3. If these features are not available, it fails before compilation starts.
 
-`ctest` picks up two kinds of test.
+## Test contents
 
-**Catch2 cases** from the C++23 `pigpen_tests` and the reflection-isolated
-`pigpen_reflection_tests` (only `scry_transport_tests.cpp`, which needs Scry's
-headers), registered individually via `catch_discover_tests`, covering:
+`ctest` finds two types of tests.
 
-| file | covers |
+**Catch2 cases.** These cases come from two binaries:
+
+- `pigpen_tests`, which compiles as C++23.
+- `pigpen_reflection_tests`, which isolates reflection. It contains only
+  `scry_transport_tests.cpp`, because that file includes the Scry headers.
+
+`catch_discover_tests` registers each case separately. The cases test these
+items:
+
+| file | tests |
 |---|---|
-| `tests/world_tests.cpp` | grid constants, seeded placement, movement and wall failures, `look` rays, eating and scoring, positive-item exhaustion, and seed determinism via `World::dump()` |
-| `tests/world_tools_tests.cpp` | flat typed responses and the `opaque_look` / `reward_feedback` toggles |
-| `tests/scry_transport_tests.cpp` | compile-time reflected schemas, Scry's public encoder, standalone registry manifests, native call budgets across batches and turns, model-visible decode errors, exact dispatch payloads and identity, side effects on dispatch failure and shutdown, objective/logging admission, round-limit history preservation, cancellation, and transport lifetime using `scry::testing` |
-| `tests/prompt_tests.cpp` | config defaults and that each prompt flag says what it claims — including hidden rewards and keeping automatic recovery instructions separate from human guidance |
-| `tests/episode_runner_tests.cpp` | the turn loop against a scripted transport: budget exhaustion, pause/resume, stop cancelling an in-flight turn, objective completion, terminal/logging errors, and queued human input |
-| `tests/metrics_writer_tests.cpp` | header/tool/turn/footer reconciliation, the incomplete footer on destruction, and footer finality |
-| `tests/session_tests.cpp` | config rejection and that a session owns a seeded world plus a registered tool harness atomically |
-| `tests/world_animation_tests.cpp` | the typed activity feed becoming an ordered visual timeline, with caller-supplied time |
-| `tests/gui_options_tests.cpp` | GUI startup parsing for model and endpoint arguments, including both value syntaxes and invalid input |
+| `tests/world_tests.cpp` | Grid constants, item placement from the seed, movement, and wall failures. `look` rays, the `eat` action, and the score. The end of positive items, and seed determinism with `World::dump()`. |
+| `tests/world_tools_tests.cpp` | flat typed responses, and the `opaque_look` and `reward_feedback` toggles |
+| `tests/scry_transport_tests.cpp` | These tests use `scry::testing`. They test compile-time reflected schemas, the public Scry encoder, and standalone registry manifests. They test native call budgets across batches and turns, and decode errors that the model sees. They test exact dispatch payloads and identity, and side effects of a dispatch failure and of shutdown. They also test admission after objective completion and log failure, history preservation at the round limit, cancellation, and transport lifetime. |
+| `tests/prompt_tests.cpp` | config defaults, and that each prompt flag does what it claims. This includes hidden rewards, and the separation of automatic recovery instructions from human guidance. |
+| `tests/episode_runner_tests.cpp` | the turn loop with a scripted transport: budget exhaustion, pause and resume, a stop that cancels an active turn, objective completion, terminal errors and log errors, and queued human input |
+| `tests/metrics_writer_tests.cpp` | header, tool, turn, and footer reconciliation, the incomplete footer at destruction, and footer finality |
+| `tests/session_tests.cpp` | config rejection, and that a session atomically owns a seeded world and a registered tool harness |
+| `tests/world_animation_tests.cpp` | how the typed activity feed becomes an ordered visual timeline, with a time that the caller supplies |
+| `tests/gui_options_tests.cpp` | GUI startup parser for model and endpoint arguments. This includes the two value syntaxes and input that is not valid. |
 
-**CLI tests** registered in `cmake/testing.cmake`:
+**CLI tests.** `cmake/testing.cmake` registers these tests:
 
-- `pigpen_headless_integration` — `tests/headless_integration_tests.py` runs
-  the CLI against a loopback OpenAI-compatible stub through the real Scry/Curl
-  path: argv wiring (including `--sampling-seed`), the tool result posted back
-  to the provider, stdout, the JSONL log on disk, and exit codes `0` (a valid
-  `move`) and `5` (only a schema-invalid call)
-- `pigpen_headless_help` — `--help` exits 0
+- `pigpen_headless_integration`: `tests/headless_integration_tests.py` runs
+  the CLI against a loopback OpenAI-compatible stub, through the real Scry and
+  curl path. It tests how the CLI reads argv (with `--sampling-seed`), and
+  the tool result that goes back to the provider. It also tests stdout, the
+  JSONL log on disk, and the exit codes. Exit code `0` is for a valid `move`, and exit code `5` is for
+  only a schema-invalid call.
+- `pigpen_headless_help`: makes sure that `--help` exits with code 0.
 - `pigpen_headless_requires_model`, `pigpen_headless_rejects_invalid_bounds`
   (`--max-tool-rounds 65`), `pigpen_headless_rejects_invalid_temperature`
   (`--temperature nan`), and `pigpen_headless_rejects_invalid_sampling_seed`
-  (above the 32-bit range) — each passes only if the CLI prints the matching
-  option diagnostic
-- `pigpen_headless_graceful_sigint` / `_sigterm` — `tests/headless_signal_tests.py`
-  starts a stub socket server on a loopback port, points the CLI at it, sends
-  an exact tagged model identifier, verifies that identifier in the HTTP
-  request and JSONL header, then asserts the exit status is `128 + signal`
-  *and* that the JSONL file still ends with a finalized footer
+  (a value above the 32-bit range): each test passes only if the CLI prints
+  the correct option diagnostic.
+- `pigpen_headless_graceful_sigint` / `_sigterm`:
+  `tests/headless_signal_tests.py` does these steps:
+  1. It starts a stub socket server on a loopback port.
+  2. It points the CLI to the server, and sends an exact tagged model
+     identifier.
+  3. It makes sure that the HTTP request and the JSONL header have that
+     identifier.
+  4. It makes sure that the exit status is `128 + signal`, *and* that the
+     JSONL file still ends with a final footer.
 
-Python 3 is required whenever tests are enabled. The two signal tests only
-register on UNIX; the loopback integration test runs on every
-supported platform.
+When the tests are on, Python 3 is necessary. The two signal tests register
+only on UNIX. The loopback integration test runs on all supported platforms.
 
-## Running a subset
+## Run some of the tests
 
 ```sh
 ctest --preset dev -R world              # by test name
@@ -75,26 +89,27 @@ ctest --preset dev -R world              # by test name
 ./build/dev/pigpen_reflection_tests --list-tests
 ```
 
-## Testing against a real model
+## Test with a real model
 
-The suite deliberately never contacts one. To exercise the full path by hand,
-run a short episode and check the exit code:
+The suite never connects to a real model. This is intentional. To test the
+full path manually, run a short episode and examine the exit code:
 
 ```sh
 ./build/dev/pig-pen-headless --model YOUR_MODEL --turns 2 --seed 42 --timeout-seconds 120
 echo $?
 ```
 
-Exit `0` means the episode finished and produced at least one successfully
-decoded world-tool invocation. Exit `5` means it produced none, including a
-turn containing only schema-invalid calls. See
-[Running](running.md#exit-codes) for the rest, and [Logs](logs.md) for
-inspecting what happened.
+Exit code `0` shows that the episode finished with at least one decoded
+world-tool call. Exit code `5` shows that the episode had no decoded world-tool
+calls. For example, this occurs when a turn has only schema-invalid calls. For
+the other exit codes, refer to [Run Pig Pen](running.md#exit-codes). To
+examine the events of the run, refer to [Logs](logs.md).
 
-Note that `pig-pen-headless` writes to `logs/` in the current working
-directory — `cd` to a scratch directory first if you would rather not add to
-the project's logs.
+NOTE: `pig-pen-headless` writes to `logs/` in the current working directory.
+If you do not want to add files to the project logs, go (`cd`) to a scratch
+directory before you start the CLI.
 
-`SCRY_BUILD_TESTING_SUPPORT` follows `PIGPEN_BUILD_TESTS`; the scripted component
-is linked only into the reflection test binary and is absent from production-only
-builds. Loopback tests remain to cover CLI startup, Curl, and OS signals.
+`SCRY_BUILD_TESTING_SUPPORT` has the same value as `PIGPEN_BUILD_TESTS`. The
+build links the scripted component only into the reflection test binary.
+Production builds do not include it. The loopback tests are still necessary to
+test the CLI startup, curl, and the OS signals.
