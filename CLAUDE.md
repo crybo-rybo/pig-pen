@@ -1,40 +1,48 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file gives guidance to Claude Code (claude.ai/code) for work with the code
+in this repository.
 
-Pig Pen drops a locally hosted LLM into a deterministic 10×10 grid world it can
-only perceive through three tools (`look`, `move`, `eat`) registered with
-[scry](https://github.com/crybo-rybo/scry). Two front ends — an ImGui GUI
-(`pig-pen`) and a CLI (`pig-pen-headless`) — share the same world, prompt,
-tools, episode runner, and JSONL logger.
+Pig Pen puts a locally hosted LLM into a deterministic 10×10 grid world. The
+LLM can perceive the world only through three tools (`look`, `move`, `eat`).
+Pig Pen registers these tools with [Scry](https://github.com/crybo-rybo/scry).
+Two front ends, an ImGui GUI (`pig-pen`) and a CLI (`pig-pen-headless`), use
+the same world, prompt, tools, episode runner, and JSONL logger.
 
-Detailed docs live in `docs/` — consult them before re-deriving anything:
-`building.md` (prerequisites, presets, CMake options, local scry override),
-`testing.md` (what the suite covers, manual real-model check), `world.md`
-(rules, tool schemas, call budget and round limit), `logs.md`, `running.md`,
-and `architecture.md` (layers and ownership).
+The `docs/` directory has the detailed documentation. Read it before you
+derive data again:
 
-## Build & test
+- `building.md`: prerequisites, presets, CMake options, and the local Scry
+  override
+- `testing.md`: the suite contents, and a manual check with a real model
+- `world.md`: rules, tool schemas, the call budget, and the round limit
+- `logs.md`: the JSONL record format
+- `running.md`: CLI options, exit codes, and GUI panels
+- `architecture.md`: layers and ownership
 
-GCC 16+ (C++26 reflection) and CMake 3.31+ are required; the first configure
-fetches pinned dependencies and needs network access.
+## Build and test
+
+GCC 16 or later (for C++26 reflection) and CMake 3.31 or later are necessary.
+The first configure step fetches pinned dependencies. Network access is
+necessary for this step.
 
 ```sh
 just build                 # cmake --preset dev + build (Debug)
 just test                  # build, then ctest --preset dev
 just build release         # the other preset
-just run dev --model NAME  # build + launch GUI
+just run dev --model NAME  # build + start the GUI
 just run-headless dev --model NAME --turns 4 --seed 42
-just ci                    # everything GitHub runs on a PR: fmt-check + lint + dev/release/headless builds & tests
+just ci                    # all GitHub PR checks: fmt-check + lint + dev/release/headless builds and tests
 just fmt                   # clang-format all C++ + ruff format the Python tests
 just fmt-check             # the CI format check
 just lint                  # ruff check on the Python tests
 ```
 
-Gotcha: `run`/`run-headless` take the preset as the **first** positional
-argument — `just run-headless --model X` parses `--model` as a preset name.
+CAUTION: `run` and `run-headless` take the preset as the **first** positional
+argument. If you type `just run-headless --model X`, the recipe reads
+`--model` as a preset name.
 
-Single tests:
+To run single tests, use these commands:
 
 ```sh
 ctest --preset dev -R world                      # by CTest name
@@ -43,58 +51,70 @@ ctest --preset dev -R world                      # by CTest name
 ./build/dev/pigpen_reflection_tests --list-tests # reflection-isolated binary
 ```
 
-The suite needs no model server and no network. Warnings are errors for
-pig-pen code only. Formatting is enforced by `.github/workflows/ci.yml` with
-clang-format 22.1.8 (use the same major locally). `.clang-tidy` is advisory
-and only runs on the C++23 TUs (`src/world`, `src/core`, `src/ui`); clang
-cannot parse the `-freflection` TUs in `src/agent`.
+The suite does not use a model server or a network. Warnings are errors only
+for Pig Pen code. `.github/workflows/ci.yml` enforces the format with
+clang-format 22.1.8. Use the same major version locally. `.clang-tidy` is
+advisory. It runs only on the C++23 TUs (`src/world`, `src/core`, `src/ui`),
+because clang cannot parse the `-freflection` TUs in `src/agent`.
 
-Conventions the formatter can't enforce: project includes are quoted and
-rooted at `src/` (`"core/config.hpp"`, never `"config.hpp"`); files are
-`snake_case`, tests end `_tests`; types are `CamelCase`, interfaces take an
-`I` prefix, functions/variables/constants/enumerators are `snake_case`, and
-private members take a trailing underscore. No `using namespace` outside
-function or TU scope.
+The formatter cannot enforce these conventions:
+
+- Write project includes in quotes, with paths that start at `src/`
+  (`"core/config.hpp"`, never `"config.hpp"`).
+- Use `snake_case` for file names. Test file names end with `_tests`.
+- Use `CamelCase` for types. Interface names start with an `I` prefix.
+- Use `snake_case` for functions, variables, constants, and enumerators.
+- End private member names with an underscore.
+- Do not use `using namespace` outside function scope or TU scope.
 
 ## Architecture
 
-See `docs/architecture.md` for the layers (`src/world`, `src/core`, `src/agent`,
-`src/ui`, `src/app`). `Session` is the reset unit: there is no partial reset.
+For the layers (`src/world`, `src/core`, `src/agent`, `src/ui`, `src/app`),
+refer to `docs/architecture.md`. `Session` is the reset unit. A partial reset
+is not possible.
 
-Key invariants to preserve:
+Keep these invariants:
 
 - **C++26 reflection is the tool boundary, and only `pigpen_agent` uses it.**
-  The annotated arguments in `tool_contract.hpp` and the plain response
-  aggregates in `core/tool_responses.hpp` are the model-facing contract; scry
-  derives JSON Schemas from them at compile time and does all decode/encode.
-  Adding or renaming an enum value changes schema, decode, and encode from the
-  one declaration. `WorldTools` never touches JSON; protocol failures (unknown
-  tool, undecodable args) belong to scry and never reach it. Everything else is
-  C++23: `pigpen_world`, `pigpen_core` (`src/core`, namespace `pigpen::core`:
-  runner, prompt, `WorldTools`), `pigpen_ui`, both entry points, and
-  `pigpen_tests`. `pigpen_agent` (`src/agent`: toolbox, transport, reflected
-  JSONL writer, `Session`) links scry and requests C++26 privately, so neither
-  leaks to what links it. `pigpen_core` never links scry, so a `<scry/...>`
-  include there fails to compile. Put code in `src/agent` only when reflection
-  replaces hand-written shape code, and keep its public headers
-  C++23-parseable.
-- **Application callbacks run on the pump thread.** Scry owns its I/O worker. Both front ends drive
-  `Session::pump()` from their own loop (GUI per frame, CLI in a sleep-1ms
-  loop). Cancellation is cooperative: an episode isn't finished until the
-  terminal callback arrives, which is what guarantees the JSONL footer is
-  written even on SIGINT/timeout.
-- **Two test seams**: `ITurnTransport` lets `EpisodeRunner` be driven by a
-  scripted transport; `WorldTools` takes world values and returns the plain
-  response types.
-  New agent-layer code should stay testable through one of these.
-- The standalone tool registry captures stable world bindings that outlive the
-  harness. Transport destruction cancels and disconnects delivery.
-- Scry owns call admission, the four-request limit (invalid calls count),
-  and history-preserving round-limit completion. `WorldTools` owns only world
-  semantics and visibility. Exact activity payloads come from `on_tool_call`.
-- `Config::sampling_seed` maps to scry's `SamplingConfig::seed` (sent as the
-  OpenAI-compatible `seed` only when set). It is independent of the world
-  `seed`, 32-bit by scry's contract, and best-effort on the server side.
+  - The annotated arguments in `tool_contract.hpp` and the plain response
+    aggregates in `core/tool_responses.hpp` are the contract with the model.
+    Scry derives JSON Schemas from them at compile time, and does all decode
+    and encode operations.
+  - When you add or rename an enum value, the schema, the decode, and the
+    encode change from that one declaration.
+  - `WorldTools` never uses JSON. Protocol failures (unknown tool, undecodable
+    arguments) belong to Scry, and never get to `WorldTools`.
+  - All other code is C++23: `pigpen_world`, `pigpen_core` (`src/core`,
+    namespace `pigpen::core`: runner, prompt, `WorldTools`), `pigpen_ui`, both
+    entry points, and `pigpen_tests`.
+  - `pigpen_agent` (`src/agent`: toolbox, transport, reflected JSONL writer,
+    `Session`) links Scry and requests C++26 privately. These settings do not
+    go to the targets that link `pigpen_agent`.
+  - `pigpen_core` never links Scry, so a `<scry/...>` include in
+    `pigpen_core` does not compile.
+  - Put code in `src/agent` only when reflection replaces hand-written shape
+    code. Keep the public headers of `src/agent` C++23-parseable.
+- **Application callbacks run on the pump thread.** Scry owns its I/O worker.
+  Both front ends call `Session::pump()` from their own loop. The GUI calls it
+  one time for each frame. The CLI calls it in a loop that sleeps for 1 ms.
+  Cancellation is cooperative. An episode is not finished until the terminal
+  callback arrives. This makes sure that Pig Pen writes the JSONL footer, also
+  after a SIGINT or a timeout.
+- **Two test seams:** With `ITurnTransport`, a scripted transport can operate
+  `EpisodeRunner`. `WorldTools` takes world values and returns the plain
+  response types. Make sure that you can test new agent-layer code through one
+  of these seams.
+- The standalone tool registry captures stable world bindings. These bindings
+  exist longer than the harness. Transport destruction cancels and disconnects
+  delivery.
+- Scry owns call admission, the four-request limit, and the round-limit
+  completion that keeps history. Calls that are not valid also count for the
+  limit. `WorldTools` owns only world semantics and visibility. The exact
+  activity payloads come from `on_tool_call`.
+- `Config::sampling_seed` maps to the Scry `SamplingConfig::seed`. Scry sends it
+  as the OpenAI-compatible `seed` only when it is set. It is independent of the
+  world `seed`. The Scry contract limits it to 32 bits. The server applies it
+  only on a best-effort basis.
 - The three scenario flags (`--hidden-values`, `--no-reward-feedback`,
-  `--opaque-look`) change only what the model is told — the world, scoring,
-  and log always record the truth.
+  `--opaque-look`) change only the data that Pig Pen gives to the model. The
+  world, the score, and the log always record the true values.
