@@ -75,6 +75,7 @@ struct TurnRecord {
   std::string error{};
   std::uint64_t input_tokens{};
   std::uint64_t output_tokens{};
+  std::uint32_t attempts{};
   std::size_t tool_calls{};
   std::chrono::milliseconds latency{};
   std::optional<TurnToolStats> tool_stats{};

@@ -40,6 +40,9 @@ struct TurnOutcome {
   std::string error{};
   std::uint64_t input_tokens{};
   std::uint64_t output_tokens{};
+  /// Provider requests made for the turn, retries included; 0 when the turn
+  /// ended before its first request.
+  std::uint32_t attempts{};
   /// Absent when Scry fails or cancels a turn without a Completion.
   std::optional<TurnToolStats> tool_stats{};
 };

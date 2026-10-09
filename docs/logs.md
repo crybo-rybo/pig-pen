@@ -76,7 +76,7 @@ the turn completes.
 {"type":"turn","turn":1,"status":"completed",
  "user_message":"Automatic turn instructions:\nContinue exploring autonomously. ... Turn 1 of 2.",
  "assistant_text":"I have explored the pen and found valuable items. ...",
- "error":"","input_tokens":1699,"output_tokens":198,"tool_calls":2,
+ "error":"","input_tokens":1699,"output_tokens":198,"attempts":2,"tool_calls":2,
  "zero_tool_turn":false,"latency_ms":2499,
  "scry_tools":{"rounds":1,"calls":2,"rejected_calls":0,
    "round_limit_reached":false,"unexecuted_calls":0}}
@@ -85,9 +85,11 @@ the turn completes.
 | field | description |
 |---|---|
 | `status` | `completed`, `cancelled`, or `error`. |
+| `error` | Empty for a completed turn. For a provider failure, the Scry message, then the HTTP status, the sanitized provider error code, and the provider request ID when they are available. Example: `provider rejected the request (HTTP 404, openai:model_not_found)`. |
 | `tool_calls` | The number of reflected handler calls in this turn that Scry decoded successfully. |
 | `zero_tool_turn` | `true` for a turn with only narration, or with only calls that are not valid. Use it to find these turns easily in a query. |
 | `input_tokens`, `output_tokens` | Token counts from the provider. |
+| `attempts` | The number of provider requests in the turn. Scry sends one request for each tool round and one for the final answer. Retries after a transient failure also count. If the turn fails, this is the number of the request that failed. It is 0 if the turn stops before the first request. |
 | `latency_ms` | The duration of the turn. Pig Pen measures it locally. |
 | `scry_tools` | Statistics from the Scry completion. Refer to the table below. |
 

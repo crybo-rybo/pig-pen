@@ -1,13 +1,14 @@
 /// @file scry_transport_tests.cpp
-/// @brief Exercise Pig Pen's real bindings and transport with Scry's worker,
-/// provider codec, dispatch, and history, without sockets or a model server.
+/// @brief Exercise Pig Pen's real bindings and transport with all of Scry's
+/// shipping runtime (libcurl, provider codec, dispatch, and history) against a
+/// scripted HTTP server on loopback, without a model server.
 #include "agent/scry_transport.hpp"
 
 #include "agent/world_tool_binding.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 #include <nlohmann/json.hpp>
-#include <scry/testing/scripted_transport.hpp>
+#include <scry/testing/scripted_server.hpp>
 #include <scry/testing/streams.hpp>
 
 #include <chrono>
@@ -23,20 +24,38 @@ namespace {
 
 using namespace std::chrono_literals;
 using pigpen::core::TurnStatus;
+using scry::testing::openai_error_body;
 using scry::testing::openai_text_stream;
 using scry::testing::openai_tool_stream;
 
-scry::Harness make_harness(pigpen::core::Config config,
-                           pigpen::agent::WorldToolBinding &binding,
-                           scry::testing::ScriptedTransport &script,
-                           const std::size_t max_result_bytes) {
+scry::ToolRegistry
+make_registry(std::shared_ptr<pigpen::agent::WorldToolBinding> binding) {
+  scry::ToolRegistry registry;
+  REQUIRE(registry.add(std::move(binding)));
+  return registry;
+}
+
+scry::testing::ScriptedServer make_server() {
+  auto created = scry::testing::ScriptedServer::create();
+  REQUIRE(created.has_value());
+  return std::move(*created);
+}
+
+scry::Harness
+make_harness(pigpen::core::Config config,
+             std::shared_ptr<pigpen::agent::WorldToolBinding> binding,
+             const scry::testing::ScriptedServer &server,
+             const std::size_t max_result_bytes) {
+  config.base_url = server.url();
   config.model = "scripted-pig";
-  auto registry = binding.registry();
-  REQUIRE(registry.has_value());
   auto provider = pigpen::agent::scry_config(config);
   provider.limits.max_tool_result_bytes = max_result_bytes;
+  // libcurl notices a cancelled turn within this bound.
+  provider.timeouts.shutdown = 20ms;
+  // Reproducible backoff for the retry test.
+  provider.retry.jitter_ratio = 0;
   auto created =
-      scry::testing::create_harness(provider, script, std::move(*registry));
+      scry::Harness::create(provider, make_registry(std::move(binding)));
   REQUIRE(created.has_value());
   return std::move(*created);
 }
@@ -61,28 +80,29 @@ void pump_until(scry::Harness &harness, Predicate done,
 struct ScriptedWorld {
   explicit ScriptedWorld(pigpen::core::Config config = {},
                          std::size_t max_result_bytes = 4096)
-      : binding(world, config),
-        harness(make_harness(config, binding, script, max_result_bytes)),
+      : binding(
+            std::make_shared<pigpen::agent::WorldToolBinding>(world, config)),
+        harness(make_harness(config, binding, server, max_result_bytes)),
         conversation(make_conversation()),
         transport(harness, conversation,
                   {.on_tool_request = [this](const scry::ToolRequest &)
                        -> std::optional<scry::ToolRejection> {
-                     return binding.admit(logging_failed);
+                     return binding->admit(logging_failed);
                    },
                    .on_tool_call =
                        [this](const scry::ToolCall &call) {
-                         binding.observe(call);
+                         binding->observe(call);
                          calls.push_back(call);
                        },
                    .on_turn_finished =
-                       [this] { binding.flush_pending_activity(); }}) {
-    binding.on_activity = [this](pigpen::core::ToolActivity activity) {
+                       [this] { binding->flush_pending_activity(); }}) {
+    binding->on_activity = [this](pigpen::core::ToolActivity activity) {
       activities.push_back(std::move(activity));
     };
   }
 
   void enqueue(std::string body) {
-    script.enqueue({.body_chunks = {std::move(body)}});
+    server.enqueue({.body_chunks = {std::move(body)}});
   }
 
   void send() {
@@ -97,8 +117,8 @@ struct ScriptedWorld {
   }
 
   pigpen::world::World world{37};
-  pigpen::agent::WorldToolBinding binding;
-  scry::testing::ScriptedTransport script;
+  std::shared_ptr<pigpen::agent::WorldToolBinding> binding;
+  scry::testing::ScriptedServer server{make_server()};
   scry::Harness harness;
   scry::Conversation conversation;
   pigpen::agent::ScryTurnTransport transport;
@@ -136,10 +156,10 @@ TEST_CASE(
 
 TEST_CASE("world tools export their reflected contract without a harness") {
   pigpen::world::World world{37};
-  pigpen::agent::WorldToolBinding binding{world, {}};
-  auto registry = binding.registry();
-  REQUIRE(registry);
-  auto manifest = registry->to_json();
+  const auto registry =
+      make_registry(std::make_shared<pigpen::agent::WorldToolBinding>(
+          world, pigpen::core::Config{}));
+  auto manifest = registry.to_json();
   REQUIRE(manifest);
   const auto tools = nlohmann::json::parse(manifest->text).at("tools");
   REQUIRE(tools.size() == 3);
@@ -177,6 +197,8 @@ TEST_CASE("Scry bounds requested calls across batches and resets each turn") {
 
   REQUIRE(run.outcome->status == TurnStatus::completed);
   REQUIRE(run.outcome->tool_stats);
+  // One request per round: two tool rounds, then the final answer.
+  CHECK(run.outcome->attempts == 3);
   CHECK(run.outcome->tool_stats->rounds == 2);
   CHECK(run.outcome->tool_stats->calls == 6);
   CHECK(run.outcome->tool_stats->rejected_calls == 2);
@@ -200,7 +222,7 @@ TEST_CASE("Scry bounds requested calls across batches and resets each turn") {
   CHECK(activity.index == 1);
   CHECK(activity.arguments_json == run.calls[3].arguments.text);
   CHECK(activity.result_json == run.calls[3].result.text);
-  const auto requests = run.script.requests();
+  const auto requests = run.server.requests();
   REQUIRE(requests.size() == 3);
   const auto body = nlohmann::json::parse(requests.back().body);
   bool found = false;
@@ -266,7 +288,7 @@ TEST_CASE(
   run.send();
   run.finish();
   REQUIRE(run.outcome->status == TurnStatus::completed);
-  const auto request = run.script.requests().back().body;
+  const auto request = run.server.requests().back().body;
   CHECK(request.find("executed") != std::string::npos);
   CHECK(request.find("dropped-") == std::string::npos);
 }
@@ -274,7 +296,7 @@ TEST_CASE(
 TEST_CASE("logging failure stops a batch after an action without discarding "
           "history") {
   ScriptedWorld run;
-  run.binding.on_activity = [&run](pigpen::core::ToolActivity activity) {
+  run.binding->on_activity = [&run](pigpen::core::ToolActivity activity) {
     run.activities.push_back(std::move(activity));
     run.logging_failed = true;
   };
@@ -361,9 +383,9 @@ TEST_CASE("eating the final positive item refuses later actions in the batch") {
 TEST_CASE(
     "Scry transport rejects overlapping sends and delivers cancellation") {
   ScriptedWorld run;
-  run.script.enqueue({.hold = true});
+  run.server.enqueue({.hold = true});
   run.send();
-  pump_until(run.harness, [&run] { return run.script.calls() == 1; });
+  REQUIRE(run.server.wait_for_request(1));
   CHECK_FALSE(run.transport.send("overlap", {}));
   REQUIRE(run.transport.cancel());
   run.finish();
@@ -378,12 +400,12 @@ TEST_CASE("destroying the Scry transport suppresses late delivery") {
   std::size_t completions{};
   auto transport = std::make_unique<pigpen::agent::ScryTurnTransport>(
       run.harness, run.conversation);
-  run.script.enqueue({.hold = true});
+  run.server.enqueue({.hold = true});
   REQUIRE(transport->send(
       "Continue.", {.on_finished = [&completions](auto) { ++completions; }}));
-  pump_until(run.harness, [&run] { return run.script.calls() == 1; });
+  REQUIRE(run.server.wait_for_request(1));
   transport.reset();
-  run.script.release();
+  run.server.release();
   pump_until(run.harness, [&run] { return !run.conversation.busy(); });
   CHECK(completions == 0);
   CHECK(run.conversation.messages().empty());
@@ -422,7 +444,7 @@ TEST_CASE("the provider sampling seed is sent only when configured") {
     run.send();
     run.finish();
     REQUIRE(run.outcome->status == TurnStatus::completed);
-    const auto requests = run.script.requests();
+    const auto requests = run.server.requests();
     REQUIRE(requests.size() == 1);
     return nlohmann::json::parse(requests.front().body);
   };
@@ -430,6 +452,27 @@ TEST_CASE("the provider sampling seed is sent only when configured") {
   const auto seeded = sent_seed(4'294'967'295U);
   CHECK(seeded.at("seed") == 4'294'967'295U);
   CHECK_FALSE(sent_seed(std::nullopt).contains("seed"));
+}
+
+TEST_CASE("provider failures keep Scry's diagnostics and attempt count") {
+  ScriptedWorld run;
+  run.server.enqueue({.status = 503});
+  run.enqueue(openai_text_stream("Recovered."));
+  run.send();
+  run.finish();
+  REQUIRE(run.outcome->status == TurnStatus::completed);
+  CHECK(run.outcome->attempts == 2);
+
+  run.server.enqueue(
+      {.status = 404,
+       .body_chunks = {openai_error_body(404, "model_not_found")}});
+  run.send();
+  run.finish();
+  CHECK(run.outcome->status == TurnStatus::error);
+  CHECK(run.outcome->attempts == 1);
+  CHECK(run.outcome->error ==
+        "provider rejected the request (HTTP 404, openai:model_not_found)");
+  CHECK_FALSE(run.outcome->tool_stats);
 }
 
 TEST_CASE("truncated Scry completions remain terminal Pig Pen errors") {
@@ -462,7 +505,7 @@ TEST_CASE("world side effects remain observable if Scry cannot post a result") {
         {.max_callbacks = 1});
     REQUIRE_FALSE(run.outcome);
     REQUIRE(run.activities.empty());
-    run.binding.flush_pending_activity();
+    run.binding->flush_pending_activity();
     REQUIRE(run.activities.size() == 1);
   }
   run.finish();
@@ -476,6 +519,6 @@ TEST_CASE("world side effects remain observable if Scry cannot post a result") {
   CHECK_FALSE(run.activities.front().result_dispatched);
   CHECK(run.activities.front().arguments_json == "null");
   CHECK(run.activities.front().result_json == "null");
-  run.binding.flush_pending_activity();
+  run.binding->flush_pending_activity();
   CHECK(run.activities.size() == 1);
 }

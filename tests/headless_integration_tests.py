@@ -259,6 +259,7 @@ def test_valid_move(executable: str) -> None:
     check(tools == [expected_tool], f"tool records: {tools!r}")
     expected_turn = {
         "assistant_text": FINAL_TEXT,
+        "attempts": 2,
         "tool_calls": 1,
         "scry_tools": SCRY_ONE_CALL,
     }

@@ -130,6 +130,7 @@ struct [[= scry::reflection::tag{"turn"}]] TurnLogRecord {
   std::string_view error{};
   std::uint64_t input_tokens{};
   std::uint64_t output_tokens{};
+  std::uint32_t attempts{};
   std::size_t tool_calls{};
   std::optional<core::TurnToolStats> scry_tools{};
   bool zero_tool_turn{};
@@ -324,6 +325,7 @@ MetricsWriter::record_turn(const core::TurnRecord &record) {
           .error = record.error,
           .input_tokens = record.input_tokens,
           .output_tokens = record.output_tokens,
+          .attempts = record.attempts,
           .tool_calls = record.tool_calls,
           .scry_tools = record.tool_stats,
           .zero_tool_turn = record.status == core::TurnStatus::completed &&

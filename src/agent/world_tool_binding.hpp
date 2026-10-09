@@ -20,17 +20,15 @@ namespace pigpen::agent {
 /// argument decoder, and result encoder from the declaration. Each member
 /// runs the typed world action and stages its ToolActivity; observe() then
 /// joins it to the canonical payload Scry dispatched.
-/// @note Must outlive the single harness adopting registry(). Dispatch and
-/// observation are serial on the pump thread, so only one transition can be
-/// pending.
+/// Register it with `scry::ToolRegistry::add(std::shared_ptr)`: the registry
+/// shares ownership, and the world it references must outlive the harness.
+/// @note Dispatch and observation are serial on the pump thread, so only one
+/// transition can be pending.
 class WorldToolBinding final {
 public:
   WorldToolBinding(world::World &world, const core::Config &config);
   WorldToolBinding(const WorldToolBinding &) = delete;
   WorldToolBinding &operator=(const WorldToolBinding &) = delete;
-
-  /// A registry holding this toolbox, borrowed rather than owned.
-  [[nodiscard]] scry::Result<scry::ToolRegistry> registry();
   /// Refuse further world actions after a log failure or objective completion.
   [[nodiscard]] std::optional<scry::ToolRejection>
   admit(bool logging_failed) const;

@@ -104,9 +104,9 @@ Keep these invariants:
   `EpisodeRunner`. `WorldTools` takes world values and returns the plain
   response types. Make sure that you can test new agent-layer code through one
   of these seams.
-- The standalone tool registry captures stable world bindings. These bindings
-  exist longer than the harness. Transport destruction cancels and disconnects
-  delivery.
+- The standalone tool registry shares ownership of the world bindings. The
+  world exists longer than the harness. Transport destruction cancels and
+  disconnects delivery.
 - Scry owns call admission, the four-request limit, and the round-limit
   completion that keeps history. Calls that are not valid also count for the
   limit. `WorldTools` owns only world semantics and visibility. The exact

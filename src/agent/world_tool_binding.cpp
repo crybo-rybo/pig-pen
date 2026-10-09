@@ -2,7 +2,6 @@
 /// @brief Toolbox registration and correlation with Scry dispatch results.
 #include "agent/world_tool_binding.hpp"
 
-#include <memory>
 #include <utility>
 
 namespace pigpen::agent {
@@ -10,18 +9,6 @@ namespace pigpen::agent {
 WorldToolBinding::WorldToolBinding(world::World &world,
                                    const core::Config &config)
     : world_(world), tools_(world, config) {}
-
-scry::Result<scry::ToolRegistry> WorldToolBinding::registry() {
-  scry::ToolRegistry registry;
-  // The session owns this binding and outlives the harness, so the registry
-  // borrows it through a non-owning pointer.
-  auto added = registry.add(
-      std::shared_ptr<WorldToolBinding>{this, [](WorldToolBinding *) {}});
-  if (!added) {
-    return std::unexpected(std::move(added.error()));
-  }
-  return registry;
-}
 
 core::MoveToolResponse
 WorldToolBinding::move(const scry::ToolCallContext &context,

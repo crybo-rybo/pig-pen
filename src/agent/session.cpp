@@ -22,7 +22,7 @@ struct Session::Impl {
   Impl(core::Config initial_config,
        std::unique_ptr<MetricsWriter> initial_metrics,
        std::unique_ptr<world::World> initial_world,
-       std::unique_ptr<WorldToolBinding> initial_tools,
+       std::shared_ptr<WorldToolBinding> initial_tools,
        scry::Harness initial_harness, scry::Conversation initial_conversation)
       : config(std::move(initial_config)), world(std::move(initial_world)),
         metrics(std::move(initial_metrics)), tools(std::move(initial_tools)),
@@ -73,8 +73,9 @@ struct Session::Impl {
   std::unique_ptr<world::World> world;
   core::ToolActivityFeed activities{};
   std::unique_ptr<MetricsWriter> metrics;
-  // Destruction runs in reverse: bindings and world outlive the harness.
-  std::unique_ptr<WorldToolBinding> tools;
+  // Destruction runs in reverse: the world outlives the harness, and the
+  // harness's registry releases its share of the bindings first.
+  std::shared_ptr<WorldToolBinding> tools;
   scry::Harness harness;
   scry::Conversation conversation;
   ScryTurnTransport transport;
@@ -102,15 +103,15 @@ Session::create(core::Config config, std::filesystem::path log_directory,
     return std::unexpected(conversation.error().message);
   }
   auto world = std::make_unique<world::World>(config.seed);
-  auto tools = std::make_unique<WorldToolBinding>(*world, config);
-  auto registry = tools->registry();
-  if (!registry) {
-    return std::unexpected(registry.error().message);
+  auto tools = std::make_shared<WorldToolBinding>(*world, config);
+  scry::ToolRegistry registry;
+  if (auto added = registry.add(tools); !added) {
+    return std::unexpected(added.error().message);
   }
   const auto *api_key = std::getenv("PIGPEN_API_KEY");
   auto harness = scry::Harness::create(
       scry_config(config, api_key == nullptr ? "" : api_key),
-      std::move(*registry));
+      std::move(registry));
   if (!harness) {
     return std::unexpected(harness.error().message);
   }
