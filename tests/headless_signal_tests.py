@@ -110,6 +110,11 @@ def main() -> int:
             fail(f"log has no terminal footer: {records}")
         if records[0].get("model") != expected_model:
             fail(f"log changed the model identifier: {records[0]}")
+        turns = [record for record in records if record.get("type") == "turn"]
+        if len(turns) != 1 or turns[0].get("status") != "cancelled":
+            fail(f"expected one cancelled turn: {turns}")
+        if "attempts" not in turns[0] or turns[0]["attempts"] is not None:
+            fail(f"cancelled turn reports an unavailable attempt count: {turns[0]}")
         footer = records[-1]
         if footer.get("complete") is not True:
             fail(f"signal footer is not complete: {footer}")

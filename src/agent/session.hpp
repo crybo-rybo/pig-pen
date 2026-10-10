@@ -30,8 +30,9 @@ struct PumpStats {
 /// resets the world, conversation, additive tool registry, callbacks, and
 /// log.
 ///
-/// The harness adopts a standalone tool registry whose bindings and world
-/// outlive it; turn delivery is disconnected before any state is destroyed.
+/// The harness adopts a standalone tool registry that shares ownership of the
+/// bindings; the world outlives it, and turn delivery is disconnected before
+/// any state is destroyed.
 class Session final {
 public:
   /// @brief Validate @p config and compose the world, registered harness,

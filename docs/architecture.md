@@ -69,15 +69,17 @@ Two seams make this layer testable:
   tests use this seam to examine world behavior, fixed response shapes, and
   scenario visibility without reflection, JSON, or a registry.
 
-The public `scry::testing` component tests the real bindings, the transport,
-the tool budgets, and the transactional history with scripted provider
-streams.
+The public `scry::testing::ScriptedServer` tests the real bindings, the
+transport, the tool budgets, and the transactional history. It is a scripted
+HTTP server on loopback, so these tests also run libcurl and the Scry stream
+decoders.
 
 ### Reflection is the tool boundary
 
 `WorldToolBinding` is a Scry toolbox. Its `move`, `look`, and `eat` member
 functions have `scry::reflection::tool` annotations. Before Pig Pen creates the
-harness, `registry()` adds the binding to a standalone `scry::ToolRegistry`.
+harness, `Session` adds a `std::shared_ptr` to the binding to a standalone
+`scry::ToolRegistry`. The registry shares the ownership of the binding.
 Scry then does these steps for each tool:
 
 - It gives the tool the name of its function.
@@ -130,8 +132,9 @@ possible. To start again, destroy the session and create a new one. The GUI
 and the scenario do not change an active episode. The GUI shows "Pending
 settings apply on Reset" instead.
 
-The session keeps the bindings and the world at stable addresses. They exist
-longer than the harness that adopts their registry. During destruction, the
+The session keeps the world at a stable address. It exists longer than the
+harness that adopts the registry. The session and the registry share the
+bindings. During destruction, the
 session first flushes pending world activity while the runner and the log are
 still available. Then it cancels and disconnects the transport.
 

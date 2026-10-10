@@ -74,6 +74,7 @@ TEST_CASE("metrics log contains a reconcilable header tool turn and footer") {
                   .turn = 1,
                   .status = pigpen::core::TurnStatus::completed,
                   .assistant_text = "ate a berry",
+                  .attempts = 3,
                   .tool_calls = 1,
                   .latency = std::chrono::milliseconds{12},
                   .tool_stats =
@@ -114,6 +115,7 @@ TEST_CASE("metrics log contains a reconcilable header tool turn and footer") {
   REQUIRE(records[2].at("type") == "turn");
   REQUIRE(records[2].at("tool_calls") == 1);
   REQUIRE(records[2].at("zero_tool_turn") == false);
+  CHECK(records[2].at("attempts") == 3);
   CHECK(records[2].at("scry_tools") ==
         nlohmann::json{{"rounds", 2},
                        {"calls", 4},

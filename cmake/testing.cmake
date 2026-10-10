@@ -1,6 +1,6 @@
 # Two Catch2 binaries (a C++23 one, and a reflection one that links scry),
 # CLI checks against the headless binary, and Python loopback tests. No model
-# server or network needed.
+# server or external network needed; HTTP tests listen on loopback.
 
 include(CTest)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)

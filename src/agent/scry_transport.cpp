@@ -2,6 +2,10 @@
 /// @brief ScryTurnTransport implementation; the contract is in the header.
 #include "agent/scry_transport.hpp"
 
+#include <functional>
+#include <optional>
+#include <string>
+#include <string_view>
 #include <utility>
 
 namespace pigpen::agent {
@@ -22,6 +26,79 @@ namespace {
     break;
   }
   return "model response ended for an unknown reason";
+}
+
+/// @brief Scry's generic message plus the sanitized provider diagnostics it
+/// carries beside it, e.g. "provider rejected the request (HTTP 404,
+/// openai:model_not_found)".
+[[nodiscard]] std::string describe(scry::Error error) {
+  std::string details;
+  const auto add = [&details](const std::string_view detail) {
+    details += details.empty() ? " (" : ", ";
+    details += detail;
+  };
+  if (error.http_status != 0) {
+    add("HTTP " + std::to_string(error.http_status));
+  }
+  if (!error.provider_detail.empty()) {
+    add(error.provider_detail);
+  }
+  if (!error.provider_request_id.empty()) {
+    add("request " + error.provider_request_id);
+  }
+  return details.empty() ? std::move(error.message)
+                         : std::move(error.message) + details + ")";
+}
+
+[[nodiscard]] core::TurnOutcome
+to_outcome(scry::Result<scry::Completion> finished) {
+  if (!finished) {
+    const auto status =
+        finished.error().category == scry::ErrorCategory::cancelled
+            ? core::TurnStatus::cancelled
+            : core::TurnStatus::error;
+    // Scry 0.7 synthesizes cancellation errors without an attempt count,
+    // even after requests reached the provider. Do not report that as zero.
+    const auto attempts =
+        status == core::TurnStatus::cancelled && finished.error().attempt == 0
+            ? std::nullopt
+            : std::optional{finished.error().attempt};
+    return {
+        .status = status,
+        .error = describe(std::move(finished.error())),
+        .attempts = attempts,
+    };
+  }
+  auto reason_error = finish_reason_error(finished->finish_reason);
+  return {
+      .status = reason_error.empty() ? core::TurnStatus::completed
+                                     : core::TurnStatus::error,
+      .text = std::move(finished->text),
+      .error = std::move(reason_error),
+      .input_tokens = finished->usage.input_tokens,
+      .output_tokens = finished->usage.output_tokens,
+      .attempts = finished->attempt_count,
+      .tool_stats =
+          core::TurnToolStats{
+              .rounds = finished->tool_round_count,
+              .calls = finished->tool_call_count,
+              .rejected_calls = finished->rejected_tool_call_count,
+              .round_limit_reached = finished->finish_reason ==
+                                     scry::FinishReason::tool_round_limit,
+              .unexecuted_calls = finished->unexecuted_tool_calls.size(),
+          },
+  };
+}
+
+/// @brief An empty std::function becomes an empty Scry callback, so Scry
+/// skips that delivery instead of calling a wrapper that does nothing.
+template <typename Signature>
+[[nodiscard]] scry::UniqueFunction<Signature>
+optional_callback(std::function<Signature> callback) {
+  if (!callback) {
+    return nullptr;
+  }
+  return std::move(callback);
 }
 
 } // namespace
@@ -71,72 +148,25 @@ ScryTurnTransport::send(std::string user_message,
 
   auto result = harness_.send(
       conversation_, std::move(user_message),
-      scry::TurnCallbacks{
+      {
           .on_text_delta =
-              [callback = std::move(callbacks.on_text_delta)](
-                  const std::string_view delta) mutable {
-                if (callback) {
-                  callback(delta);
-                }
-              },
-          .on_tool_request =
-              [this](const scry::ToolRequest &request) {
-                return observers_.on_tool_request
-                           ? observers_.on_tool_request(request)
-                           : std::nullopt;
-              },
-          .on_tool_call =
-              [this](const scry::ToolCall &call) {
-                if (observers_.on_tool_call) {
-                  observers_.on_tool_call(call);
-                }
-              },
+              optional_callback(std::move(callbacks.on_text_delta)),
+          // The observers serve every turn, so each turn gets copies.
+          .on_tool_request = optional_callback(observers_.on_tool_request),
+          .on_tool_call = optional_callback(observers_.on_tool_call),
           .on_finished =
               [this, callback = std::move(callbacks.on_finished)](
                   scry::Result<scry::Completion> finished) mutable {
                 if (observers_.on_turn_finished) {
                   observers_.on_turn_finished();
                 }
-                if (!callback) {
-                  return;
+                if (callback) {
+                  callback(to_outcome(std::move(finished)));
                 }
-                if (!finished) {
-                  callback({
-                      .status = finished.error().category ==
-                                        scry::ErrorCategory::cancelled
-                                    ? core::TurnStatus::cancelled
-                                    : core::TurnStatus::error,
-                      .text = {},
-                      .error = std::move(finished.error().message),
-                  });
-                  return;
-                }
-                const auto reason_error =
-                    finish_reason_error(finished->finish_reason);
-                callback({
-                    .status = reason_error.empty() ? core::TurnStatus::completed
-                                                   : core::TurnStatus::error,
-                    .text = std::move(finished->text),
-                    .error = reason_error,
-                    .input_tokens = finished->usage.input_tokens,
-                    .output_tokens = finished->usage.output_tokens,
-                    .tool_stats =
-                        core::TurnToolStats{
-                            .rounds = finished->tool_round_count,
-                            .calls = finished->tool_call_count,
-                            .rejected_calls =
-                                finished->rejected_tool_call_count,
-                            .round_limit_reached =
-                                finished->finish_reason ==
-                                scry::FinishReason::tool_round_limit,
-                            .unexecuted_calls =
-                                finished->unexecuted_tool_calls.size(),
-                        },
-                });
               },
       });
   if (!result) {
-    return std::unexpected(result.error().message);
+    return std::unexpected(describe(std::move(result.error())));
   }
   turn_.emplace(std::move(*result));
   return {};

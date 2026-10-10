@@ -180,6 +180,7 @@ void EpisodeRunner::process_pending_outcome() {
         .error = outcome.error,
         .input_tokens = outcome.input_tokens,
         .output_tokens = outcome.output_tokens,
+        .attempts = outcome.attempts,
         .tool_calls = tool_calls,
         .latency = snapshot_.last_turn_latency,
         .tool_stats = outcome.tool_stats,
