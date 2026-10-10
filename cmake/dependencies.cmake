@@ -7,7 +7,7 @@
 #   cmake --preset dev -DFETCHCONTENT_SOURCE_DIR_SCRY=/absolute/path/to/scry
 include(FetchContent)
 
-# scry::testing (the scripted transport) is only needed by the test suite.
+# scry::testing (the scripted HTTP server) is only needed by the test suite.
 set(SCRY_BUILD_TESTING_SUPPORT ${PIGPEN_BUILD_TESTS} CACHE BOOL "" FORCE)
 
 # Deprecated compatibility alias for FETCHCONTENT_SOURCE_DIR_SCRY. It resolves

@@ -51,8 +51,9 @@ ctest --preset dev -R world                      # by CTest name
 ./build/dev/pigpen_reflection_tests --list-tests # reflection-isolated binary
 ```
 
-The suite does not use a model server or a network. Warnings are errors only
-for Pig Pen code. `.github/workflows/ci.yml` enforces the format with
+The suite does not use a model server or external network access. HTTP tests
+listen on loopback. Warnings are errors only for Pig Pen code.
+`.github/workflows/ci.yml` enforces the format with
 clang-format 22.1.8. Use the same major version locally. `.clang-tidy` is
 advisory. It runs only on the C++23 TUs (`src/world`, `src/core`, `src/ui`),
 because clang cannot parse the `-freflection` TUs in `src/agent`.

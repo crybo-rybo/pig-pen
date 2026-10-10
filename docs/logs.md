@@ -89,7 +89,7 @@ the turn completes.
 | `tool_calls` | The number of reflected handler calls in this turn that Scry decoded successfully. |
 | `zero_tool_turn` | `true` for a turn with only narration, or with only calls that are not valid. Use it to find these turns easily in a query. |
 | `input_tokens`, `output_tokens` | Token counts from the provider. |
-| `attempts` | The number of provider requests in the turn. Scry sends one request for each tool round and one for the final answer. Retries after a transient failure also count. If the turn fails, this is the number of the request that failed. It is 0 if the turn stops before the first request. |
+| `attempts` | The number of provider requests in the turn, including retries. If the turn fails, this is the number of the request that failed. It is 0 if no request was attempted, or `null` when Scry does not report the count. Scry v0.7.0 omits the count for cancelled turns, even if requests were sent. |
 | `latency_ms` | The duration of the turn. Pig Pen measures it locally. |
 | `scry_tools` | Statistics from the Scry completion. Refer to the table below. |
 

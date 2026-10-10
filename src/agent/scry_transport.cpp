@@ -3,6 +3,7 @@
 #include "agent/scry_transport.hpp"
 
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -56,7 +57,12 @@ to_outcome(scry::Result<scry::Completion> finished) {
         finished.error().category == scry::ErrorCategory::cancelled
             ? core::TurnStatus::cancelled
             : core::TurnStatus::error;
-    const auto attempts = finished.error().attempt;
+    // Scry 0.7 synthesizes cancellation errors without an attempt count,
+    // even after requests reached the provider. Do not report that as zero.
+    const auto attempts =
+        status == core::TurnStatus::cancelled && finished.error().attempt == 0
+            ? std::nullopt
+            : std::optional{finished.error().attempt};
     return {
         .status = status,
         .error = describe(std::move(finished.error())),

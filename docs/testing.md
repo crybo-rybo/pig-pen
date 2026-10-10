@@ -45,7 +45,7 @@ items:
 |---|---|
 | `tests/world_tests.cpp` | Grid constants, item placement from the seed, movement, and wall failures. `look` rays, the `eat` action, and the score. The end of positive items, and seed determinism with `World::dump()`. |
 | `tests/world_tools_tests.cpp` | flat typed responses, and the `opaque_look` and `reward_feedback` toggles |
-| `tests/scry_transport_tests.cpp` | These tests use `scry::testing::ScriptedServer`, so each scripted turn goes through libcurl and HTTP. They test compile-time reflected schemas, the public Scry encoder, and standalone registry manifests. They test native call budgets across batches and turns, and decode errors that the model sees. They test exact dispatch payloads and identity, and side effects of a dispatch failure and of shutdown. They also test admission after objective completion and log failure, history preservation at the round limit, cancellation, and transport lifetime. They test the attempt count after a retry, and the HTTP status and provider error code in a turn error. |
+| `tests/scry_transport_tests.cpp` | These tests use `scry::testing::ScriptedServer`, so each scripted turn goes through libcurl and HTTP. They test compile-time reflected schemas, the public Scry encoder, and standalone registry manifests. They test native call budgets across batches and turns, and decode errors that the model sees. They test exact dispatch payloads and identity, and side effects of a dispatch failure and of shutdown. They also test admission after objective completion and log failure, history preservation at the round limit, cancellation, and transport lifetime. They test attempt counts after retries, cancellation, and round limits, including a provider failure after a tool round. They check the HTTP status, provider error code, and request ID in a turn error. |
 | `tests/prompt_tests.cpp` | config defaults, and that each prompt flag does what it claims. This includes hidden rewards, and the separation of automatic recovery instructions from human guidance. |
 | `tests/episode_runner_tests.cpp` | the turn loop with a scripted transport: budget exhaustion, pause and resume, a stop that cancels an active turn, objective completion, terminal errors and log errors, and queued human input |
 | `tests/metrics_writer_tests.cpp` | header, tool, turn, and footer reconciliation, the incomplete footer at destruction, and footer finality |
@@ -74,8 +74,9 @@ items:
      identifier.
   3. It makes sure that the HTTP request and the JSONL header have that
      identifier.
-  4. It makes sure that the exit status is `128 + signal`, *and* that the
-     JSONL file still ends with a final footer.
+  4. It makes sure that the exit status is `128 + signal`, that the cancelled
+     turn records its unavailable attempt count as `null`, and that the JSONL
+     file still ends with a final footer.
 
 When the tests are on, Python 3 is necessary. The two signal tests register
 only on UNIX. The loopback integration test runs on all supported platforms.

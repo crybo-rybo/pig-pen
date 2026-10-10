@@ -273,6 +273,7 @@ TEST_CASE(
   run.finish();
   REQUIRE(run.outcome->status == TurnStatus::completed);
   REQUIRE(run.outcome->tool_stats);
+  CHECK(run.outcome->attempts == 2);
   CHECK(run.outcome->tool_stats->round_limit_reached);
   CHECK(run.outcome->tool_stats->unexecuted_calls == 2);
   CHECK(run.outcome->tool_stats->calls == 1);
@@ -390,6 +391,7 @@ TEST_CASE(
   REQUIRE(run.transport.cancel());
   run.finish();
   CHECK(run.outcome->status == TurnStatus::cancelled);
+  CHECK_FALSE(run.outcome->attempts.has_value());
   CHECK_FALSE(run.outcome->tool_stats);
   CHECK(run.conversation.messages().empty());
   CHECK_FALSE(run.transport.cancel());
@@ -475,6 +477,36 @@ TEST_CASE("provider failures keep Scry's diagnostics and attempt count") {
   CHECK_FALSE(run.outcome->tool_stats);
 }
 
+TEST_CASE("provider failure after a tool round keeps request identity and "
+          "counts retries") {
+  ScriptedWorld run;
+  run.enqueue(openai_tool_stream({
+      {.id = "executed",
+       .name = "move",
+       .arguments = R"({"direction":"east"})"},
+  }));
+  run.server.enqueue({.status = 503});
+  run.server.enqueue(
+      {.status = 404,
+       .headers = {{"x-request-id", "req-followup"}},
+       .body_chunks = {openai_error_body(404, "model_not_found")}});
+  run.send();
+  run.finish();
+
+  REQUIRE(run.outcome->status == TurnStatus::error);
+  CHECK(run.outcome->attempts == 3);
+  CHECK(run.outcome->error ==
+        "provider rejected the request (HTTP 404, openai:model_not_found, "
+        "request req-followup)");
+  CHECK_FALSE(run.outcome->tool_stats);
+  CHECK(run.server.requests().size() == 3);
+  REQUIRE(run.activities.size() == 1);
+  CHECK(run.activities.front().call_id == "executed");
+  CHECK(run.activities.front().result_dispatched);
+  CHECK(run.world.position() == (pigpen::world::Position{6, 5}));
+  CHECK(run.conversation.messages().empty());
+}
+
 TEST_CASE("truncated Scry completions remain terminal Pig Pen errors") {
   ScriptedWorld run;
   auto body = openai_text_stream("Incomplete.");
@@ -486,6 +518,7 @@ TEST_CASE("truncated Scry completions remain terminal Pig Pen errors") {
   run.send();
   run.finish();
   CHECK(run.outcome->status == TurnStatus::error);
+  CHECK(run.outcome->attempts == 1);
   CHECK(run.outcome->error.find("output-token limit") != std::string::npos);
 }
 

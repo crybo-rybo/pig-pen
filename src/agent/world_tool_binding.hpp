@@ -27,6 +27,7 @@ namespace pigpen::agent {
 class WorldToolBinding final {
 public:
   WorldToolBinding(world::World &world, const core::Config &config);
+  ~WorldToolBinding();
   WorldToolBinding(const WorldToolBinding &) = delete;
   WorldToolBinding &operator=(const WorldToolBinding &) = delete;
   /// Refuse further world actions after a log failure or objective completion.

@@ -10,6 +10,11 @@ WorldToolBinding::WorldToolBinding(world::World &world,
                                    const core::Config &config)
     : world_(world), tools_(world, config) {}
 
+// Out-of-line destruction avoids GCC 16.0.1's -O3 speculative devirtualization
+// diagnosing this destructor for unrelated shared_ptr control blocks, such as
+// nlohmann/json's assertion diagnostics in the reflection tests.
+WorldToolBinding::~WorldToolBinding() = default;
+
 core::MoveToolResponse
 WorldToolBinding::move(const scry::ToolCallContext &context,
                        const DirectionArguments arguments) {

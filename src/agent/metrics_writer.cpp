@@ -130,7 +130,7 @@ struct [[= scry::reflection::tag{"turn"}]] TurnLogRecord {
   std::string_view error{};
   std::uint64_t input_tokens{};
   std::uint64_t output_tokens{};
-  std::uint32_t attempts{};
+  std::optional<std::uint32_t> attempts{};
   std::size_t tool_calls{};
   std::optional<core::TurnToolStats> scry_tools{};
   bool zero_tool_turn{};
