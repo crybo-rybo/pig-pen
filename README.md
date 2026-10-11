@@ -5,6 +5,8 @@ the model while it plays. In the pen, the model is a blob. The blob can get data
 about the pen only through three tools: `look`, `move`, and `eat`. Pig Pen
 registers these tools with [Scry](https://github.com/crybo-rybo/scry).
 
+![The Pig Pen GUI at the start of an episode. The blob does a look action to the north.](docs/images/pig-pen-gui.png)
+
 You see all of the pen:
 
 - the full grid
