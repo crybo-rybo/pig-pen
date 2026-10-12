@@ -1,5 +1,7 @@
 # pig-pen
 
+[![ci](https://github.com/crybo-rybo/pig-pen/actions/workflows/ci.yml/badge.svg)](https://github.com/crybo-rybo/pig-pen/actions/workflows/ci.yml)
+
 Pig Pen puts a locally hosted LLM into a deterministic 10×10 pen. You can watch
 the model while it plays. In the pen, the model is a blob. The blob can get data
 about the pen only through three tools: `look`, `move`, and `eat`. Pig Pen
@@ -7,14 +9,18 @@ registers these tools with [Scry](https://github.com/crybo-rybo/scry).
 
 ![The Pig Pen GUI at the start of an episode. The blob does a look action to the north.](docs/images/pig-pen-gui.png)
 
-You see all of the pen:
+The GUI shows all of the pen in six panels:
 
-- the full grid
-- the cells that the model has observed (its fog of war)
-- the streamed model output
-- each decoded world-tool call and its result
-- live statistics
-- a JSONL log of the run
+- **World**: the full grid, and the cells that the model observed (its fog of
+  war)
+- **Transcript**: the turn instructions and the streamed model output
+- **Event Log**: each decoded world-tool call and its result
+- **Stats**: the score, the turns, and the call count for each tool
+- **Controls**: the connection, the scenario, the seed, and the episode
+  buttons
+- **Guidance**: your messages to the model, one message for each turn
+
+Each episode also writes a JSONL log of the run.
 
 Two front ends use the same world, prompt, tools, episode runner, and logger:
 
@@ -35,6 +41,21 @@ Two front ends use the same world, prompt, tools, episode runner, and logger:
   over an item, it does *not* collect that item.
 - The same seed and the same actions always make the same world.
 
+## Scenarios
+
+Three flags change the data that Pig Pen gives to the model. The world, the
+score, and the log always record the true values.
+
+| flag | effect |
+|---|---|
+| `--hidden-values` | The system prompt does not show the item values. The model can find the values only from the tool results. |
+| `--no-reward-feedback` | The `reward` and `score` fields in `eat` results are `null`. |
+| `--opaque-look` | `look` shows an occupied cell as `"something"`. It does not name the item. |
+
+In the GUI, use the **Scenario** preset dropdown in the **Controls** panel. The
+**Blind learning** preset sets all three flags. For more data, refer to
+[What the model sees](docs/world.md#what-the-model-sees).
+
 ## Quick start
 
 Before you build Pig Pen, install these tools:
@@ -45,6 +66,7 @@ Before you build Pig Pen, install these tools:
 - libcurl
 - Python 3 (for the tests)
 - OpenGL 3.2 or later (for the GUI)
+- `just` (optional). The short commands in this file use it.
 
 CMake gets all other dependencies. For the setup on each platform (macOS
 also), refer to [Build Pig Pen](docs/building.md).
@@ -81,6 +103,20 @@ cmake --build --preset dev
 If you start the GUI without `--model`, the GUI waits until you select a model.
 Each episode writes a log file, `logs/<timestamp>-<model>-<seed>.jsonl`. You
 can examine this file after the episode.
+
+## Development
+
+Use these commands to test Pig Pen and to do the CI checks on your computer:
+
+```sh
+just test   # build the dev preset, then run the test suite
+just ci     # do all of the GitHub PR checks
+just fmt    # format the C++ code and the Python tests
+```
+
+The test suite does not use a model server or external network access.
+`just fmt` and `just ci` use `uvx` to get the pinned clang-format and ruff
+versions. For more data, refer to [Test Pig Pen](docs/testing.md).
 
 ## Documentation
 
