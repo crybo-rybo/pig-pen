@@ -1,7 +1,5 @@
 # pig-pen
 
-[![ci](https://github.com/crybo-rybo/pig-pen/actions/workflows/ci.yml/badge.svg)](https://github.com/crybo-rybo/pig-pen/actions/workflows/ci.yml)
-
 Pig Pen puts a locally hosted LLM into a deterministic 10×10 pen. You can watch
 the model while it plays. In the pen, the model is a blob. The blob can get data
 about the pen only through three tools: `look`, `move`, and `eat`. Pig Pen
