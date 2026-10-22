@@ -1,0 +1,30 @@
+# Each scenario flag, and all three together, on the same five seeds.
+name = "scenarios"
+description = "Five scenarios, five seeds, 20 turns at temperature 0."
+seeds = [1, 2, 3, 4, 5]
+turns = 20
+max_tool_rounds = 8
+temperature = 0.0
+sampling_seed = 0
+timeout_seconds = 900
+
+[[scenarios]]
+name = "default"
+
+[[scenarios]]
+name = "hidden-values"
+hidden_values = true
+
+[[scenarios]]
+name = "no-reward-feedback"
+no_reward_feedback = true
+
+[[scenarios]]
+name = "opaque-look"
+opaque_look = true
+
+[[scenarios]]
+name = "blind"
+hidden_values = true
+no_reward_feedback = true
+opaque_look = true

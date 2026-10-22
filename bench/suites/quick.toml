@@ -1,0 +1,12 @@
+# A smoke check: does the model call the tools at all?
+name = "quick"
+description = "Default scenario, three seeds, 6 turns. A smoke check, not a ranking."
+seeds = [1, 2, 3]
+turns = 6
+max_tool_rounds = 8
+temperature = 0.0
+sampling_seed = 0
+timeout_seconds = 600
+
+[[scenarios]]
+name = "default"

@@ -5,6 +5,19 @@ the model while it plays. In the pen, the model is a blob. The blob can get data
 about the pen only through three tools: `look`, `move`, and `eat`. Pig Pen
 registers these tools with [Scry](https://github.com/crybo-rybo/scry).
 
+## Leaderboard
+
+How well do local models play? Each model plays the same seeded pens, and
+Pig Pen scores each episode. The table shows the `standard` benchmark suite.
+
+<!-- leaderboard:start -->
+
+No results yet — see [docs/benchmark.md](docs/benchmark.md).
+
+<!-- leaderboard:end -->
+
+## Front ends
+
 ![The Pig Pen GUI at the start of an episode. The blob does a look action to the north.](docs/images/pig-pen-gui.png)
 
 The GUI shows all of the pen in six panels:
@@ -110,11 +123,13 @@ Use these commands to test Pig Pen and to do the CI checks on your computer:
 just test   # build the dev preset, then run the test suite
 just ci     # do all of the GitHub PR checks
 just fmt    # format the C++ code and the Python tests
+just bench release --model YOUR_MODEL   # benchmark one or more models
 ```
 
 The test suite does not use a model server or external network access.
 `just fmt` and `just ci` use `uvx` to get the pinned clang-format and ruff
-versions. For more data, refer to [Test Pig Pen](docs/testing.md).
+versions. For more data, refer to [Test Pig Pen](docs/testing.md). To update
+the leaderboard, refer to [Benchmark](docs/benchmark.md).
 
 ## Documentation
 
@@ -123,4 +138,6 @@ versions. For more data, refer to [Test Pig Pen](docs/testing.md).
 - [Test Pig Pen](docs/testing.md): the test suite runs without a model or a network
 - [World and tools](docs/world.md): grid rules, tool schemas, and result JSON
 - [Logs](docs/logs.md): the JSONL record format and `jq` examples
+- [Benchmark](docs/benchmark.md): suites, scoring, and how to publish results
+- [Leaderboard](docs/leaderboard.md): all benchmark results and metrics
 - [Architecture](docs/architecture.md): how the parts work together

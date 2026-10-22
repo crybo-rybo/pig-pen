@@ -97,6 +97,20 @@ add_test(
 )
 set_tests_properties(pigpen_headless_integration PROPERTIES TIMEOUT 45)
 
+# The benchmark tool needs tomllib (Python 3.11). Its tests drive a fake
+# headless binary; the real one only answers --help for the flag contract.
+if(Python3_VERSION VERSION_GREATER_EQUAL 3.11)
+  add_test(
+    NAME pigpen_bench
+    COMMAND
+      "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/bench_tests.py"
+      "$<TARGET_FILE:pig-pen-headless>"
+  )
+  set_tests_properties(pigpen_bench PROPERTIES TIMEOUT 60)
+else()
+  message(STATUS "Python ${Python3_VERSION} < 3.11: skipping pigpen_bench")
+endif()
+
 if(UNIX)
   foreach(signal IN ITEMS SIGINT SIGTERM)
     string(TOLOWER "${signal}" suffix)

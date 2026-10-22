@@ -1,5 +1,6 @@
 /build/
 /logs/
+/bench-runs/
 /compile_commands.json
 /imgui.ini
 .cache/

@@ -1,0 +1,14 @@
+# The leaderboard of record. The README shows its default scenario.
+# Changing any setting except name and description changes the suite
+# fingerprint, so new runs do not mix with old ones.
+name = "standard"
+description = "Default scenario, ten seeds, 20 turns at temperature 0."
+seeds = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+turns = 20
+max_tool_rounds = 8
+temperature = 0.0
+sampling_seed = 0
+timeout_seconds = 900
+
+[[scenarios]]
+name = "default"

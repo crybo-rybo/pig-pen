@@ -19,6 +19,16 @@ run-headless profile="dev" *args: (configure profile)
     cmake --build --preset {{profile}} --target pig-pen-headless
     ./build/{{profile}}/pig-pen-headless {{args}}
 
+# Benchmark models (docs/benchmark.md). The preset comes first:
+# just bench release --model A --model B
+bench profile="release" *args: (configure profile)
+    cmake --build --preset {{profile}} --target pig-pen-headless
+    python3 bench/pigpen_bench.py run --headless ./build/{{profile}}/pig-pen-headless {{args}}
+
+# Aggregate bench-runs/ into bench/results/, then update the leaderboard.
+bench-report *args:
+    python3 bench/pigpen_bench.py report {{args}}
+
 # Same pinned versions as .github/workflows/ci.yml.
 clang_format := "uvx clang-format@22.1.8"
 ruff := "uvx ruff@0.16.1"
@@ -28,14 +38,14 @@ ci_cc := if os() == "macos" { "/usr/bin/cc" } else { "gcc-16" }
 
 fmt:
     git ls-files '*.cpp' '*.hpp' | xargs {{clang_format}} -i
-    {{ruff}} format tests
+    {{ruff}} format tests bench
 
 fmt-check:
     git ls-files '*.cpp' '*.hpp' | xargs {{clang_format}} --dry-run --Werror
-    {{ruff}} format --check tests
+    {{ruff}} format --check tests bench
 
 lint:
-    {{ruff}} check tests
+    {{ruff}} check tests bench
 
 # Everything GitHub runs on a PR. Reuses fetched deps in build/<preset>/.
 ci: fmt-check lint (ci-build-test "dev") (ci-build-test "release") (ci-build-test "headless")

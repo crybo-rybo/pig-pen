@@ -19,6 +19,8 @@ derive data again:
 - `logs.md`: the JSONL record format
 - `running.md`: CLI options, exit codes, and GUI panels
 - `architecture.md`: layers and ownership
+- `benchmark.md`: suites, the exit-code policy, scoring, and publishing
+- `leaderboard.md`: generated from `bench/results/*.json`; do not edit
 
 ## Build and test
 
@@ -33,14 +35,16 @@ just build release         # the other preset
 just run dev --model NAME  # build + start the GUI
 just run-headless dev --model NAME --turns 4 --seed 42
 just ci                    # all GitHub PR checks: fmt-check + lint + dev/release/headless builds and tests
-just fmt                   # clang-format all C++ + ruff format the Python tests
+just fmt                   # clang-format all C++ + ruff format the Python tests and bench/
 just fmt-check             # the CI format check
-just lint                  # ruff check on the Python tests
+just lint                  # ruff check on the Python tests and bench/
+just bench release --model A --model B  # build headless + run the benchmark
+just bench-report          # bench-runs/ -> bench/results/standard.json + README
 ```
 
-CAUTION: `run` and `run-headless` take the preset as the **first** positional
-argument. If you type `just run-headless --model X`, the recipe reads
-`--model` as a preset name.
+CAUTION: `run`, `run-headless`, and `bench` take the preset as the **first**
+positional argument. If you type `just run-headless --model X`, the recipe
+reads `--model` as a preset name.
 
 To run single tests, use these commands:
 
@@ -49,7 +53,13 @@ ctest --preset dev -R world                      # by CTest name
 ./build/dev/pigpen_tests --list-tests            # Catch2 binary directly
 ./build/dev/pigpen_tests "[determinism]"         # by tag
 ./build/dev/pigpen_reflection_tests --list-tests # reflection-isolated binary
+python3 tests/bench_tests.py                     # bench tests, no build needed
 ```
+
+`bench/` is stdlib-only Python (3.11+) that drives `pig-pen-headless` as a
+subprocess and reads its JSONL logs; it never changes the C++.
+`bench/results/*.json` is the committed leaderboard source: `render` writes
+the README markers and `docs/leaderboard.md` from it.
 
 The suite does not use a model server or external network access. HTTP tests
 listen on loopback. Warnings are errors only for Pig Pen code.

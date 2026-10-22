@@ -78,8 +78,19 @@ items:
      turn records its unavailable attempt count as `null`, and that the JSONL
      file still ends with a final footer.
 
-When the tests are on, Python 3 is necessary. The two signal tests register
-only on UNIX. The loopback integration test runs on all supported platforms.
+- `pigpen_bench`: `tests/bench_tests.py` tests the benchmark tool
+  `bench/pigpen_bench.py` with a fake `pig-pen-headless` script. It tests the
+  command line for each scenario, resume, `--retry-errors`, `--force`, the
+  stop on an interrupted episode or on exit code `2` or `4`, and the skip of a
+  model after errors. It tests the preflight and the model metadata against a
+  loopback stub, and the aggregation, the ranking, the report merge, and the
+  README markers. It also makes sure that `pig-pen-headless --help` names each
+  flag that the benchmark sends. You can run it without a binary:
+  `python3 tests/bench_tests.py`. Then the `--help` check is skipped.
+
+When the tests are on, Python 3 is necessary. `pigpen_bench` registers only
+with Python 3.11 or later. The two signal tests register only on UNIX. The
+loopback integration test runs on all supported platforms.
 
 ## Run some of the tests
 
