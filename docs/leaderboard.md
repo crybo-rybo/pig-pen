@@ -7,4 +7,18 @@ This page shows all committed benchmark results. One section shows one suite,
 and one table shows one scenario. For the rules and the definition of each
 column, refer to [Benchmark](benchmark.md#metrics).
 
-No results yet — see [benchmark.md](benchmark.md).
+## Suite `standard`
+
+Default scenario, ten seeds, 20 turns at temperature 0. Fingerprint `6d898600`. Seeds 1–10, 20 turns, 8 tool rounds, temperature 0.0, sampling seed 0, max score 25. Pig Pen `8e55175`. Updated 2026-11-03.
+
+### Scenario `default`
+
+Flags: none.
+
+| # | Model | Params | Quant | Family | Score | Min–max | % of max | Cleared | Toadstools/ep | Turns used | Valid calls | Zero-tool turns | Errors + timeouts | Median latency | Output tokens/turn | Episodes |
+|---:|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | gemma4:12b | 11.9B | Q4\_K\_M | gemma4 | 8.0 ± 6.4 | -4–18 | 32.0% | 0% | 0.1 | 18.7 | 91% | 0% | 1 | 1.6 s | 88 | 10/10 |
+| 2 | qwen3.5:9b-auto | 9.7B | Q4\_K\_M | qwen35 | 6.8 ± 7.7 | 0–19 | 27.2% | 0% | 0.0 | 10.4 | 60% | 0% | 10 | 3.9 s | 369 | 10/10 |
+| 3 | qwen3.5:9b | 9.7B | Q4\_K\_M | qwen35 | 5.7 ± 7.8 | 0–21 | 22.8% | 0% | 0.0 | 17.5 | 54% | 0% | 3 | 3.6 s | 376 | 10/10 |
+| 4 | granite4.1:3b | 3.4B | Q4\_K\_M | granite | 0.1 ± 0.3 | 0–1 | 0.4% | 0% | 0.0 | 20.0 | 100% | 2% | 0 | 0.3 s | 47 | 10/10 |
+| 5 | qwen2.5:7b | 7.6B | Q4\_K\_M | qwen2 | -1.0 ± 3.2 | -10–0 | -4.0% | 0% | 0.2 | 12.5 | 86% | 55% | 4 | 0.3 s | 192 | 10/10 |

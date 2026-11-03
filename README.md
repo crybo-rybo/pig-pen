@@ -12,7 +12,15 @@ Pig Pen scores each episode. The table shows the `standard` benchmark suite.
 
 <!-- leaderboard:start -->
 
-No results yet — see [docs/benchmark.md](docs/benchmark.md).
+| # | Model | Params | Quant | Score | % of max | Cleared | Toadstools/ep | Valid calls | Episodes |
+|---:|---|---|---|---:|---:|---:|---:|---:|---:|
+| 1 | gemma4:12b | 11.9B | Q4\_K\_M | 8.0 ± 6.4 | 32.0% | 0% | 0.1 | 91% | 10/10 |
+| 2 | qwen3.5:9b-auto | 9.7B | Q4\_K\_M | 6.8 ± 7.7 | 27.2% | 0% | 0.0 | 60% | 10/10 |
+| 3 | qwen3.5:9b | 9.7B | Q4\_K\_M | 5.7 ± 7.8 | 22.8% | 0% | 0.0 | 54% | 10/10 |
+| 4 | granite4.1:3b | 3.4B | Q4\_K\_M | 0.1 ± 0.3 | 0.4% | 0% | 0.0 | 100% | 10/10 |
+| 5 | qwen2.5:7b | 7.6B | Q4\_K\_M | -1.0 ± 3.2 | -4.0% | 0% | 0.2 | 86% | 10/10 |
+
+Suite `standard`, scenario `default`. Seeds 1–10, 20 turns, 8 tool rounds, temperature 0.0, sampling seed 0, max score 25. Pig Pen `8e55175`. Updated 2026-11-03. Refer to [Benchmark](docs/benchmark.md) for the rules and to [Leaderboard](docs/leaderboard.md) for all metrics.
 
 <!-- leaderboard:end -->
 
