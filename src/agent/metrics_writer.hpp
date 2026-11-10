@@ -6,12 +6,14 @@
 /// abnormal shutdown leaves a finalized record.
 #pragma once
 
+#include "core/chat_client.hpp"
 #include "core/config.hpp"
 #include "core/episode_runner.hpp"
 #include "core/events.hpp"
 
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <expected>
 #include <filesystem>
 #include <fstream>
@@ -38,13 +40,17 @@ public:
     std::size_t eat{};
   };
 
+  /// @brief The JSONL format version that the header records.
+  static constexpr std::uint32_t format_version{2};
+
   /// @brief Create the log directory and file, then write the header line.
+  /// @param model What the daemon reported; its description names the file.
   /// @return The writer, or a message when the directory or file cannot be
   /// created or the header cannot be written.
   [[nodiscard]] static std::expected<std::unique_ptr<MetricsWriter>,
                                      std::string>
   create(const std::filesystem::path &log_directory, const core::Config &config,
-         std::string prompt_variant);
+         const core::ModelInfo &model, std::string prompt_variant);
 
   /// @brief Writes an incomplete "abandoned" footer if none was written yet.
   ~MetricsWriter();
