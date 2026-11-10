@@ -1,77 +1,59 @@
-# Third-party dependencies, pinned. Everything is fetched SYSTEM (no warnings
-# from pinned code) and EXCLUDE_FROM_ALL (only what pig-pen links is built).
+# Third-party dependencies, pinned. Fetched sources are SYSTEM (no warnings
+# from pinned code) and EXCLUDE_FROM_ALL (only what Pig Pen links is built).
 # Upstream tests, examples, and install rules already default to off when a
 # project is not top-level, so only non-default choices are set here.
 #
-# To build against a local scry checkout instead of the pinned revision:
-#   cmake --preset dev -DFETCHCONTENT_SOURCE_DIR_SCRY=/absolute/path/to/scry
+# To build against a local checkout instead of a pinned revision, use the
+# standard FetchContent override with an absolute path:
+#   cmake --preset dev -DFETCHCONTENT_SOURCE_DIR_SCRYDANTIC=/abs/path/scrydantic
+#   cmake --preset dev -DFETCHCONTENT_SOURCE_DIR_LLAMAD=/abs/path/llamad
 include(FetchContent)
 
-# scry::testing (the scripted HTTP server) is only needed by the test suite.
-set(SCRY_BUILD_TESTING_SUPPORT ${PIGPEN_BUILD_TESTS} CACHE BOOL "" FORCE)
-
-# Deprecated compatibility alias for FETCHCONTENT_SOURCE_DIR_SCRY. It resolves
-# relative paths against the project source, unlike FetchContent's
-# scope-dependent relative-path handling, and fails rather than silently
-# building the pinned revision when the checkout is invalid or conflicts.
-if(PIGPEN_SCRY_SOURCE)
-  get_filename_component(
-    PIGPEN_SCRY_SOURCE_ABSOLUTE
-    "${PIGPEN_SCRY_SOURCE}"
-    ABSOLUTE
-    BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}"
-  )
-  if(NOT EXISTS "${PIGPEN_SCRY_SOURCE_ABSOLUTE}/CMakeLists.txt")
-    message(
-      FATAL_ERROR
-      "PIGPEN_SCRY_SOURCE does not contain CMakeLists.txt: "
-      "${PIGPEN_SCRY_SOURCE_ABSOLUTE}"
-    )
-  endif()
-
-  if(FETCHCONTENT_SOURCE_DIR_SCRY)
-    get_filename_component(
-      FETCHCONTENT_SOURCE_DIR_SCRY_ABSOLUTE
-      "${FETCHCONTENT_SOURCE_DIR_SCRY}"
-      ABSOLUTE
-      BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}"
-    )
-    if(NOT PIGPEN_SCRY_SOURCE_ABSOLUTE STREQUAL
-       FETCHCONTENT_SOURCE_DIR_SCRY_ABSOLUTE)
-      message(
-        FATAL_ERROR
-        "PIGPEN_SCRY_SOURCE and FETCHCONTENT_SOURCE_DIR_SCRY select different checkouts"
-      )
-    endif()
-  endif()
-
-  message(
-    DEPRECATION
-    "PIGPEN_SCRY_SOURCE is deprecated; use FETCHCONTENT_SOURCE_DIR_SCRY"
-  )
-  set(
-    FETCHCONTENT_SOURCE_DIR_SCRY
-    "${PIGPEN_SCRY_SOURCE_ABSOLUTE}"
-    CACHE PATH
-    "Use a local scry checkout instead of fetching the pinned revision"
-    FORCE
-  )
-endif()
-
+# scrydantic: C++26 reflection to JSON Schema, a strict codec, and tool
+# binding. Its CMake refuses compilers older than GCC 16.2.
 FetchContent_Declare(
-  scry
-  GIT_REPOSITORY https://github.com/crybo-rybo/scry.git
-  GIT_TAG v0.7.0
+  scrydantic
+  GIT_REPOSITORY https://github.com/crybo-rybo/scrydantic.git
+  GIT_TAG v0.2.0
   GIT_PROGRESS TRUE
   SYSTEM
   EXCLUDE_FROM_ALL
 )
 
-FetchContent_MakeAvailable(scry)
+# llamad: only its wire contract (proto/llamad/v1/llamad.proto) is used. No
+# submodules (llama.cpp) are cloned and its CMake project is never added.
+FetchContent_Declare(
+  llamad
+  GIT_REPOSITORY https://github.com/crybo-rybo/llamad.git
+  GIT_TAG v0.1.0
+  GIT_SUBMODULES ""
+  GIT_PROGRESS TRUE
+  SOURCE_SUBDIR cmake-not-used
+)
 
-if(NOT TARGET scry::scry)
-  message(FATAL_ERROR "The selected Scry source does not provide scry::scry")
+FetchContent_MakeAvailable(scrydantic llamad)
+
+if(NOT TARGET scrydantic::scrydantic)
+  message(
+    FATAL_ERROR
+    "The selected scrydantic source does not provide scrydantic::scrydantic"
+  )
 endif()
+set(PIGPEN_LLAMAD_PROTO "${llamad_SOURCE_DIR}/proto/llamad/v1/llamad.proto")
+if(NOT EXISTS "${PIGPEN_LLAMAD_PROTO}")
+  message(
+    FATAL_ERROR
+    "The selected llamad source has no proto/llamad/v1/llamad.proto"
+  )
+endif()
+
+# gRPC and Protobuf come from the system. Prefer Protobuf's own CMake config
+# and fall back to CMake's FindProtobuf module, as llamad's build does.
+find_package(Protobuf CONFIG QUIET)
+if(NOT Protobuf_FOUND)
+  find_package(Protobuf REQUIRED)
+endif()
+find_package(gRPC CONFIG REQUIRED)
 
 if(PIGPEN_BUILD_GUI)
   # Link SDL3 statically into the GUI binary.

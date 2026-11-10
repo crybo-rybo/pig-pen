@@ -1,5 +1,5 @@
 # Advisory only. clang cannot parse the -freflection TUs (src/agent), so run it
-# on the C++23 ones in src/world, src/core, and src/ui:
+# on the C++23 ones in src/world, src/core, src/llamad, and src/ui:
 #   clang-tidy -p build/dev src/world/world.cpp src/core/episode_runner.cpp
 Checks: >
   bugprone-*,

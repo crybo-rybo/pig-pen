@@ -30,28 +30,35 @@ jobs:
   build-and-test:
     name: build & test (${{ matrix.preset }})
     runs-on: ubuntu-24.04
+    # scrydantic needs GCC 16.2 or newer, and refuses the GCC 16 snapshots of
+    # the Ubuntu toolchain PPA. This is the image that scrydantic's CI pins.
+    container:
+      image: gcc:16.2.0@sha256:07280eb2e744f1b7a2d8d4a3894c089ea07266c109758afc388a634bd098e4eb
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         preset: [dev, release, headless]
     env:
-      CC: gcc-16
-      CXX: g++-16
+      DEBIAN_FRONTEND: noninteractive
     steps:
       - uses: actions/checkout@v5
 
-      # The runner ships GCC 13; GCC 16 comes from the toolchain PPA. The X11,
-      # Wayland, and GL headers are SDL3's Linux build deps (docs/building.md).
-      - name: Install toolchain and system libraries
+      # Debian trixie packages: CMake 3.31, Ninja, gRPC and Protobuf for the
+      # llamad stubs, Python for the CLI tests, and SDL3's X11, Wayland, and GL
+      # build headers (docs/building.md).
+      - name: Install build dependencies
         run: |
-          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            g++-16 \
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            cmake \
             ninja-build \
             pkg-config \
-            libcurl4-openssl-dev \
+            python3 \
+            libgrpc++-dev \
+            libprotobuf-dev \
+            protobuf-compiler \
+            protobuf-compiler-grpc \
             libgl1-mesa-dev \
             libx11-dev \
             libxcursor-dev \
