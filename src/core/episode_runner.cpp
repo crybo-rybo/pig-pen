@@ -164,8 +164,7 @@ void EpisodeRunner::process_pending_outcome() {
       tool_call_count_ ? tool_call_count_() - tool_calls_at_turn_start_ : 0U;
   recover_zero_tool_turn_ = outcome.status == TurnStatus::completed &&
                             tool_call_count_ && tool_calls == 0U;
-  unexecuted_tool_calls_ =
-      outcome.tool_stats ? outcome.tool_stats->unexecuted_calls : 0U;
+  unexecuted_tool_calls_ = outcome.tool_stats.unexecuted_calls;
 
   auto &assistant = transcript_.back().text;
   if (assistant.empty()) {
@@ -180,7 +179,8 @@ void EpisodeRunner::process_pending_outcome() {
         .error = outcome.error,
         .input_tokens = outcome.input_tokens,
         .output_tokens = outcome.output_tokens,
-        .attempts = outcome.attempts,
+        .cached_input_tokens = outcome.cached_input_tokens,
+        .requests = outcome.requests,
         .tool_calls = tool_calls,
         .latency = snapshot_.last_turn_latency,
         .tool_stats = outcome.tool_stats,

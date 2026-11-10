@@ -357,17 +357,22 @@ TEST_CASE(
                        }}};
   REQUIRE(runner.play());
   runner.tick();
-  transport.complete({.tool_stats = TurnToolStats{.rounds = 1,
+  transport.complete({.cached_input_tokens = 40,
+                      .requests = 2,
+                      .tool_stats = TurnToolStats{.rounds = 1,
                                                   .calls = 2,
                                                   .rejected_calls = 1,
+                                                  .invalid_calls = 1,
                                                   .round_limit_reached = true,
                                                   .unexecuted_calls = 3}});
   runner.tick();
   REQUIRE(turns.size() == 1);
-  REQUIRE(turns.front().tool_stats);
-  CHECK(turns.front().tool_stats->calls == 2);
-  CHECK(turns.front().tool_stats->rejected_calls == 1);
-  CHECK(turns.front().tool_stats->round_limit_reached);
+  CHECK(turns.front().requests == 2);
+  CHECK(turns.front().cached_input_tokens == 40);
+  CHECK(turns.front().tool_stats.calls == 2);
+  CHECK(turns.front().tool_stats.rejected_calls == 1);
+  CHECK(turns.front().tool_stats.invalid_calls == 1);
+  CHECK(turns.front().tool_stats.round_limit_reached);
   REQUIRE(transport.messages.size() == 2);
   CHECK(transport.messages.back().find(
             "3 requested tool calls were not executed") != std::string::npos);

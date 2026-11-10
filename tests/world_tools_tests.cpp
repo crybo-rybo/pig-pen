@@ -3,7 +3,7 @@
 /// visibility toggles.
 ///
 /// WorldTools takes world values and returns the plain response types, so
-/// everything here runs without reflection, JSON, a scry registry, or a model.
+/// everything here runs without reflection, JSON, a tool binding, or a model.
 
 #include "core/world_tools.hpp"
 

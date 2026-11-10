@@ -1,9 +1,10 @@
 /// @file world_tools.hpp
-/// @brief Typed world actions behind Scry's admission and budget checks.
+/// @brief Typed world actions behind the tool loop's budget and the
+/// binding's admission checks.
 ///
-/// Plain C++23: no JSON, schema, or reflection code lives here. The Scry
-/// toolbox in agent/world_tool_binding.hpp decodes tool arguments, calls these
-/// actions, and encodes their responses.
+/// Plain C++23: no JSON, schema, or reflection code lives here. The
+/// scrydantic toolbox in agent/world_tool_binding.hpp decodes tool arguments,
+/// calls these actions, and encodes their responses.
 #pragma once
 
 #include "core/config.hpp"
@@ -12,8 +13,9 @@
 
 namespace pigpen::core {
 
-/// @brief Owns world semantics and scenario visibility; Scry owns schemas,
-/// marshalling, admission, and the per-turn limit.
+/// @brief Owns world semantics and scenario visibility; the binding owns
+/// schemas, marshalling, and admission, and the tool loop owns the per-turn
+/// limit.
 class WorldTools final {
 public:
   explicit WorldTools(world::World &world, const Config &config = {});
