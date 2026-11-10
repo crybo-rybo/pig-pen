@@ -13,14 +13,16 @@ namespace pigpen::ui {
 
 /// @brief Result of parsing the GUI command line.
 struct GuiOptions {
-  /// Config seeded with any `--model` / `--base-url` values; other fields
-  /// keep their defaults and are edited in the Controls panel.
+  /// Config with the llamad default socket, or the `--socket` value; other
+  /// fields keep their defaults and are edited in the Controls panel.
   core::Config config{};
+  /// `--play` was requested: create the session and start the episode.
+  bool play{};
   /// `--help` was requested; the caller prints usage and exits 0.
   bool help{};
 };
 
-/// @brief Parses `--model`, `--base-url`, and `--help` from @p arguments,
+/// @brief Parses `--socket`, `--play`, and `--help` from @p arguments,
 /// accepting both `--option value` and `--option=value` forms.
 /// @return Parsed options, or a human-readable error for the caller to print.
 [[nodiscard]] std::expected<GuiOptions, std::string>
