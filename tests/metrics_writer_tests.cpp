@@ -45,8 +45,14 @@ TEST_CASE("metrics log contains a reconcilable header tool turn and footer") {
   config.turn_budget = 2;
   config.temperature = 0.5;
   config.sampling_seed = 7;
+  config.socket_path = "/run/user/1000/llamad.sock";
+  const pigpen::core::ModelInfo model{.description = "qwen2 0.5B Q4_K - Medium",
+                                      .n_params = 494'000'000,
+                                      .size_bytes = 398'000'000,
+                                      .n_ctx = 8192,
+                                      .n_ctx_train = 32768};
   auto created =
-      pigpen::agent::MetricsWriter::create(directory, config, "default");
+      pigpen::agent::MetricsWriter::create(directory, config, model, "default");
   REQUIRE(created.has_value());
   auto writer = std::move(*created);
   const auto path = writer->path();
@@ -63,7 +69,6 @@ TEST_CASE("metrics log contains a reconcilable header tool turn and footer") {
       .after = {.x = 4, .y = 4},
       .eaten = pigpen::world::ItemType::berry,
       .score_after = 1,
-      .scry_turn_id = 7,
       .call_id = "eat-1",
       .round = 2,
       .index = 1,
@@ -74,13 +79,17 @@ TEST_CASE("metrics log contains a reconcilable header tool turn and footer") {
                   .turn = 1,
                   .status = pigpen::core::TurnStatus::completed,
                   .assistant_text = "ate a berry",
-                  .attempts = 3,
+                  .input_tokens = 900,
+                  .output_tokens = 30,
+                  .cached_input_tokens = 640,
+                  .requests = 3,
                   .tool_calls = 1,
                   .latency = std::chrono::milliseconds{12},
                   .tool_stats =
                       pigpen::core::TurnToolStats{.rounds = 2,
                                                   .calls = 4,
                                                   .rejected_calls = 1,
+                                                  .invalid_calls = 1,
                                                   .round_limit_reached = true,
                                                   .unexecuted_calls = 2},
               })
@@ -97,6 +106,17 @@ TEST_CASE("metrics log contains a reconcilable header tool turn and footer") {
   const auto records = read_records(path);
   REQUIRE(records.size() == 4);
   REQUIRE(records.front().at("type") == "header");
+  CHECK(records.front().at("format") == 2);
+  CHECK(records.front().at("model") == "qwen2 0.5B Q4_K - Medium");
+  CHECK(records.front().at("socket") == "/run/user/1000/llamad.sock");
+  CHECK(records.front().at("model_info") ==
+        nlohmann::json{{"n_ctx", 8192},
+                       {"n_ctx_train", 32768},
+                       {"n_params", 494'000'000},
+                       {"size_bytes", 398'000'000}});
+  CHECK_FALSE(records.front().contains("base_url"));
+  CHECK(path.filename().string().find("-qwen2_0.5B_Q4_K_-_Medium-42.jsonl") !=
+        std::string::npos);
   REQUIRE(records.front().at("seed") == 42);
   REQUIRE(records.front().at("temperature") == 0.5);
   REQUIRE(records.front().at("sampling_seed") == 7);
@@ -105,8 +125,8 @@ TEST_CASE("metrics log contains a reconcilable header tool turn and footer") {
           4);
   REQUIRE(records[1].at("type") == "tool");
   REQUIRE(records[1].at("args") == nlohmann::json::object());
-  REQUIRE(records[1].at("action_executed") == true);
-  CHECK(records[1].at("scry_turn_id") == 7);
+  CHECK_FALSE(records[1].contains("action_executed"));
+  CHECK_FALSE(records[1].contains("result_dispatched"));
   CHECK(records[1].at("call_id") == "eat-1");
   CHECK(records[1].at("round") == 2);
   CHECK(records[1].at("index") == 1);
@@ -115,11 +135,15 @@ TEST_CASE("metrics log contains a reconcilable header tool turn and footer") {
   REQUIRE(records[2].at("type") == "turn");
   REQUIRE(records[2].at("tool_calls") == 1);
   REQUIRE(records[2].at("zero_tool_turn") == false);
-  CHECK(records[2].at("attempts") == 3);
-  CHECK(records[2].at("scry_tools") ==
+  CHECK(records[2].at("requests") == 3);
+  CHECK(records[2].at("input_tokens") == 900);
+  CHECK(records[2].at("output_tokens") == 30);
+  CHECK(records[2].at("cached_input_tokens") == 640);
+  CHECK(records[2].at("tool_stats") ==
         nlohmann::json{{"rounds", 2},
                        {"calls", 4},
                        {"rejected_calls", 1},
+                       {"invalid_calls", 1},
                        {"round_limit_reached", true},
                        {"unexecuted_calls", 2}});
   REQUIRE(records.back().at("type") == "footer");
@@ -135,7 +159,7 @@ TEST_CASE("metrics log contains a reconcilable header tool turn and footer") {
 TEST_CASE("destroying an unfinished writer still emits an incomplete footer") {
   const auto directory = test_directory();
   auto created = pigpen::agent::MetricsWriter::create(
-      directory, pigpen::core::Config{}, "default");
+      directory, pigpen::core::Config{}, pigpen::core::ModelInfo{}, "default");
   REQUIRE(created.has_value());
   const auto path = (*created)->path();
   REQUIRE((*created)
@@ -162,7 +186,8 @@ TEST_CASE("destroying an unfinished writer still emits an incomplete footer") {
 TEST_CASE("metrics log rejects a tool payload that is not JSON") {
   const auto directory = test_directory();
   auto created = pigpen::agent::MetricsWriter::create(
-      directory, pigpen::core::Config{}, "invalid-payload-test");
+      directory, pigpen::core::Config{}, pigpen::core::ModelInfo{},
+      "invalid-payload-test");
   REQUIRE(created.has_value());
   auto writer = std::move(*created);
   const auto path = writer->path();
@@ -187,7 +212,8 @@ TEST_CASE("metrics log rejects a tool payload that is not JSON") {
 TEST_CASE("metrics footer is final and cannot be duplicated") {
   const auto directory = test_directory();
   auto created = pigpen::agent::MetricsWriter::create(
-      directory, pigpen::core::Config{}, "finalization-test");
+      directory, pigpen::core::Config{}, pigpen::core::ModelInfo{},
+      "finalization-test");
   REQUIRE(created.has_value());
   auto writer = std::move(*created);
   const auto path = writer->path();

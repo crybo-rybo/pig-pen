@@ -1,48 +1,84 @@
 /// @file session.cpp
-/// @brief Session implementation: config validation, composition, and
-/// reflection-based tool registration; the contract is in the header.
+/// @brief Session implementation: config validation, the llamad connection,
+/// and composition; the contract is in the header.
 #include "agent/session.hpp"
 
 #include "agent/metrics_writer.hpp"
-#include "agent/scry_transport.hpp"
 #include "agent/world_tool_binding.hpp"
 #include "core/prompt.hpp"
+#include "core/tool_loop.hpp"
+#include "llamad/llamad_client.hpp"
 
-#include <scry/scry.hpp>
-
-#include <chrono>
-#include <cstdlib>
+#include <cmath>
 #include <memory>
 #include <string>
 #include <utility>
 
 namespace pigpen::agent {
+namespace {
+
+/// @brief The bounds that Session::create enforces before it connects.
+[[nodiscard]] std::expected<void, std::string>
+validate(const core::Config &config) {
+  if (config.socket_path.empty()) {
+    return std::unexpected("the llamad socket path must not be empty");
+  }
+  if (config.turn_budget == 0) {
+    return std::unexpected("turn budget must be greater than zero");
+  }
+  if (config.turn_budget > core::turn_budget_limit) {
+    return std::unexpected("turn budget must not exceed " +
+                           std::to_string(core::turn_budget_limit));
+  }
+  if (config.max_tool_rounds == 0) {
+    return std::unexpected("maximum tool rounds must be greater than zero");
+  }
+  if (config.max_tool_rounds > core::tool_rounds_limit) {
+    return std::unexpected("maximum tool rounds must not exceed " +
+                           std::to_string(core::tool_rounds_limit));
+  }
+  if (config.max_output_tokens == 0 ||
+      config.max_output_tokens > core::max_output_tokens_limit) {
+    return std::unexpected("maximum output tokens must be in the range 1.." +
+                           std::to_string(core::max_output_tokens_limit));
+  }
+  if (!std::isfinite(config.temperature) || config.temperature < 0.0 ||
+      config.temperature > 2.0) {
+    return std::unexpected(
+        "temperature must be a finite number in the range 0.0..2.0");
+  }
+  return {};
+}
+
+} // namespace
 
 struct Session::Impl {
   Impl(core::Config initial_config,
-       std::unique_ptr<MetricsWriter> initial_metrics,
+       std::unique_ptr<llamad::LlamadChatClient> initial_client,
        std::unique_ptr<world::World> initial_world,
-       std::shared_ptr<WorldToolBinding> initial_tools,
-       scry::Harness initial_harness, scry::Conversation initial_conversation)
+       std::shared_ptr<WorldToolBinding> initial_binding,
+       std::unique_ptr<MetricsWriter> initial_metrics)
       : config(std::move(initial_config)), world(std::move(initial_world)),
-        metrics(std::move(initial_metrics)), tools(std::move(initial_tools)),
-        harness(std::move(initial_harness)),
-        conversation(std::move(initial_conversation)),
-        transport(
-            harness, conversation,
-            {.on_tool_request =
-                 [this](const scry::ToolRequest &) {
-                   return tools->admit(!metrics_error.empty());
-                 },
-             .on_tool_call =
-                 [this](const scry::ToolCall &call) { tools->observe(call); },
-             .on_turn_finished = [this] { tools->flush_pending_activity(); }}),
+        metrics(std::move(initial_metrics)),
+        binding(std::move(initial_binding)),
+        dispatcher(binding, [this] { return !metrics_error.empty(); }),
+        client(std::move(initial_client)),
+        tool_loop(
+            *client, dispatcher, core::build_system_prompt(config),
+            {.temperature = config.temperature,
+             .max_tokens = config.max_output_tokens,
+             .seed = config.sampling_seed},
+            {.max_tool_rounds = config.max_tool_rounds,
+             .max_tool_calls_per_turn = core::max_world_tool_calls_per_turn}),
         runner(
-            transport, config.turn_budget,
+            tool_loop, config.turn_budget,
             [this] { return world->all_positive_items_eaten(); },
             {
                 .on_turn_finished =
                     [this](const core::TurnRecord &record) {
+                      totals.input += record.input_tokens;
+                      totals.output += record.output_tokens;
+                      totals.cached_input += record.cached_input_tokens;
                       if (auto status = metrics->record_turn(record); !status) {
                         metrics_error = std::move(status.error());
                       }
@@ -59,7 +95,7 @@ struct Session::Impl {
                     },
             },
             [this] { return activities.size(); }) {
-    tools->on_activity = [this](core::ToolActivity activity) {
+    dispatcher.on_activity = [this](core::ToolActivity activity) {
       activity.tick = activities.size() + 1U;
       activity.turn = runner.snapshot().turns_used + 1U;
       activities.push_back(std::move(activity));
@@ -69,77 +105,53 @@ struct Session::Impl {
     };
   }
 
+  // Destruction runs in reverse: the runner and the tool loop go first and
+  // cancel the active request, then the client joins its worker and drops
+  // undelivered events, and only then do the tools and the world go.
   core::Config config;
   std::unique_ptr<world::World> world;
   core::ToolActivityFeed activities{};
   std::unique_ptr<MetricsWriter> metrics;
-  // Destruction runs in reverse: the world outlives the harness, and the
-  // harness's registry releases its share of the bindings first.
-  std::shared_ptr<WorldToolBinding> tools;
-  scry::Harness harness;
-  scry::Conversation conversation;
-  ScryTurnTransport transport;
-  core::EpisodeRunner runner;
   std::string metrics_error{};
+  TokenTotals totals{};
+  std::shared_ptr<WorldToolBinding> binding;
+  WorldToolDispatcher dispatcher;
+  std::unique_ptr<llamad::LlamadChatClient> client;
+  core::ToolLoopTransport tool_loop;
+  core::EpisodeRunner runner;
 };
 
 std::expected<std::shared_ptr<Session>, std::string>
 Session::create(core::Config config, std::filesystem::path log_directory,
                 std::string prompt_variant) {
-  if (config.turn_budget == 0) {
-    return std::unexpected("turn budget must be greater than zero");
+  if (auto valid = validate(config); !valid) {
+    return std::unexpected(std::move(valid.error()));
   }
-  if (config.turn_budget > core::turn_budget_limit) {
-    return std::unexpected("turn budget must not exceed " +
-                           std::to_string(core::turn_budget_limit));
-  }
-  if (config.max_tool_rounds > core::tool_rounds_limit) {
-    return std::unexpected("maximum tool rounds must not exceed " +
-                           std::to_string(core::tool_rounds_limit));
-  }
-  auto conversation = scry::Conversation::create(
-      {.system_prompt = core::build_system_prompt(config)});
-  if (!conversation) {
-    return std::unexpected(conversation.error().message);
+  auto client = llamad::LlamadChatClient::connect(config.socket_path);
+  if (!client) {
+    return std::unexpected(std::move(client.error()));
   }
   auto world = std::make_unique<world::World>(config.seed);
-  auto tools = std::make_shared<WorldToolBinding>(*world, config);
-  scry::ToolRegistry registry;
-  if (auto added = registry.add(tools); !added) {
-    return std::unexpected(added.error().message);
-  }
-  const auto *api_key = std::getenv("PIGPEN_API_KEY");
-  auto harness = scry::Harness::create(
-      scry_config(config, api_key == nullptr ? "" : api_key),
-      std::move(registry));
-  if (!harness) {
-    return std::unexpected(harness.error().message);
-  }
-  // Opened last so a rejected config leaves no log behind.
+  auto binding = std::make_shared<WorldToolBinding>(*world, config);
+  // Opened last so a rejected config or daemon leaves no log behind.
   auto metrics =
-      MetricsWriter::create(log_directory, config, std::move(prompt_variant));
+      MetricsWriter::create(log_directory, config, (*client)->model_info(),
+                            std::move(prompt_variant));
   if (!metrics) {
     return std::unexpected(std::move(metrics.error()));
   }
 
   return std::shared_ptr<Session>{new Session{std::make_unique<Impl>(
-      std::move(config), std::move(*metrics), std::move(world),
-      std::move(tools), std::move(*harness), std::move(*conversation))}};
+      std::move(config), std::move(*client), std::move(world),
+      std::move(binding), std::move(*metrics))}};
 }
 
 Session::Session(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
 
-Session::~Session() {
-  // The activity sink uses the runner and metrics writer. Flush while both
-  // are alive; member teardown cancels and disconnects the transport next.
-  impl_->tools->flush_pending_activity();
-}
+Session::~Session() = default;
 
 PumpStats Session::pump() {
-  const auto stats = impl_->harness.update({
-      .time_budget = std::chrono::milliseconds{2},
-      .max_callbacks = 32,
-  });
+  const auto stats = impl_->client->pump(32);
   // Turn completion is the single place that ends an episode on logging
   // failure, after admission has refused further actions and results commit.
   impl_->runner.tick();
@@ -166,12 +178,18 @@ void Session::clear_pending_user_inputs() {
 }
 
 const core::Config &Session::config() const noexcept { return impl_->config; }
+const core::ModelInfo &Session::model_info() const noexcept {
+  return impl_->client->model_info();
+}
 const world::World &Session::world() const noexcept { return *impl_->world; }
 const core::ToolActivityFeed &Session::tool_activities() const noexcept {
   return impl_->activities;
 }
 const core::EpisodeRunner &Session::runner() const noexcept {
   return impl_->runner;
+}
+const TokenTotals &Session::token_totals() const noexcept {
+  return impl_->totals;
 }
 
 const std::filesystem::path &Session::metrics_path() const noexcept {

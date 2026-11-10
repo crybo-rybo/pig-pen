@@ -38,18 +38,19 @@ private:
 }
 
 void print_usage(std::ostream &output, const std::string_view program) {
-  output << "Usage: " << program << R"( [--model NAME] [options]
+  output << "Usage: " << program << R"( [options]
 
 Open the pig-pen GUI, optionally creating and starting a session immediately.
 
 Options:
-  --model NAME    Populate the model field and auto-start
-  --base-url URL  Populate the model endpoint field
-                  (default: http://127.0.0.1:11434/v1)
-  --help          Show this help and exit
+  --socket PATH  Populate the llamad socket field
+                 (default: $XDG_RUNTIME_DIR/llamad.sock, else
+                 /tmp/llamad-<uid>.sock)
+  --play         Connect to llamad and start the episode at once
+  --help         Show this help and exit
 
-Values may also use --option=value. Without --model, the GUI waits for
-a model identifier to be entered in Controls.
+Values may also use --option=value. Without --play, the GUI waits until
+you press Play or Reset in Controls.
 )";
 }
 
@@ -147,7 +148,7 @@ int main(const int argc, char **argv) {
 
   // Declared after every guard so the session, and its log footer, is torn
   // down before the ImGui context it draws into.
-  pigpen::ui::AppUi application{options->config};
+  pigpen::ui::AppUi application{options->config, options->play};
   for (;;) {
     SDL_Event event;
     while (SDL_PollEvent(&event)) {

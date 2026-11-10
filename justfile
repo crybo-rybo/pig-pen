@@ -23,8 +23,10 @@ run-headless profile="dev" *args: (configure profile)
 clang_format := "uvx clang-format@22.1.8"
 ruff := "uvx ruff@0.16.1"
 
-# macOS needs Apple Clang for SDL3's Objective-C (GCC lacks -fobjc-arc).
-ci_cc := if os() == "macos" { "/usr/bin/cc" } else { "gcc-16" }
+# The compilers for `ci`: CC and CXX when set, else gcc and g++ (GCC 16.2 or
+# later, as in the gcc:16.2.0 CI image).
+ci_cc := env("CC", "gcc")
+ci_cxx := env("CXX", "g++")
 
 fmt:
     git ls-files '*.cpp' '*.hpp' | xargs {{clang_format}} -i
@@ -42,6 +44,6 @@ ci: fmt-check lint (ci-build-test "dev") (ci-build-test "release") (ci-build-tes
 
 [private]
 ci-build-test profile:
-    CC={{ci_cc}} CXX=g++-16 cmake --preset {{profile}} --fresh
+    CC={{ci_cc}} CXX={{ci_cxx}} cmake --preset {{profile}} --fresh
     cmake --build --preset {{profile}}
     ctest --preset {{profile}}

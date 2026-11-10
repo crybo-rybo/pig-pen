@@ -27,8 +27,8 @@ struct Position {
 };
 
 /// @brief Cardinal direction for movement and scanning.
-/// @note Enumerator spelling is protocol-visible: scry uses the identifiers
-/// as the JSON strings the model sends and receives.
+/// @note Enumerator spelling is protocol-visible: scrydantic uses the
+/// identifiers as the JSON strings the model sends and receives.
 enum class Direction : std::uint8_t {
   north,
   south,
@@ -54,7 +54,8 @@ direction_name(const Direction direction) noexcept {
 }
 
 /// @brief The four edible item kinds placed by the seed.
-/// @note Enumerator spelling is protocol-visible through scry and the log.
+/// @note Enumerator spelling is protocol-visible through scrydantic and the
+/// log.
 enum class ItemType : std::uint8_t {
   berry,
   apple,

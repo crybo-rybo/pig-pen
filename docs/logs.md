@@ -6,24 +6,44 @@ Each session in the CLI or the GUI writes one JSONL file:
 logs/<timestamp>-<model>-<seed>.jsonl
 ```
 
-An example is `logs/20260807-064512-538-acme_pig-model_Q4_K_M-42.jsonl`. The
-timestamp is in local time, with milliseconds. Pig Pen replaces characters that
-are not easy to use in file names with `_`. If a file with the same name
-exists, Pig Pen adds a suffix: `-1`, `-2`, and so on. Pig Pen never overwrites
-a log. To write to a directory other than `logs/`, use `--log-dir`.
+An example is `logs/20260807-064512-538-qwen2_0.5B_Q4_K_-_Medium-42.jsonl`. The
+model part is the model description that llamad reports. The timestamp is in
+local time, with milliseconds. Pig Pen replaces characters that are not easy
+to use in file names with `_`. If a file with the same name exists, Pig Pen
+adds a suffix: `-1`, `-2`, and so on. Pig Pen never overwrites a log. To write
+to a directory other than `logs/`, use `--log-dir`.
 
 Each file has exactly one `header` line at the start and one `footer` line at
 the end. Between them, the file has `tool` and `turn` records in the sequence
 in which they occurred. Pig Pen writes object keys in sorted order. The
 examples below put the keys in groups to make them easier to read.
 
+## Format 2
+
+This document describes format 2. The header records it as `"format": 2`.
+Format 2 is the first format for llamad. Logs without a `format` field are
+format 1, from the earlier OpenAI-compatible HTTP transport. Format 2 has
+these changes:
+
+- `header`: `format`, `socket`, and `model_info` are new. `model` is now the
+  model description that llamad reports. `base_url` is removed.
+- `tool`: `scry_turn_id`, `action_executed`, and `result_dispatched` are
+  removed. Each `tool` record is a call that ran, and its payloads are always
+  present.
+- `turn`: `attempts` is now `requests`, and it is always a number.
+  `scry_tools` is now `tool_stats`. It is always an object, and it has the new
+  `invalid_calls` count. `cached_input_tokens` is new.
+- `footer`: no change.
+
 ## `header`
 
-Pig Pen writes the header when it creates the session, before it connects to
-the model.
+Pig Pen writes the header when it creates the session, after it connects to
+llamad and before the first turn.
 
 ```json
-{"type":"header","model":"acme/pig-model:Q4_K_M","base_url":"http://127.0.0.1:11434/v1",
+{"type":"header","format":2,"model":"qwen2 0.5B Q4_K - Medium",
+ "model_info":{"n_ctx":32768,"n_ctx_train":32768,"n_params":494032768,"size_bytes":397808640},
+ "socket":"/run/user/1000/llamad.sock",
  "temperature":0.2,"max_output_tokens":8192,"seed":42,"sampling_seed":null,"started_at":"2026-08-07T06:45:12-0400","prompt_variant":"default",
  "scenario":{"grid":{"width":10,"height":10},"spawn":{"x":5,"y":5},
    "items":{"berry":6,"apple":3,"truffle":1,"toadstool":3},
@@ -33,11 +53,15 @@ the model.
 
 | field | description |
 |---|---|
+| `format` | The log format version. It is `2`. |
+| `model` | The model description from the llamad `GetModelInfo` call. llamad serves exactly one model. |
+| `model_info` | The context size that llamad uses (`n_ctx`), the context size of the training (`n_ctx_train`), the parameter count, and the tensor size in bytes. |
+| `socket` | The llamad Unix socket. |
 | `prompt_variant` | The value of `--prompt-variant`, or the name of the GUI preset. |
 | `temperature` | The model sampling temperature. Pig Pen records it separately from the deterministic world `seed`. |
-| `sampling_seed` | The provider sampling seed from `--sampling-seed` or the GUI. If Pig Pen did not send a sampling seed, the value is `null`. |
-| `max_output_tokens` | The token limit for each request. Pig Pen asks the provider to apply this limit. |
-| `max_world_tool_calls_per_turn` | The request limit that Scry enforces. Requests that are not valid also count. |
+| `sampling_seed` | The sampling seed from `--sampling-seed` or the GUI. If Pig Pen did not send a sampling seed, the value is `null`. |
+| `max_output_tokens` | The token limit for each request (llamad `max_tokens`). |
+| `max_world_tool_calls_per_turn` | The request limit that the tool loop enforces. Requests that are not valid also count. |
 
 This line has all the data that is necessary to describe the run. But model
 sampling can give different results when you run it again, also with a
@@ -46,15 +70,16 @@ sampling seed.
 ## `tool`
 
 Pig Pen writes one line for each decoded world-tool call. Some calls do not get
-to the Pig Pen world layer, because Scry rejects them during admission, budget,
-protocol, or schema validation. These calls do not make a `tool` record.
+to the Pig Pen world layer, because the tool loop or the dispatcher rejects
+them during the budget, admission, lookup, or schema validation. These calls do
+not make a `tool` record.
 
 ```json
 {"type":"tool","turn":1,"tick":2,"tool":"look",
- "scry_turn_id":1,"call_id":"call_2","round":1,"index":1,
+ "call_id":"call_2","round":1,"index":1,
  "args":{"direction":"south"},
  "result":{"cells":[{"distance":1,"item":"berry"}],"direction":"south","ok":true,"wall_at_distance":6},
- "before":{"x":5,"y":5},"after":{"x":5,"y":5},"action_executed":true,"result_dispatched":true,"score_after":0}
+ "before":{"x":5,"y":5},"after":{"x":5,"y":5},"score_after":0}
 ```
 
 | field | description |
@@ -62,10 +87,9 @@ protocol, or schema validation. These calls do not make a `tool` record.
 | `tick` | A counter that increases across the full episode. |
 | `turn` | The Pig Pen episode turn number. |
 | `before`, `after` | The position of the blob before and after the call. These values are the same for `look`, for `eat`, and for a `move` that a wall blocks. |
-| `action_executed` | Always `true` for these world records. Refused calls never go into the activity feed. |
-| `scry_turn_id`, `call_id`, `round`, `index` | Values from the Scry contextual handler. `round` starts at one. `index` starts at zero in the batch. |
-| `args`, `result` | Copies from the Scry dispatch observation, exactly as Scry posted them for the provider. For example, a log with `--opaque-look` also shows `"something"` here. |
-| `result_dispatched` | `false` for a world action whose result Scry could not post, because the turn failed during dispatch. Then `args` and `result` are `null`, but the typed transition and the score are still correct. |
+| `call_id`, `round`, `index` | The call ID that llamad gave, and the position of the call in the turn. `round` starts at one. `index` starts at zero in the batch. |
+| `args` | The canonical encoding of the decoded arguments. It can have a different spelling from the arguments that the model sent, for example without spaces. |
+| `result` | The exact text of the `tool` message that Pig Pen sent back to the model. For example, a log with `--opaque-look` also shows `"something"` here. |
 
 ## `turn`
 
@@ -76,36 +100,38 @@ the turn completes.
 {"type":"turn","turn":1,"status":"completed",
  "user_message":"Automatic turn instructions:\nContinue exploring autonomously. ... Turn 1 of 2.",
  "assistant_text":"I have explored the pen and found valuable items. ...",
- "error":"","input_tokens":1699,"output_tokens":198,"attempts":2,"tool_calls":2,
- "zero_tool_turn":false,"latency_ms":2499,
- "scry_tools":{"rounds":1,"calls":2,"rejected_calls":0,
+ "error":"","input_tokens":3410,"output_tokens":198,"cached_input_tokens":1650,
+ "requests":2,"tool_calls":2,"zero_tool_turn":false,"latency_ms":2499,
+ "tool_stats":{"rounds":1,"calls":2,"rejected_calls":0,"invalid_calls":0,
    "round_limit_reached":false,"unexecuted_calls":0}}
 ```
 
 | field | description |
 |---|---|
 | `status` | `completed`, `cancelled`, or `error`. |
-| `error` | Empty for a completed turn. For a provider failure, the Scry message, then the HTTP status, the sanitized provider error code, and the provider request ID when they are available. Example: `provider rejected the request (HTTP 404, openai:model_not_found)`. |
-| `tool_calls` | The number of reflected handler calls in this turn that Scry decoded successfully. |
-| `zero_tool_turn` | `true` for a turn with only narration, or with only calls that are not valid. Use it to find these turns easily in a query. |
-| `input_tokens`, `output_tokens` | Token counts from the provider. |
-| `attempts` | The number of provider requests in the turn, including retries. If the turn fails, this is the number of the request that failed. It is 0 if no request was attempted, or `null` when Scry does not report the count. Scry v0.7.0 omits the count for cancelled turns, even if requests were sent. |
+| `error` | Empty for a completed turn. For a llamad failure, `llamad <STATUS>: <message>`. Example: `llamad INVALID_ARGUMENT: prompt is longer than the context`. |
+| `assistant_text` | The text of all rounds of the turn, as it was streamed. |
+| `tool_calls` | The number of decoded world-tool calls in this turn. |
+| `zero_tool_turn` | `true` for a completed turn with only narration, or with only calls that are not valid. Use it to find these turns easily in a query. |
+| `input_tokens`, `output_tokens` | The token counts from llamad, added across all requests of the turn. Each request contains the full conversation, so `input_tokens` counts the history one time for each round. |
+| `cached_input_tokens` | The input tokens that llamad used again from its KV cache, added across all requests of the turn. |
+| `requests` | The number of llamad requests in the turn. One request is one round. A failed or cancelled request is included. |
 | `latency_ms` | The duration of the turn. Pig Pen measures it locally. |
-| `scry_tools` | Statistics from the Scry completion. Refer to the table below. |
+| `tool_stats` | The counts of the tool loop. Refer to the table below. |
 
-The `scry_tools` value has these fields:
+The `tool_stats` value has these fields. Pig Pen always knows them, also for a
+turn that failed or was cancelled.
 
 | field | description |
 |---|---|
-| `calls` | All requests. This count includes unknown requests, undecodable requests, and refused requests. |
-| `rejected_calls` | Admission refusals and budget refusals. This count does not include decode errors. |
-| `rounds` | The number of dispatched rounds. |
-| `round_limit_reached`, `unexecuted_calls` | The requests that Scry dropped when the round limit completed the turn. These dropped calls are not in `calls`, and they are not in the activity feed. |
+| `rounds` | The number of rounds whose calls were dispatched. |
+| `calls` | All calls in these rounds. This count includes unknown calls, undecodable calls, refused calls, and calls over the budget. |
+| `rejected_calls` | Admission refusals and budget refusals. |
+| `invalid_calls` | Calls for unknown tools, and calls with arguments that do not decode. |
+| `round_limit_reached`, `unexecuted_calls` | The calls that did not run because the round limit completed the turn. These calls are not in `calls`, and they are not in the activity feed. |
 
-If Scry fails or cancels without a Completion, the full `scry_tools` value is
-`null`. In that case, `tool_calls` still records the world actions that Pig Pen
-observed before. A provider token limit gives a Completion with statistics. But
-Pig Pen sees that truncated response as a turn error.
+A response that gets to the output-token limit is a turn error. The token
+counts of that request are still in the record.
 
 ## `footer`
 
@@ -144,11 +170,18 @@ jq -r 'select(.type=="tool")
   | "\(.tick) \(.tool) \(.args) -> \(.result | tostring[0:80])"' logs/<run>.jsonl
 ```
 
-To find the turns that have Scry budget refusals or admission refusals, use
-this command:
+To find the turns that have budget refusals or admission refusals, use this
+command:
 
 ```sh
-jq -c 'select(.type=="turn" and (.scry_tools.rejected_calls // 0) > 0)' logs/<run>.jsonl
+jq -c 'select(.type=="turn" and .tool_stats.rejected_calls > 0)' logs/<run>.jsonl
+```
+
+To see how much of each turn llamad took from its KV cache, use this command:
+
+```sh
+jq -r 'select(.type=="turn")
+  | "\(.turn) \(.cached_input_tokens)/\(.input_tokens) in \(.requests) requests"' logs/<run>.jsonl
 ```
 
 To compare the outcomes of many runs, use this command:

@@ -4,7 +4,7 @@
 
 #include "world/world.hpp"
 
-#include <scry/reflection.hpp>
+#include <scrydantic/scrydantic.hpp>
 
 #include <cctype>
 #include <chrono>
@@ -70,13 +70,20 @@ iso_timestamp(const std::chrono::system_clock::time_point now) {
   return result.str();
 }
 
-// One reflected aggregate per JSONL record. Scry's codec writes keys in
+// One reflected aggregate per JSONL record. scrydantic's codec writes keys in
 // lexical order, enums by enumerator name, and each record's tag as "type".
 // Records borrow their strings from the values they describe.
 
 struct GridSize {
   int width{};
   int height{};
+};
+
+struct ModelInfoRecord {
+  std::uint32_t n_ctx{};
+  std::uint32_t n_ctx_train{};
+  std::uint64_t n_params{};
+  std::uint64_t size_bytes{};
 };
 
 struct ScenarioRecord {
@@ -92,9 +99,11 @@ struct ScenarioRecord {
 };
 
 // clang-format off: clang-format would glue the class annotations to `struct`.
-struct [[= scry::reflection::tag{"header"}]] HeaderRecord {
+struct [[= scrydantic::tag{"header"}]] HeaderRecord {
+  std::uint32_t format{};
   std::string_view model{};
-  std::string_view base_url{};
+  ModelInfoRecord model_info{};
+  std::string_view socket{};
   double temperature{};
   std::uint32_t max_output_tokens{};
   std::uint64_t seed{};
@@ -104,25 +113,23 @@ struct [[= scry::reflection::tag{"header"}]] HeaderRecord {
   ScenarioRecord scenario{};
 };
 
-struct [[= scry::reflection::tag{"tool"}]] ToolRecord {
+struct [[= scrydantic::tag{"tool"}]] ToolRecord {
   std::size_t turn{};
   std::uint64_t tick{};
-  std::uint64_t scry_turn_id{};
   std::string_view call_id{};
   std::uint32_t round{};
   std::uint32_t index{};
   core::ToolKind tool{};
-  /// Scry's canonical payloads, spliced verbatim after validation.
-  scry::Json args{};
-  scry::Json result{};
+  /// The canonical arguments and the exact result text that went back to
+  /// the model, spliced verbatim after validation.
+  scrydantic::Json args{};
+  scrydantic::Json result{};
   world::Position before{};
   world::Position after{};
-  bool action_executed{};
-  bool result_dispatched{};
   int score_after{};
 };
 
-struct [[= scry::reflection::tag{"turn"}]] TurnLogRecord {
+struct [[= scrydantic::tag{"turn"}]] TurnLogRecord {
   std::uint32_t turn{};
   core::TurnStatus status{};
   std::string_view user_message{};
@@ -130,14 +137,15 @@ struct [[= scry::reflection::tag{"turn"}]] TurnLogRecord {
   std::string_view error{};
   std::uint64_t input_tokens{};
   std::uint64_t output_tokens{};
-  std::optional<std::uint32_t> attempts{};
+  std::uint64_t cached_input_tokens{};
+  std::uint32_t requests{};
   std::size_t tool_calls{};
-  std::optional<core::TurnToolStats> scry_tools{};
+  core::TurnToolStats tool_stats{};
   bool zero_tool_turn{};
   std::int64_t latency_ms{};
 };
 
-struct [[= scry::reflection::tag{"footer"}]] FooterRecord {
+struct [[= scrydantic::tag{"footer"}]] FooterRecord {
   bool complete{};
   std::string_view finish_reason{};
   std::string_view error{};
@@ -156,7 +164,7 @@ using LogRecord =
 [[nodiscard]] std::expected<void, std::string>
 write_line(std::ofstream &stream, const std::filesystem::path &path,
            const LogRecord &record) {
-  const auto encoded = scry::reflection::encode(record);
+  const auto encoded = scrydantic::encode_verbatim(record);
   if (!encoded) {
     return std::unexpected("could not encode metrics record: " +
                            encoded.error().message);
@@ -200,7 +208,8 @@ write_line(std::ofstream &stream, const std::filesystem::path &path,
 
 std::expected<std::unique_ptr<MetricsWriter>, std::string>
 MetricsWriter::create(const std::filesystem::path &log_directory,
-                      const core::Config &config, std::string prompt_variant) {
+                      const core::Config &config, const core::ModelInfo &model,
+                      std::string prompt_variant) {
   std::error_code directory_error;
   std::filesystem::create_directories(log_directory, directory_error);
   if (directory_error) {
@@ -213,7 +222,7 @@ MetricsWriter::create(const std::filesystem::path &log_directory,
   // <timestamp>-<model>-<seed>.jsonl, suffixed -N until an exclusive create
   // succeeds, so concurrent episodes never share or clobber a log.
   const auto stem = timestamp(wall_started) + '-' +
-                    sanitized_filename_component(config.model) + '-' +
+                    sanitized_filename_component(model.description) + '-' +
                     std::to_string(config.seed);
   auto path = log_directory / (stem + ".jsonl");
   std::ofstream stream{path, std::ios::out | std::ios::noreplace};
@@ -230,8 +239,13 @@ MetricsWriter::create(const std::filesystem::path &log_directory,
       std::move(path), std::move(stream), std::chrono::steady_clock::now()}};
   const auto started_at = iso_timestamp(wall_started);
   const HeaderRecord header{
-      .model = config.model,
-      .base_url = config.base_url,
+      .format = format_version,
+      .model = model.description,
+      .model_info = {.n_ctx = model.n_ctx,
+                     .n_ctx_train = model.n_ctx_train,
+                     .n_params = model.n_params,
+                     .size_bytes = model.size_bytes},
+      .socket = config.socket_path,
       .temperature = config.temperature,
       .max_output_tokens = config.max_output_tokens,
       .seed = config.seed,
@@ -285,7 +299,6 @@ MetricsWriter::record_tool(const core::ToolActivity &activity) {
                             ToolRecord{
                                 .turn = activity.turn,
                                 .tick = activity.tick,
-                                .scry_turn_id = activity.scry_turn_id,
                                 .call_id = activity.call_id,
                                 .round = activity.round,
                                 .index = activity.index,
@@ -294,8 +307,6 @@ MetricsWriter::record_tool(const core::ToolActivity &activity) {
                                 .result = {activity.result_json},
                                 .before = activity.before,
                                 .after = activity.after,
-                                .action_executed = true,
-                                .result_dispatched = activity.result_dispatched,
                                 .score_after = activity.score_after,
                             });
   if (!written) {
@@ -325,9 +336,10 @@ MetricsWriter::record_turn(const core::TurnRecord &record) {
           .error = record.error,
           .input_tokens = record.input_tokens,
           .output_tokens = record.output_tokens,
-          .attempts = record.attempts,
+          .cached_input_tokens = record.cached_input_tokens,
+          .requests = record.requests,
           .tool_calls = record.tool_calls,
-          .scry_tools = record.tool_stats,
+          .tool_stats = record.tool_stats,
           .zero_tool_turn = record.status == core::TurnStatus::completed &&
                             record.tool_calls == 0U,
           .latency_ms = record.latency.count(),

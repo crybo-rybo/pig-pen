@@ -75,10 +75,11 @@ struct TurnRecord {
   std::string error{};
   std::uint64_t input_tokens{};
   std::uint64_t output_tokens{};
-  std::optional<std::uint32_t> attempts{};
+  std::uint64_t cached_input_tokens{};
+  std::uint32_t requests{};
   std::size_t tool_calls{};
   std::chrono::milliseconds latency{};
-  std::optional<TurnToolStats> tool_stats{};
+  TurnToolStats tool_stats{};
 };
 
 /// @brief Terminal outcome delivered to EpisodeObservers::on_episode_finished.
@@ -109,8 +110,8 @@ struct EpisodeObservers {
 ///
 /// Everything runs on the caller's thread: transport callbacks only stage a
 /// turn outcome, and the next tick() applies it. The transport must not
-/// deliver callbacks after the runner is destroyed (ScryTurnTransport only
-/// delivers from Session::pump() and disconnects on destruction).
+/// deliver callbacks after the runner is destroyed (ToolLoopTransport only
+/// delivers from Session::pump() and is destroyed after the runner).
 class EpisodeRunner final {
 public:
   /// @brief Bind the runner to a transport and an episode configuration.

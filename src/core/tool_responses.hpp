@@ -2,9 +2,9 @@
 /// @brief The typed results of the world tools, as the model receives them.
 ///
 /// These are plain C++23 aggregates: no annotation is needed to describe them,
-/// so they live outside the reflection layer. Scry's codec reflects over them
-/// in tool_contract.hpp, and their member and enumerator names are the JSON the
-/// model sees; renaming one changes the model-facing contract.
+/// so they live outside the reflection layer. scrydantic's codec reflects over
+/// them in tool_contract.hpp, and their member and enumerator names are the
+/// JSON the model sees; renaming one changes the model-facing contract.
 #pragma once
 
 #include "world/world.hpp"

@@ -21,9 +21,9 @@ namespace pigpen::ui {
 /// a live episode; they take effect when Reset rebuilds the session wholesale.
 class AppUi final {
 public:
-  /// @brief Seeds the controls from @p initial_config; a non-empty model
-  /// identifier creates and auto-starts a session immediately.
-  explicit AppUi(const core::Config &initial_config);
+  /// @brief Seeds the controls from @p initial_config; with @p play, also
+  /// creates and auto-starts a session immediately.
+  AppUi(const core::Config &initial_config, bool play);
 
   /// @brief Advances the session and the animation timeline; call once per
   /// frame, before draw().
