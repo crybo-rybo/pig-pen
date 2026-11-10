@@ -2,8 +2,8 @@
 
 The world is a plain C++ value type (`pigpen::world::World`). It has no data
 about models, JSON, or networks. Typed argument aggregates and typed response
-aggregates make the boundary to the model. Scry uses C++26 reflection to make
-their schemas and their JSON conversion.
+aggregates make the boundary to the model. scrydantic uses C++26 reflection to
+make their schemas and their JSON conversion.
 
 ## The grid
 
@@ -51,15 +51,20 @@ compilers.
 
 ## Tools
 
-The model gets exactly three tools. Scry makes their JSON Schemas at compile
-time from the declarations in `tool_contract.hpp` and `tool_responses.hpp`:
+The model gets exactly three tools. scrydantic makes their JSON Schemas at
+compile time from the declarations in `tool_contract.hpp` and
+`tool_responses.hpp`. Pig Pen sends the three tools with each llamad request:
 
 - Member names become property names.
 - The `world::Direction` enumerators become the accepted strings.
-- Object schemas set `additionalProperties: false`. Scry rejects extra
+- Object schemas set `additionalProperties: false`. scrydantic rejects extra
   arguments. It does not ignore them.
 
-A decoded world-tool call is a call that Scry admits and decodes. Each decoded
+llamad also uses the schemas: it limits the arguments that the model samples
+to them. Pig Pen still decodes each call strictly.
+
+A decoded world-tool call is a call that Pig Pen admits and scrydantic
+decodes. Each decoded
 call returns a flat reflected world result. This result has an `ok` field and
 the fields of the tool, as shown below. For the call budget and the round limit
 of each turn, refer to [Tool errors and limits](#tool-errors-and-limits).
@@ -150,27 +155,31 @@ Example result when the cell is empty:
 
 ### Tool errors and limits
 
-Scry parses the JSON, validates the schema, decodes the reflected arguments,
-and controls the call budget. The call budget is a maximum of four tool
-requests in each conversation turn, across all rounds and batches. Requests for
-unknown tools and requests with arguments that are not valid also use the
-budget.
+scrydantic parses the JSON, validates the schema, and decodes the reflected
+arguments. The Pig Pen tool loop controls the call budget. The call budget is
+a maximum of four tool requests in each conversation turn, across all rounds
+and batches. Requests for unknown tools and requests with arguments that are
+not valid also use the budget.
 
 These requests and over-budget requests never go into `WorldTools`, and they
-do not make world activity. For an over-budget call, Scry sends a tool error
-that tells the model to give a summary. Each error gives the model sufficient
-data to correct the request. Examples:
+do not make world activity. For an over-budget call, the tool loop sends a
+tool error that tells the model to give a summary. Each error gives the model
+sufficient data to correct the request. Examples:
 
 ```json
 {"error":"$.direction is not a declared enumerator; must be one of: north, south, east, west"}
 ```
 
 ```json
+{"error":"unknown tool \"fly\"; registered tools: eat, look, move"}
+```
+
+```json
 {"error":"tool call limit for this turn reached; respond without calling tools"}
 ```
 
-The Scry admission hook also refuses all subsequent actions after one of these
-events:
+The admission check of the world dispatcher also refuses all subsequent
+actions after one of these events:
 
 - The objective is complete.
 - Pig Pen cannot write the episode log.
@@ -180,11 +189,11 @@ and it keeps the results of the calls that ran. Typical world outcomes, for
 example a wall or an empty cell, are typed results. They are not protocol
 errors.
 
-Pig Pen uses `ToolRoundLimitPolicy::complete`. When a turn gets to
-`max_tool_rounds`, Scry commits the rounds that ran and keeps their history.
-Calls after that round limit do not run. The turn record in the log shows the
-number of these calls. The next automatic turn instruction tells the model that
-these calls did not run.
+When a turn gets to `max_tool_rounds`, the tool loop completes the turn. It
+commits the rounds that ran and keeps their history. Calls after that round
+limit do not run, and the history does not keep them. The turn record in the
+log shows the number of these calls. The next automatic turn instruction tells
+the model that these calls did not run.
 
 ## What the model sees
 
