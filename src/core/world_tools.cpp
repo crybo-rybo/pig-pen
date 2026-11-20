@@ -4,6 +4,7 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -58,6 +59,19 @@ EatToolResponse WorldTools::eat() {
     response.score = eaten.score;
   }
   return response;
+}
+
+std::optional<std::string_view> admission_refusal(const world::World &world,
+                                                  const bool logging_failed) {
+  if (logging_failed) {
+    return "World tools are unavailable because the episode log failed. "
+           "Summarize the actions already taken.";
+  }
+  if (world.all_positive_items_eaten()) {
+    return "All positive-value items have been eaten. Summarize the "
+           "completed episode without more tools.";
+  }
+  return std::nullopt;
 }
 
 } // namespace pigpen::core

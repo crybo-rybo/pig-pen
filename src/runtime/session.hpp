@@ -21,7 +21,7 @@
 #include <memory>
 #include <string>
 
-namespace pigpen::agent {
+namespace pigpen::runtime {
 
 /// @brief The handshake deadline of Session::create when the caller gives
 /// none.
@@ -113,4 +113,4 @@ private:
   std::unique_ptr<Impl> impl_;
 };
 
-} // namespace pigpen::agent
+} // namespace pigpen::runtime

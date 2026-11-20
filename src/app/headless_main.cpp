@@ -3,10 +3,10 @@
 ///
 /// Everything here is argv parsing, SIGINT/SIGTERM handling, incremental
 /// printing of the transcript and activity feed, and the exit-code policy
-/// from docs/running.md. Episode behavior itself lives in agent::Session.
-#include "agent/session.hpp"
+/// from docs/running.md. Episode behavior itself lives in runtime::Session.
 #include "core/config.hpp"
 #include "core/episode_runner.hpp"
+#include "runtime/session.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -267,7 +267,7 @@ struct OutputCursor {
 /// @brief Prints what is new since the last call: assistant text streams one
 /// line per delta, other roles are final when appended and print once, and
 /// each decoded tool call gets one line.
-void print_updates(const pigpen::agent::Session &session,
+void print_updates(const pigpen::runtime::Session &session,
                    OutputCursor &cursor) {
   const auto &transcript = session.runner().transcript();
   const auto previous_size = cursor.transcript_offsets.size();
@@ -329,10 +329,10 @@ void print_updates(const pigpen::agent::Session &session,
   // the handshake; the code below examines it after the handshake.
   auto deadline = std::chrono::steady_clock::now() + options.timeout;
   const auto connect_deadline = std::min<std::chrono::milliseconds>(
-      pigpen::agent::default_connect_deadline, options.timeout);
-  auto created =
-      pigpen::agent::Session::create(options.config, options.log_directory,
-                                     options.prompt_variant, connect_deadline);
+      pigpen::runtime::default_connect_deadline, options.timeout);
+  auto created = pigpen::runtime::Session::create(
+      options.config, options.log_directory, options.prompt_variant,
+      connect_deadline);
   if (!created) {
     std::cerr << "startup error: " << created.error() << '\n';
     return startup_failure_exit();

@@ -2,8 +2,9 @@
 /// @brief The seam between the tool loop and the tools that it runs.
 ///
 /// ToolLoopTransport owns rounds, budgets, and history. A dispatcher owns
-/// the tool contract (names, schemas, decode, encode) and admission. The real
-/// dispatcher is agent::WorldToolDispatcher; the tests use scripted ones.
+/// the tool contract (names, schemas, decode, encode) and applies admission.
+/// The real dispatcher comes from agent::make_world_tool_dispatcher(), and
+/// applies core::admission_refusal(); the tests use scripted ones.
 #pragma once
 
 #include "core/chat_client.hpp"

@@ -255,7 +255,7 @@ core::Config AppUi::config_from_controls() const {
 
 void AppUi::recreate_session(const bool auto_play) {
   // Blocks this frame for the handshake, at most connect_deadline.
-  auto created = agent::Session::create(
+  auto created = runtime::Session::create(
       config_from_controls(), "logs",
       preset_ ? scenario_presets[*preset_].variant : "custom",
       connect_deadline);

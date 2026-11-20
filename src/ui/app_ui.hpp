@@ -2,8 +2,8 @@
 /// @brief The Dear ImGui front end: session ownership and panel drawing.
 #pragma once
 
-#include "agent/session.hpp"
 #include "core/config.hpp"
+#include "runtime/session.hpp"
 #include "ui/world_animation.hpp"
 
 #include <cstddef>
@@ -49,9 +49,9 @@ private:
   void draw_stats_panel();
   void draw_guidance_panel();
 
-  std::shared_ptr<agent::Session> session_{};
+  std::shared_ptr<runtime::Session> session_{};
   WorldAnimationState animation_{};
-  agent::PumpStats pump_stats_{};
+  runtime::PumpStats pump_stats_{};
 
   /// Settings for the next session. turn_budget, max_tool_rounds,
   /// max_output_tokens, and sampling_seed are edited through the widget

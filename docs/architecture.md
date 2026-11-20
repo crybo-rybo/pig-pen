@@ -16,21 +16,22 @@ loop: the conversation history, the tool rounds, the call budget, and the
 round limit.
 
 Only `src/agent` uses C++26 reflection. In the application, only
-`src/llamad` uses gRPC. The fake llamad of the tests also uses it. With these
-layers, you can test all code without a window or a model.
+`src/llamad` uses gRPC. The fake llamad of the tests also uses it.
+`src/runtime` joins the layers into one `Session`, and uses neither. With
+these layers, you can test all code without a window or a model.
 
 ```
 src/app/main.cpp              src/app/headless_main.cpp
         │  SDL3 + ImGui loop          │  argv parsing, signals, stdout
         ▼                             ▼
-   src/ui/  ─────────────►  agent::Session
+   src/ui/  ─────────────►  runtime::Session
    AppUi, WorldAnimation          │
                                   ├── core::EpisodeRunner      turn loop, play/pause/stop
                                   ├── core::ToolLoopTransport  tool rounds, budgets, history
                                   │     ├── core::IChatClient     ◄── llamad::LlamadChatClient ──► gRPC ──► llamad
-                                  │     └── core::IToolDispatcher ◄── agent::WorldToolDispatcher (scrydantic)
-                                  ├── core::WorldTools         typed actions and visibility
-                                  ├── MetricsWriter            reflected JSONL
+                                  │     └── core::IToolDispatcher ◄── agent::make_world_tool_dispatcher() (scrydantic)
+                                  │           └── core::WorldTools, core::admission_refusal()
+                                  ├── agent::MetricsWriter     reflected JSONL
                                   └── world::World             the simulation
 ```
 
@@ -55,7 +56,7 @@ more data, refer to [Build layout](#build-layout).
 | `config.hpp` | `Config`: the llamad socket, the seed, the budgets, the sampling settings, and the three model-visibility flags. Both front ends use it. `default_socket_path()` applies the llamad default rule. `estimated_context_tokens()` gives the rough context estimate for a turn budget. |
 | `prompt.cpp` | Creates the system prompt from `Config`. Creates the instructions for each turn from the feedback and the optional human guidance. |
 | `tool_responses.hpp` | Flat response aggregates, with the world outcome fields. scrydantic reflects over them in `src/agent`. |
-| `world_tools.cpp` | Typed world actions and scenario visibility. It takes world values. It contains no JSON, reflection, budgets, or schema code. |
+| `world_tools.cpp` | Typed world actions and scenario visibility, and the admission policy for world actions (`admission_refusal()`). It takes world values. It contains no JSON, reflection, budgets, or schema code. |
 | `events.hpp` | `ToolActivity` and its append-only feed. Each item has typed application semantics, the call identity, and the exact canonical argument text and result text. |
 | `turn_transport.hpp` | `ITurnTransport`, the interface for an implementation that sends one turn and gets callbacks. |
 | `chat_client.hpp` | `IChatClient`, the interface for one chat request, and plain value types that mirror the llamad wire contract. It contains no JSON code. |
@@ -135,7 +136,7 @@ message is first. One turn does these steps:
    does not stop the round. The round gets all its answers, and the next
    request does not start.
 
-`Session` gives the `n_ctx` that llamad reports at connect to
+`Session` (in `src/runtime`) gives the `n_ctx` that llamad reports at connect to
 `ToolLoopLimits::context_tokens`. It also compares `n_ctx` with
 `core::estimated_context_tokens()` for the turn budget. If `n_ctx` is
 smaller, `Session::startup_warning()` returns a warning, and both front ends
@@ -225,41 +226,30 @@ changes it, so it needs no lock.
 
 This layer is C++26 with reflection, in the namespace `pigpen::agent`. The
 build makes it as `pigpen_agent`. Put code here only when reflection replaces
-hand-written shape code. Keep the public headers of this layer
-C++23-parseable, so that the front ends can include them.
+hand-written shape code. The layer has the tool contract, the toolbox and its
+dispatcher, the factory of the dispatcher, and the metrics writer. It has no
+composition code, and it does not link the llamad client.
+
+Two headers of this layer are C++23-parseable, so that the C++23 layers can
+include them: `world_tool_dispatcher.hpp` and `metrics_writer.hpp`.
+`tool_contract.hpp` and `world_tool_binding.hpp` include scrydantic, so they
+need C++26 reflection. Only the TUs of this layer and the reflection tests
+include them.
 
 | unit | responsibility |
 |---|---|
-| `tool_contract.hpp` | The annotated `DirectionArguments`, the error result type, and the checks that all argument types and response types are reflectable. This file and `core/tool_responses.hpp` together are the contract with the model. |
-| `world_tool_binding.cpp` | The scrydantic toolbox (`move`, `look`, `eat`) over `core::WorldTools`, and `WorldToolDispatcher`: the admission policy, the tool lookup, and the publication of each world transition with its exact payloads. |
+| `tool_contract.hpp` | The annotated `DirectionArguments`, the error result type, and the checks that all argument types and response types are reflectable. This file and `core/tool_responses.hpp` together are the contract with the model. C++26 only. |
+| `world_tool_dispatcher.hpp` | The C++23 entry point of the layer: `make_world_tool_dispatcher()`, which returns a `core::IToolDispatcher`, and `WorldToolObservers`, the callbacks of the owner. |
+| `world_tool_binding.cpp` | The scrydantic toolbox (`move`, `look`, `eat`) over `core::WorldTools`, its call context `WorldToolCall`, and `WorldToolDispatcher`: it applies the admission policy, finds the tool, and publishes each world transition with its exact payloads. The declarations in `world_tool_binding.hpp` are C++26 only. |
 | `metrics_writer.cpp` | The JSONL header, tool, turn, and footer records as reflected records. The writer always writes a footer, also after an abnormal shutdown. |
-| `session.cpp` | Puts all of the above units into one owned object. |
-
-Three seams make the layers testable:
-
-- With `ITurnTransport`, a scripted transport in
-  `tests/episode_runner_tests.cpp` can operate `EpisodeRunner`. The tests use
-  this seam to cover the full turn loop without a model. This includes a stop
-  that cancels an active turn.
-- With `IChatClient` and `IToolDispatcher`, a scripted chat client in
-  `tests/tool_loop_tests.cpp` can operate `ToolLoopTransport`. The tests use
-  this seam to cover the request contents, the budget, the round limit, the
-  committed history after each type of turn end, failures, and cancellation.
-- `WorldTools` takes world values and returns the plain response types. The
-  tests use this seam to examine world behavior, fixed response shapes, and
-  scenario visibility without reflection, JSON, or a binding.
-
-A scripted fake llamad (`tests/support/fake_llamad.cpp`) is a real gRPC
-server on a temporary Unix socket. The tests use it to test the real client,
-a full `Session`, and the CLI process.
 
 ### Reflection is the tool boundary
 
 `WorldToolBinding` is a scrydantic toolbox. Its `move`, `look`, and `eat`
 member functions have `scrydantic::tool` annotations.
-`WorldToolDispatcher` calls `scrydantic::bind` one time with a
-`std::shared_ptr` to the binding. Each bound handler shares the ownership of
-the binding. scrydantic then does these steps for each tool:
+`WorldToolDispatcher` makes the binding, and calls `scrydantic::bind` one
+time with a `std::shared_ptr` to it. Each bound handler shares the ownership
+of the binding. scrydantic then does these steps for each tool:
 
 - It gives the tool the name of its function.
 - At compile time, it makes a closed JSON Schema from the parameters
@@ -271,21 +261,37 @@ the binding. scrydantic then does these steps for each tool:
 The identifiers of the scoped enums supply the JSON strings from the same C++
 declaration.
 
-Each member function takes a `core::ToolCallContext` as its first parameter.
-This context holds the round, the batch index, and the call ID from the tool
-loop. The member runs the typed world action. It stages the world transition
-with the canonical argument text. Then `dispatch()` adds the exact result
-text that goes back to the model, and publishes the `ToolActivity` through
-`on_activity`. Dispatch is one synchronous call on the pump thread. Thus,
-each decoded call makes exactly one activity, and the log never needs to
-encode a payload a second time.
+The binding uses `WorldToolCall` as its scrydantic call context. Each member
+function takes a `const WorldToolCall &` as its first parameter. scrydantic
+does not put the context into the schema. The context holds two items:
+
+- `call`: the `core::ToolCallContext` from the tool loop, with the round, the
+  batch index, and the call ID.
+- `activity`: a reference to the output slot of the call, an empty
+  `std::optional<core::ToolActivity>`.
+
+For each call, `dispatch()` makes a new empty slot on its stack, and gives it
+to the handler in the context. The member runs the typed world action. Then
+it writes the world transition, with the canonical argument text, into the
+slot. After the handler returns, `dispatch()` reads the slot. If the slot is
+empty, the arguments did not decode, and no world action ran. Otherwise
+`dispatch()` adds the exact result text that goes back to the model, and
+publishes the `ToolActivity` through `WorldToolObservers::on_activity`.
+Dispatch is one synchronous call on the pump thread. Thus, each decoded call
+makes exactly one activity, and the log never needs to encode a payload a
+second time.
+
+The owner gives the observers to `make_world_tool_dispatcher()`. They cannot
+change after that.
 
 `dispatch()` does these steps in sequence:
 
-1. **Admission.** After objective completion or a log failure, the
-   dispatcher refuses all world actions. This includes the subsequent calls
-   in the same batch. A log failure ends the episode after the active turn
-   ends. The results of the executed calls commit with their round.
+1. **Admission.** The dispatcher polls `WorldToolObservers::logging_failed`,
+   and asks `core::admission_refusal()`. After objective completion or a log
+   failure, the policy refuses all world actions. This includes the
+   subsequent calls in the same batch. A log failure ends the episode after
+   the active turn ends. The results of the executed calls commit with their
+   round.
 2. **Lookup.** An unknown tool name is not valid. The model gets the list of
    the registered tools.
 3. **Decode and call.** Arguments that do not decode are not valid. The model
@@ -297,14 +303,54 @@ fixed string constant, `tool_call_limit_result` in `src/core/tool_loop.hpp`.
 Pig Pen never puts model text into JSON by hand. Refused calls and calls that
 are not valid never become world activity.
 
+## `src/runtime`: the composition root
+
+This layer is C++23 in the namespace `pigpen::runtime`. The build makes it as
+`pigpen_runtime`. It has one unit, `session.cpp`. `Session` validates the
+config, connects to llamad, and joins the world, the dispatcher, the tool
+loop, the runner, and the log. `PumpStats` and `TokenTotals` are also in
+`session.hpp`.
+
+The layer links `pigpen_core` publicly, and `pigpen_llamad` and
+`pigpen_agent` privately. It includes only C++23 headers of these layers:
+`llamad/llamad_client.hpp`, `agent/world_tool_dispatcher.hpp`, and
+`agent/metrics_writer.hpp`. Thus, it compiles without reflection, and
+clang-tidy can analyse it. Its public header, `session.hpp`, includes only
+`core` and `world` headers. Both front ends and `pigpen_tests` link
+`pigpen_runtime`.
+
+Three seams make the layers testable:
+
+- With `ITurnTransport`, a scripted transport in
+  `tests/episode_runner_tests.cpp` can operate `EpisodeRunner`. The tests use
+  this seam to cover the full turn loop without a model. This includes a stop
+  that cancels an active turn.
+- With `IChatClient` and `IToolDispatcher`, a scripted chat client in
+  `tests/tool_loop_tests.cpp` can operate `ToolLoopTransport`. The tests use
+  this seam to cover the request contents, the budget, the round limit, the
+  committed history after each type of turn end, failures, and cancellation.
+- `WorldTools` and `admission_refusal()` take world values and return plain
+  types. The tests use this seam to examine world behavior, fixed response
+  shapes, scenario visibility, and the admission policy without reflection,
+  JSON, or a binding.
+
+The reflection tests make the real dispatcher with
+`make_world_tool_dispatcher()`, and examine its results through its
+observers.
+
+A scripted fake llamad (`tests/support/fake_llamad.cpp`) is a real gRPC
+server on a temporary Unix socket. The tests use it to test the real client,
+a full `Session`, and the CLI process.
+
 ### `Session` is the reset unit
 
 A `Session` owns the world, the llamad connection, the tool loop with its
-conversation, the bound world tools, the runner, and the metrics writer. A
-partial reset is not possible. To start again, destroy the session and create
-a new one. The GUI **Reset** button does exactly this. For this reason,
-changes to the connection and the scenario do not change an active episode.
-The GUI shows "Pending settings apply on Reset" instead.
+conversation, the world tool dispatcher (with the bound tools), the runner,
+and the metrics writer. A partial reset is not possible. To start again,
+destroy the session and create a new one. The GUI **Reset** button does
+exactly this. For this reason, changes to the connection and the scenario do
+not change an active episode. The GUI shows "Pending settings apply on Reset"
+instead.
 
 `Session::create()` does these steps in sequence:
 
@@ -314,17 +360,20 @@ The GUI shows "Pending settings apply on Reset" instead.
    seconds). The CLI gives `min(5 s, --timeout-seconds)`, and starts its
    episode clock before this call. The GUI gives 1 second, because the
    frame loop waits.
-3. It makes the world and the tool binding.
-4. It opens the log last.
+3. It makes the world.
+4. It opens the log.
+5. It makes the dispatcher with `agent::make_world_tool_dispatcher()`, then
+   the tool loop and the runner. These steps do not return an error.
 
-Thus, a config that is not valid, or a daemon that Pig Pen cannot reach,
-leaves no log.
+The log is the last step that can return an error. Thus, a config that is
+not valid, or a daemon that Pig Pen cannot reach, leaves no log.
 
+`Session` holds the dispatcher as a `std::unique_ptr<core::IToolDispatcher>`.
 The members are in an order that destroys the runner first, then the tool
-loop, then the client, then the tools, and then the world. The runner and the
-tool loop cancel the active request. The client joins its worker and drops
-the events that it did not deliver. No state is destroyed while a callback
-can still reach it.
+loop, then the client, then the dispatcher with the tools, and then the
+world. The runner and the tool loop cancel the active request. The client
+joins its worker and drops the events that it did not deliver. No state is
+destroyed while a callback can still reach it.
 
 Clients examine the runner through a const view, and control it through
 `Session`.
@@ -389,7 +438,8 @@ that Pig Pen can link that gRPC.
 | `pigpen_core` | C++23 | world | `src/core` |
 | `pigpen_llamad_proto` | C++17 or later | Protobuf, gRPC | the generated llamad stubs only |
 | `pigpen_llamad` | C++23 | core (public); proto, gRPC (private) | `src/llamad` |
-| `pigpen_agent` | C++26 + `-freflection` (private) | core (public); llamad, scrydantic (private) | `src/agent` |
+| `pigpen_agent` | C++26 + `-freflection` (private) | core (public); scrydantic (private) | `src/agent` |
+| `pigpen_runtime` | C++23 | core (public); llamad, agent (private) | `src/runtime` |
 | `pigpen_ui` (GUI or tests) | C++23 | core | `gui_options.cpp` and `world_animation.cpp` |
 | `pigpen_test_support` (tests only) | C++23 | proto, gRPC (private) | `tests/support/fake_llamad.cpp`, the fake llamad |
 
@@ -403,15 +453,21 @@ path. Thus, a `<grpcpp/...>` include in `pigpen_core` can compile.
 
 `pigpen_agent` links scrydantic privately and requests C++26 privately.
 Because of this, the C++26 standard and `-freflection` do not go to the
-targets that link `pigpen_agent`. Both entry points, `pigpen_ui`, and
-`pigpen_tests` compile as C++23. Only `pigpen_agent` and
-`pigpen_reflection_tests` compile with reflection. For this reason, the
-public agent headers (`session.hpp`, `metrics_writer.hpp`) stay
-C++23-parseable.
+targets that link `pigpen_agent`. `pigpen_runtime`, both entry points,
+`pigpen_ui`, and `pigpen_tests` compile as C++23. Only the TUs of
+`pigpen_agent` and `pigpen_reflection_tests` compile with reflection. For
+this reason, the agent headers that the C++23 targets include
+(`world_tool_dispatcher.hpp`, `metrics_writer.hpp`) stay C++23-parseable.
+The build proves it, because `src/runtime/session.cpp` and
+`tests/metrics_writer_tests.cpp` include them. `tool_contract.hpp` and
+`world_tool_binding.hpp` include scrydantic. A C++23 TU that includes them
+does not compile, because scrydantic stops with an `#error` without
+reflection.
 
 Put code in `pigpen_agent` only when reflection replaces hand-written shape
 code there. Examples are the tool contract and toolbox, and the reflected
-JSONL records. The metrics writer encodes those records with the scrydantic
+JSONL records. Code without reflection goes to `pigpen_core` (policy, for
+example the admission policy) or to `pigpen_runtime` (composition). The metrics writer encodes those records with the scrydantic
 codec, so the runtime has no other JSON library. nlohmann/json is a dependency
 only for the tests. The tests use it to parse logs and requests
 independently.

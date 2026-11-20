@@ -7,7 +7,8 @@
 /// time (P2996/P3394), strictly decodes incoming arguments, and encodes the
 /// typed responses declared in tool_responses.hpp. Adding or renaming a member
 /// or enumerator changes schema, decode, and encode from its one declaration.
-/// Requires C++26 reflection: include it only from pigpen_agent.
+/// Requires C++26 reflection: include it only from pigpen_agent and the
+/// reflection tests.
 #pragma once
 
 #include "core/tool_responses.hpp"
