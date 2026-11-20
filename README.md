@@ -87,7 +87,10 @@ configure step: `CC=/usr/bin/cc CXX=g++-16 cmake --preset dev --fresh`.
 1. Build [llamad](https://github.com/crybo-rybo/llamad) 0.2.x and start it
    with the GGUF model that you want to use. Pig Pen refuses a daemon of a
    different version. Give it a large context, because Pig Pen sends the full
-   conversation again in each tool round:
+   conversation again in each tool round, and it does not trim the history.
+   When the context is full, the episode ends with `context_exhausted` (CLI
+   exit code 6). The 4096-token default of llamad is too small for the
+   default 20 turns, and Pig Pen shows a warning at startup:
 
    ```sh
    llamad --model /absolute/path/to/model.gguf --ctx 32768

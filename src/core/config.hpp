@@ -23,6 +23,19 @@ inline constexpr std::uint32_t max_output_tokens_limit{2'147'483'647};
 /// that variable is set and not empty, else `/tmp/llamad-<uid>.sock`.
 [[nodiscard]] std::string default_socket_path();
 
+/// @brief A rough upper estimate of the context tokens that an episode of
+/// @p turn_budget turns needs with the default tools: 1000 + 400 per turn.
+///
+/// Pig Pen resends the whole conversation on each request and never trims
+/// it, so the context must hold the full episode. The numbers come from
+/// measurements with a Qwen model against llamad: the system prompt, the
+/// tool schemas, and the first user message are about 860 tokens before the
+/// first reply, and a turn makes up to five requests that add 70 to 100
+/// tokens each. This is an estimate for a startup warning, not a guarantee:
+/// other models tokenize differently, and a talkative model needs more.
+[[nodiscard]] std::uint64_t
+estimated_context_tokens(std::uint32_t turn_budget) noexcept;
+
 /// @note The three visibility flags change only what the model is told; the
 /// world, the scoring, and the log always record the truth.
 struct Config {

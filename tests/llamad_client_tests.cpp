@@ -26,6 +26,7 @@
 #include <vector>
 
 using pigpen::core::ChatError;
+using pigpen::core::ChatErrorKind;
 using pigpen::core::ChatFinish;
 using pigpen::core::ChatFinishReason;
 using pigpen::core::ChatRole;
@@ -270,7 +271,7 @@ TEST_CASE("failure statuses become errors with the status name") {
     run.start();
     run.finish();
     REQUIRE_FALSE(run.finished->has_value());
-    CHECK_FALSE(run.finished->error().cancelled);
+    CHECK(run.finished->error().kind == ChatErrorKind::failure);
     return run.finished->error().message;
   };
 
@@ -294,7 +295,33 @@ TEST_CASE("failure statuses become errors with the status name") {
   run.start();
   run.finish();
   REQUIRE_FALSE(run.finished->has_value());
+  CHECK(run.finished->error().kind == ChatErrorKind::failure);
   CHECK(run.finished->error().message == "llamad INTERNAL: no scripted reply");
+}
+
+TEST_CASE("OUT_OF_RANGE is a prompt that is too long, with the daemon's "
+          "message") {
+  Harness run;
+  run.fake->enqueue({.status_code = 11,
+                     .status_message =
+                         "prompt is too long: 4140 tokens for a context of "
+                         "4096"});
+  run.start();
+  run.finish();
+  REQUIRE_FALSE(run.finished->has_value());
+  CHECK(run.finished->error().kind == ChatErrorKind::prompt_too_long);
+  CHECK(run.finished->error().message ==
+        "llamad OUT_OF_RANGE: prompt is too long: 4140 tokens for a context "
+        "of 4096");
+
+  // Another llamad build answered INVALID_ARGUMENT with this message. Only
+  // OUT_OF_RANGE, the status of llamad 0.2.0, is classified.
+  run.fake->enqueue(
+      {.status_code = 3, .status_message = "prompt is too long: 4140 tokens"});
+  run.start();
+  run.finish();
+  REQUIRE_FALSE(run.finished->has_value());
+  CHECK(run.finished->error().kind == ChatErrorKind::failure);
 }
 
 TEST_CASE("a daemon that stops mid-stream ends the request with an error, "
@@ -308,7 +335,7 @@ TEST_CASE("a daemon that stops mid-stream ends the request with an error, "
   run.fake.reset();
   run.finish();
   REQUIRE_FALSE(run.finished->has_value());
-  CHECK_FALSE(run.finished->error().cancelled);
+  CHECK(run.finished->error().kind == ChatErrorKind::failure);
   CHECK(run.finished->error().message.starts_with("llamad "));
   CHECK(std::ranges::count(run.events, std::string{"<finished>"}) == 1);
   CHECK_FALSE(run.client->cancel());
@@ -324,7 +351,7 @@ TEST_CASE("cancel ends an in-flight request with a cancelled error") {
   REQUIRE(run.client->cancel());
   run.finish();
   REQUIRE_FALSE(run.finished->has_value());
-  CHECK(run.finished->error().cancelled);
+  CHECK(run.finished->error().kind == ChatErrorKind::cancelled);
   CHECK_FALSE(run.client->cancel());
   CHECK(run.fake->wait_until_idle());
 
@@ -355,7 +382,7 @@ TEST_CASE("cancel immediately after start ends the request as cancelled") {
   gate.open();
   REQUIRE(pump_until(*run.client, [&] { return first.has_value(); }));
   REQUIRE_FALSE(first->has_value());
-  CHECK(first->error().cancelled);
+  CHECK(first->error().kind == ChatErrorKind::cancelled);
   CHECK_FALSE(run.client->cancel());
 
   // The client is usable again. start() joins the first worker, so every
@@ -411,7 +438,7 @@ TEST_CASE("cancel after the stream ended but before delivery keeps the "
   run.start();
   run.finish();
   REQUIRE_FALSE(run.finished->has_value());
-  CHECK_FALSE(run.finished->error().cancelled);
+  CHECK(run.finished->error().kind == ChatErrorKind::failure);
   CHECK(run.finished->error().message == "llamad CANCELLED: server shutdown");
   CHECK(finished == 1);
 }
@@ -564,7 +591,7 @@ TEST_CASE("progress chunks are skipped, and the finish carries the "
   REQUIRE(run.client->cancel());
   run.finish();
   REQUIRE_FALSE(run.finished->has_value());
-  CHECK(run.finished->error().cancelled);
+  CHECK(run.finished->error().kind == ChatErrorKind::cancelled);
 }
 
 TEST_CASE("connect refuses a daemon outside the llamad 0.2 series") {

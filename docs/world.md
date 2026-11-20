@@ -195,6 +195,18 @@ limit do not run, and the history does not keep them. The turn record in the
 log shows the number of these calls. The next automatic turn instruction tells
 the model that these calls did not run.
 
+Each request also has an output-token limit, `max_output_tokens` (8192 by
+default, `--max-output-tokens` in the CLI). A reply that gets to this limit
+ends the turn and the episode with an error.
+
+Pig Pen sends the full conversation in each request, and it does not trim or
+summarize the history. The context size of llamad (`--ctx`) thus limits the
+length of the episode. When the conversation no longer fits, the turn and the
+episode end with `context_exhausted`, and the CLI stops with exit code 6. The
+answered tool rounds of that turn stay in the log. For the estimate and the
+warning at startup, refer to
+[The context size](running.md#the-context-size).
+
 ## What the model sees
 
 Three `Config` flags change the data that the model sees. They do not change

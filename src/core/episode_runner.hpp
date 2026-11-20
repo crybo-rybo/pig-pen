@@ -34,6 +34,9 @@ enum class FinishReason : std::uint8_t {
   stopped,
   cancelled,
   error,
+  /// A turn ended with TurnStatus::context_exhausted: the conversation no
+  /// longer fits in the model context, and Pig Pen does not trim it.
+  context_exhausted,
 };
 
 /// @brief Who produced a transcript entry.

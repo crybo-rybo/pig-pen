@@ -50,6 +50,22 @@ validate(const core::Config &config) {
   return {};
 }
 
+/// @brief The warning when the daemon's context looks too small for the
+/// turn budget; empty when it does not, or when the daemon reports no size.
+[[nodiscard]] std::string context_warning(const core::ModelInfo &model,
+                                          const core::Config &config) {
+  const auto estimate = core::estimated_context_tokens(config.turn_budget);
+  if (model.n_ctx == 0 || model.n_ctx >= estimate) {
+    return {};
+  }
+  return "llamad runs with a context of " + std::to_string(model.n_ctx) +
+         " tokens, but a turn budget of " + std::to_string(config.turn_budget) +
+         " can need about " + std::to_string(estimate) +
+         " tokens (a rough estimate). Pig Pen does not trim the history, so "
+         "the episode can end with context_exhausted. Start llamad with a "
+         "larger --ctx, or use fewer turns.";
+}
+
 } // namespace
 
 struct Session::Impl {
@@ -58,8 +74,9 @@ struct Session::Impl {
        std::unique_ptr<world::World> initial_world,
        std::shared_ptr<WorldToolBinding> initial_binding,
        std::unique_ptr<MetricsWriter> initial_metrics)
-      : config(std::move(initial_config)), world(std::move(initial_world)),
-        metrics(std::move(initial_metrics)),
+      : config(std::move(initial_config)),
+        startup_warning(context_warning(initial_client->model_info(), config)),
+        world(std::move(initial_world)), metrics(std::move(initial_metrics)),
         binding(std::move(initial_binding)),
         dispatcher(binding, [this] { return !metrics_error.empty(); }),
         client(std::move(initial_client)),
@@ -69,7 +86,8 @@ struct Session::Impl {
              .max_tokens = config.max_output_tokens,
              .seed = config.sampling_seed},
             {.max_tool_rounds = config.max_tool_rounds,
-             .max_tool_calls_per_turn = core::max_world_tool_calls_per_turn}),
+             .max_tool_calls_per_turn = core::max_world_tool_calls_per_turn,
+             .context_tokens = client->model_info().n_ctx}),
         runner(
             tool_loop, config.turn_budget,
             [this] { return world->all_positive_items_eaten(); },
@@ -109,6 +127,7 @@ struct Session::Impl {
   // cancel the active request, then the client joins its worker and drops
   // undelivered events, and only then do the tools and the world go.
   core::Config config;
+  std::string startup_warning;
   std::unique_ptr<world::World> world;
   core::ToolActivityFeed activities{};
   std::unique_ptr<MetricsWriter> metrics;
@@ -180,6 +199,9 @@ void Session::clear_pending_user_inputs() {
 const core::Config &Session::config() const noexcept { return impl_->config; }
 const core::ModelInfo &Session::model_info() const noexcept {
   return impl_->client->model_info();
+}
+const std::string &Session::startup_warning() const noexcept {
+  return impl_->startup_warning;
 }
 const world::World &Session::world() const noexcept { return *impl_->world; }
 const core::ToolActivityFeed &Session::tool_activities() const noexcept {

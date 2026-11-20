@@ -33,6 +33,10 @@ struct ToolLoopLimits {
   /// Calls dispatched in one turn, across rounds; invalid and refused calls
   /// also spend it.
   std::uint32_t max_tool_calls_per_turn{max_world_tool_calls_per_turn};
+  /// The context size of the backend in tokens (llamad `n_ctx`); 0 means
+  /// unknown. It only classifies a `length` finish: the loop never trims
+  /// the history.
+  std::uint32_t context_tokens{};
 };
 
 /// @brief The tool result for a call over the per-turn budget.
@@ -54,10 +58,18 @@ inline constexpr std::string_view tool_call_limit_result{
 ///   assistant message. The content of that message is the text of the final
 ///   reply, and it is empty when the reply had no text. At the round limit,
 ///   it holds the text only, never the calls that did not run.
-/// - A turn that does not complete (error, cancel, `length`, a round that
-///   cannot start) commits its answered prefix: the user message and every
-///   answered round. It discards only the reply after the last answered
-///   round. A turn that fails before it answers a round commits nothing.
+/// - A turn that does not complete (error, cancel, a full context, `length`,
+///   a round that cannot start) commits its answered prefix: the user
+///   message and every answered round. It discards only the reply after the
+///   last answered round. A turn that fails before it answers a round
+///   commits nothing.
+///
+/// Context exhaustion, for each request: the turn ends with
+/// TurnStatus::context_exhausted when the client reports
+/// ChatErrorKind::prompt_too_long, or when a reply finishes with `length`
+/// and its prompt and completion tokens together reach
+/// ToolLoopLimits::context_tokens. Any other `length` finish is
+/// TurnStatus::error. The history is never trimmed.
 /// - Thus, the history never holds a tool call without its answer, and an
 ///   assistant message always follows each committed `user` message.
 /// - The history is committed before on_finished runs.
@@ -110,6 +122,8 @@ private:
   void dispatch_round(std::uint32_t round,
                       const std::vector<ChatToolCall> &calls);
   void complete_turn(std::string final_text);
+  /// @brief End the turn for a reply that finished with `length`.
+  void end_at_length(const ChatStats &stats);
   void end_turn(TurnStatus status, std::string error);
 
   IChatClient &client_;

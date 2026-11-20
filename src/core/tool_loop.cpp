@@ -93,9 +93,15 @@ void ToolLoopTransport::on_round_finished(
     std::expected<ChatFinish, ChatError> finished) {
   auto &turn = *turn_;
   if (!finished) {
-    const auto cancelled = finished.error().cancelled || turn.cancel_requested;
-    end_turn(cancelled ? TurnStatus::cancelled : TurnStatus::error,
-             std::move(finished.error().message));
+    auto &error = finished.error();
+    // A cancel wins over the error that it can cause.
+    auto status = TurnStatus::error;
+    if (error.kind == ChatErrorKind::cancelled || turn.cancel_requested) {
+      status = TurnStatus::cancelled;
+    } else if (error.kind == ChatErrorKind::prompt_too_long) {
+      status = TurnStatus::context_exhausted;
+    }
+    end_turn(status, std::move(error.message));
     return;
   }
 
@@ -112,8 +118,7 @@ void ToolLoopTransport::on_round_finished(
     complete_turn(std::move(turn.round_text));
     return;
   case ChatFinishReason::length:
-    end_turn(TurnStatus::error,
-             "model response reached its output-token limit");
+    end_at_length(finished->stats);
     return;
   case ChatFinishReason::tool_calls:
     break;
@@ -191,6 +196,34 @@ void ToolLoopTransport::complete_turn(std::string final_text) {
       {.role = ChatRole::assistant, .content = std::move(final_text)});
   turn.answered = turn.staged.size();
   end_turn(TurnStatus::completed, {});
+}
+
+void ToolLoopTransport::end_at_length(const ChatStats &stats) {
+  // llamad uses FINISH_REASON_LENGTH both for a spent max_tokens and for a
+  // context with no room for another token. The token counts of this one
+  // request tell them apart.
+  const auto prompt = std::to_string(stats.prompt_tokens);
+  const auto completion = std::to_string(stats.completion_tokens);
+  const auto output_limit = std::to_string(sampling_.max_tokens);
+  if (limits_.context_tokens == 0) {
+    end_turn(TurnStatus::error,
+             "model response stopped at a length limit after " + completion +
+                 " output tokens: either the output-token limit of " +
+                 output_limit + " tokens, or a full context (" + prompt +
+                 " prompt tokens; the daemon did not report its context "
+                 "size)");
+    return;
+  }
+  if (stats.prompt_tokens + stats.completion_tokens >= limits_.context_tokens) {
+    end_turn(TurnStatus::context_exhausted,
+             "the model context is full: " + prompt + " prompt tokens and " +
+                 completion + " output tokens fill the context of " +
+                 std::to_string(limits_.context_tokens) + " tokens");
+    return;
+  }
+  end_turn(TurnStatus::error,
+           "model response reached its output-token limit of " + output_limit +
+               " tokens after " + completion + " output tokens");
 }
 
 void ToolLoopTransport::end_turn(const TurnStatus status, std::string error) {

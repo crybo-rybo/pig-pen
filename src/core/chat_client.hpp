@@ -120,11 +120,22 @@ struct ChatFinish {
   std::vector<ChatToolCall> tool_calls{};
 };
 
+/// @brief Why a request ended without a finish chunk.
+enum class ChatErrorKind : std::uint8_t {
+  /// Any failure that is not one of the kinds below.
+  failure,
+  /// The request ended because of a local cancel().
+  cancelled,
+  /// The backend refused the request because the prompt does not fit in its
+  /// context (llamad `OUT_OF_RANGE`).
+  prompt_too_long,
+};
+
 /// @brief A request that ended without a finish chunk. A cancelled request
 /// always ends here, never with a finish chunk.
 struct ChatError {
-  /// The request ended because of a local cancel().
-  bool cancelled{};
+  ChatErrorKind kind{ChatErrorKind::failure};
+  /// For a backend failure, the backend's status and message.
   std::string message{};
 };
 

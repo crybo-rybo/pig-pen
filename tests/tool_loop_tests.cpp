@@ -418,17 +418,113 @@ TEST_CASE("an empty final reply commits an empty assistant message, so the "
 }
 
 TEST_CASE("an output-token limit before a tool round is a turn error that "
-          "commits nothing") {
-  Loop loop;
+          "names the limit and commits nothing") {
+  Loop loop{{.context_tokens = 4096}};
   loop.send();
   loop.chat.text("Incomplete.");
   loop.chat.finish({.reason = ChatFinishReason::length,
                     .stats = {.prompt_tokens = 10, .completion_tokens = 128}});
   REQUIRE(loop.outcome);
   CHECK(loop.outcome->status == TurnStatus::error);
-  CHECK(loop.outcome->error == "model response reached its output-token limit");
+  CHECK(loop.outcome->error == "model response reached its output-token limit "
+                               "of 128 tokens after 128 output tokens");
   CHECK(loop.outcome->requests == 1);
   CHECK(loop.outcome->output_tokens == 128);
+  CHECK(loop.transport.history().size() == 1);
+}
+
+TEST_CASE("a length finish at a full context ends the turn "
+          "context_exhausted") {
+  Loop loop{{.context_tokens = 2816}};
+  loop.send();
+  loop.chat.text("I");
+  SECTION("the counts fill the context exactly") {
+    loop.chat.finish(
+        {.reason = ChatFinishReason::length,
+         .stats = {.prompt_tokens = 2815, .completion_tokens = 1}});
+    REQUIRE(loop.outcome);
+    CHECK(loop.outcome->error ==
+          "the model context is full: 2815 prompt tokens and 1 output tokens "
+          "fill the context of 2816 tokens");
+  }
+  SECTION("the counts go past the context") {
+    loop.chat.finish(
+        {.reason = ChatFinishReason::length,
+         .stats = {.prompt_tokens = 2815, .completion_tokens = 2}});
+    REQUIRE(loop.outcome);
+    CHECK(loop.outcome->error ==
+          "the model context is full: 2815 prompt tokens and 2 output tokens "
+          "fill the context of 2816 tokens");
+  }
+  CHECK(loop.outcome->status == TurnStatus::context_exhausted);
+  CHECK(loop.outcome->requests == 1);
+  CHECK(loop.outcome->input_tokens == 2815);
+  // No round was answered, so the history is unchanged.
+  CHECK(loop.transport.history().size() == 1);
+}
+
+TEST_CASE("a length finish one token below the context is an output-limit "
+          "error") {
+  Loop loop{{.context_tokens = 2816}};
+  loop.send();
+  loop.chat.finish(
+      {.reason = ChatFinishReason::length,
+       .stats = {.prompt_tokens = 2687, .completion_tokens = 128}});
+  REQUIRE(loop.outcome);
+  CHECK(loop.outcome->status == TurnStatus::error);
+  CHECK(loop.outcome->error == "model response reached its output-token limit "
+                               "of 128 tokens after 128 output tokens");
+}
+
+TEST_CASE("a length finish with an unknown context is an error that names "
+          "both causes") {
+  Loop loop;
+  loop.send();
+  loop.chat.finish({.reason = ChatFinishReason::length,
+                    .stats = {.prompt_tokens = 4094, .completion_tokens = 2}});
+  REQUIRE(loop.outcome);
+  CHECK(loop.outcome->status == TurnStatus::error);
+  CHECK(loop.outcome->error ==
+        "model response stopped at a length limit after 2 output tokens: "
+        "either the output-token limit of 128 tokens, or a full context (4094 "
+        "prompt tokens; the daemon did not report its context size)");
+  CHECK(loop.transport.history().size() == 1);
+}
+
+TEST_CASE("the kind of a client error decides the turn status") {
+  Loop loop{{.context_tokens = 4096}};
+  loop.send();
+  SECTION("a failure is an error") {
+    loop.chat.fail({.message = "llamad INTERNAL: decode failed"});
+    REQUIRE(loop.outcome);
+    CHECK(loop.outcome->status == TurnStatus::error);
+    CHECK(loop.outcome->error == "llamad INTERNAL: decode failed");
+  }
+  SECTION("a cancellation is cancelled") {
+    REQUIRE(loop.transport.cancel());
+    loop.chat.fail({.kind = ChatErrorKind::cancelled,
+                    .message = "the model request was cancelled"});
+    REQUIRE(loop.outcome);
+    CHECK(loop.outcome->status == TurnStatus::cancelled);
+  }
+  SECTION("a prompt that is too long exhausts the context, with the "
+          "daemon's message") {
+    loop.chat.fail({.kind = ChatErrorKind::prompt_too_long,
+                    .message = "llamad OUT_OF_RANGE: prompt is too long: 4140 "
+                               "tokens for a context of 4096"});
+    REQUIRE(loop.outcome);
+    CHECK(loop.outcome->status == TurnStatus::context_exhausted);
+    CHECK(loop.outcome->error == "llamad OUT_OF_RANGE: prompt is too long: "
+                                 "4140 tokens for a context of 4096");
+  }
+  SECTION("a cancel wins over a prompt that is too long") {
+    REQUIRE(loop.transport.cancel());
+    loop.chat.fail({.kind = ChatErrorKind::prompt_too_long,
+                    .message = "llamad OUT_OF_RANGE: prompt is too long"});
+    REQUIRE(loop.outcome);
+    CHECK(loop.outcome->status == TurnStatus::cancelled);
+  }
+  CHECK(loop.outcome->requests == 1);
   CHECK(loop.transport.history().size() == 1);
 }
 
@@ -470,7 +566,7 @@ TEST_CASE("a failure after a tool round keeps the side effects and commits "
 
 TEST_CASE("a turn that ends early after one answered round commits exactly "
           "that round") {
-  Loop loop;
+  Loop loop{{.context_tokens = 4096}};
   loop.send();
   loop.chat.calls({call("c1")});
   REQUIRE(loop.chat.active);
@@ -480,12 +576,23 @@ TEST_CASE("a turn that ends early after one answered round commits exactly "
   SECTION("a client error") {
     loop.chat.fail({.message = "llamad INTERNAL: decode failed"});
   }
-  SECTION("a length finish") {
+  SECTION("a length finish below the context") {
     loop.chat.finish({.reason = ChatFinishReason::length});
+  }
+  SECTION("a length finish at a full context") {
+    loop.chat.finish(
+        {.reason = ChatFinishReason::length,
+         .stats = {.prompt_tokens = 4000, .completion_tokens = 96}});
+    expected_status = TurnStatus::context_exhausted;
+  }
+  SECTION("a prompt that is too long") {
+    loop.chat.fail({.kind = ChatErrorKind::prompt_too_long,
+                    .message = "llamad OUT_OF_RANGE: prompt is too long"});
+    expected_status = TurnStatus::context_exhausted;
   }
   SECTION("a cancellation") {
     REQUIRE(loop.transport.cancel());
-    loop.chat.fail({.cancelled = true, .message = "cancelled"});
+    loop.chat.fail({.kind = ChatErrorKind::cancelled, .message = "cancelled"});
     expected_status = TurnStatus::cancelled;
   }
   SECTION("a cancel that races a second tool-call reply") {
@@ -528,9 +635,15 @@ TEST_CASE("a failure before any round was answered leaves the history "
     REQUIRE(loop.outcome);
     CHECK(loop.outcome->status == TurnStatus::error);
   }
+  SECTION("a prompt that is too long") {
+    loop.chat.fail({.kind = ChatErrorKind::prompt_too_long,
+                    .message = "llamad OUT_OF_RANGE: prompt is too long"});
+    REQUIRE(loop.outcome);
+    CHECK(loop.outcome->status == TurnStatus::context_exhausted);
+  }
   SECTION("a cancellation") {
     REQUIRE(loop.transport.cancel());
-    loop.chat.fail({.cancelled = true, .message = "cancelled"});
+    loop.chat.fail({.kind = ChatErrorKind::cancelled, .message = "cancelled"});
     REQUIRE(loop.outcome);
     CHECK(loop.outcome->status == TurnStatus::cancelled);
   }
@@ -584,7 +697,7 @@ TEST_CASE("cancellation mid-round ends the turn cancelled and commits the "
   REQUIRE(loop.transport.cancel());
   CHECK(loop.chat.cancel_count == 1);
   CHECK_FALSE(loop.transport.cancel());
-  loop.chat.fail({.cancelled = true, .message = "cancelled"});
+  loop.chat.fail({.kind = ChatErrorKind::cancelled, .message = "cancelled"});
 
   REQUIRE(loop.outcome);
   CHECK(loop.outcome->status == TurnStatus::cancelled);
@@ -606,7 +719,7 @@ TEST_CASE("a second cancel during a request reaches the client again and "
   CHECK(loop.chat.cancel_count == 1);
   CHECK_FALSE(loop.transport.cancel());
   CHECK(loop.chat.cancel_count == 2);
-  loop.chat.fail({.cancelled = true, .message = "cancelled"});
+  loop.chat.fail({.kind = ChatErrorKind::cancelled, .message = "cancelled"});
   REQUIRE(loop.outcome);
   CHECK(loop.outcome->status == TurnStatus::cancelled);
 }

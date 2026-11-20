@@ -227,10 +227,19 @@ struct LlamadChatClient::Impl {
         cancelled = cancel_requested &&
                     status.error_code() == grpc::StatusCode::CANCELLED;
       }
-      terminal = std::unexpected(core::ChatError{
-          .cancelled = cancelled,
-          .message = cancelled ? "the model request was cancelled"
-                               : describe(status)});
+      if (cancelled) {
+        terminal = std::unexpected(
+            core::ChatError{.kind = core::ChatErrorKind::cancelled,
+                            .message = "the model request was cancelled"});
+      } else {
+        // llamad answers OUT_OF_RANGE when the prompt does not fit in its
+        // context; the message has the token counts.
+        const auto kind = status.error_code() == grpc::StatusCode::OUT_OF_RANGE
+                              ? core::ChatErrorKind::prompt_too_long
+                              : core::ChatErrorKind::failure;
+        terminal = std::unexpected(
+            core::ChatError{.kind = kind, .message = describe(status)});
+      }
     }
     // Queued last, after Finish() returned, so the next start() only waits
     // for this thread to exit.

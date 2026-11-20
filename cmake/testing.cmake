@@ -100,6 +100,16 @@ pigpen_headless_rejects(
   --max-tool-rounds 65
 )
 pigpen_headless_rejects(
+  rejects_invalid_max_output_tokens
+  "--max-output-tokens must be in the range 1..2147483647"
+  --max-output-tokens 2147483648
+)
+pigpen_headless_rejects(
+  rejects_zero_max_output_tokens
+  "--max-output-tokens must be in the range 1..2147483647"
+  --max-output-tokens 0
+)
+pigpen_headless_rejects(
   rejects_invalid_temperature
   "--temperature must be a finite number"
   --temperature nan

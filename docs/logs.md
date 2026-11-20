@@ -38,6 +38,10 @@ these changes:
   `completion_ms` are new.
 - `footer`: no change.
 
+Later additions to format 2 add only enumerator values. The format number
+does not change for them. The `turn` status and the `footer` finish reason
+`context_exhausted` are such additions.
+
 ## `header`
 
 Pig Pen writes the header when it creates the session, after it connects to
@@ -125,8 +129,8 @@ the turn completes.
 
 | field | description |
 |---|---|
-| `status` | `completed`, `cancelled`, or `error`. |
-| `error` | Empty for a completed turn. For a llamad failure, `llamad <STATUS>: <message>`. Example: `llamad OUT_OF_RANGE: prompt is too long: 4140 tokens for a context of 4096`. |
+| `status` | `completed`, `cancelled`, `error`, or `context_exhausted`. Refer to [Turn errors](#turn-errors). |
+| `error` | Empty for a completed turn. For a llamad failure, `llamad <STATUS>: <message>`. Example: `llamad INTERNAL: decode failed`. |
 | `assistant_text` | The text of all rounds of the turn, as it was streamed. |
 | `tool_calls` | The number of decoded world-tool calls in this turn. |
 | `zero_tool_turn` | `true` for a completed turn with only narration, or with only calls that are not valid. Use it to find these turns easily in a query. |
@@ -156,8 +160,24 @@ the work of Pig Pen itself (for example, the tool calls). For a turn that
 failed or was cancelled, the timings include only the requests that
 finished.
 
-A response that gets to the output-token limit is a turn error. The token
-counts of that request are still in the record.
+### Turn errors
+
+A turn that does not complete has one of these statuses. The token counts
+and the timings of the requests that finished are still in the record.
+
+| `status` | when | `error` |
+|---|---|---|
+| `context_exhausted` | llamad refused the prompt, because it is longer than the context (`OUT_OF_RANGE`). | The message of llamad, for example `llamad OUT_OF_RANGE: prompt is too long: 4140 tokens for a context of 4096`. |
+| `context_exhausted` | A reply ended with the finish reason `length`, and the prompt tokens plus the output tokens of that request are the context size (`n_ctx`) or more. | `the model context is full: 2815 prompt tokens and 2 output tokens fill the context of 2816 tokens` |
+| `error` | A reply ended with `length` below the context size. It got to the output-token limit (`max_output_tokens`). | `model response reached its output-token limit of 8192 tokens after 8192 output tokens` |
+| `error` | A reply ended with `length`, and llamad reported no context size (`n_ctx` is `0`). Pig Pen cannot tell the two causes apart. | `model response stopped at a length limit after 2 output tokens: either the output-token limit of 8192 tokens, or a full context (4094 prompt tokens; the daemon did not report its context size)` |
+| `error` | Any other failure of llamad or of the turn. | For example, `llamad INTERNAL: decode failed`. |
+| `cancelled` | A cancel stopped the turn. A cancel has priority over an error that occurs after it. | The cancellation message, or the error that followed the cancel. |
+
+Pig Pen does not trim the history. Thus, a `context_exhausted` turn always
+ends the episode with the finish reason `context_exhausted`. As for any turn
+that does not complete, the answered tool rounds of the turn stay in the
+history and in the log. Only the reply after them is discarded.
 
 ## `footer`
 
@@ -170,7 +190,9 @@ counts of that request are still in the record.
 
 `complete: true` shows that the episode got to a terminal state without outside
 interruption. The terminal states are `turn_budget`, `objective_complete`,
-`stopped`, `cancelled`, and `error`.
+`stopped`, `cancelled`, `error`, and `context_exhausted`. For `error` and
+`context_exhausted`, the `error` field has the error text. For a turn that
+ended the episode, it is the `error` of that turn.
 
 Sometimes the episode does not get to a terminal state. For example, the
 process stops, the window closes, or the user resets the session during the

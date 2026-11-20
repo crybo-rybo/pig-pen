@@ -19,12 +19,42 @@ llamad prints the socket that it listens on, for example
 is `/tmp/llamad-<uid>.sock`. Pig Pen uses the same default. If you start
 llamad with `--socket PATH`, give the same path to Pig Pen.
 
-Give llamad a large context with `--ctx`. llamad is stateless, so Pig Pen
-sends the full conversation again in each request, and each tool round is one
-request. llamad uses 4096 tokens by default, and it refuses a prompt that is
-longer than its context. That refusal ends the episode with an error, for
-example `llamad OUT_OF_RANGE: prompt is too long: ...`. A 20-turn episode can need tens of
-thousands of tokens. Use the largest context that the model and the memory
+### The context size
+
+llamad sets its context size (`--ctx`) when it starts. The default is 4096
+tokens. Pig Pen cannot change it. llamad is stateless, so Pig Pen sends the
+full conversation again in each request, and each tool round is one request.
+**Pig Pen does not trim or summarize the history.** Thus, the conversation
+grows in each turn, and when it no longer fits in the context, the episode
+ends.
+
+Pig Pen reads the context size when it connects. It estimates the context
+that the turn budget needs: 1000 tokens, plus 400 tokens for each turn. The
+estimate comes from measurements with a Qwen model: about 860 tokens before
+the first reply, and up to five requests in a turn that add 70 to 100 tokens
+each. It is a rough upper estimate for the default tools, not a guarantee.
+Other models and talkative replies can need more. If the context is smaller
+than the estimate, Pig Pen shows a warning, but it starts the episode. A
+small context can be what you want to test:
+
+```
+warning: llamad runs with a context of 4096 tokens, but a turn budget of 20 can need about 9000 tokens (a rough estimate). Pig Pen does not trim the history, so the episode can end with context_exhausted. Start llamad with a larger --ctx, or use fewer turns.
+```
+
+When the context is full, the turn and the episode end with
+`context_exhausted`. This occurs in two ways:
+
+- llamad refuses a prompt that is longer than its context
+  (`llamad OUT_OF_RANGE: prompt is too long: 4140 tokens for a context of
+  4096`).
+- A reply fills the context while llamad generates it. llamad then ends the
+  reply with the finish reason `length`, the same reason as for the
+  output-token limit. Pig Pen adds the prompt tokens and the output tokens of
+  the request. If the sum is the context size or more, the context is full.
+
+The CLI then stops with exit code 6. To prevent this, start llamad with a
+larger `--ctx`, or use fewer turns. A 20-turn episode needs about 9000 tokens
+by the estimate. Use the largest context that the model and the memory
 permit. The KV cache of llamad keeps the earlier part of the conversation, so
 a round decodes only its new messages.
 
@@ -59,7 +89,10 @@ No option is necessary. The CLI connects to the default socket. The CLI prints
 this data:
 
 - At the start, the model description, the model file, the llamad version,
-  the socket, the context size, the session settings, and the log path.
+  the socket, the context size, the session settings, and the log path. If
+  the context is smaller than the estimate for the turn budget, a warning
+  line follows the `session` line on stderr. Refer to
+  [The context size](#the-context-size).
 - The assistant text, when each streamed chunk arrives.
 - One line for each decoded world-tool call, with the position before and
   after the call.
@@ -84,7 +117,9 @@ timeouts, and signal notices go to stderr.
 If Pig Pen cannot reach llamad, the CLI stops with exit code 1 and a message
 that names the socket. It writes no log.
 
-Pig Pen asks llamad to limit each response to 8192 output tokens. The prompt
+Pig Pen asks llamad to limit each response to 8192 output tokens. To change
+this limit, use `--max-output-tokens`. A reply that gets to this limit ends
+the episode with an error. The prompt
 tells the model to call the registered world tools. It tells the model not to
 use extended thinking, and not to describe the actions that it will do. For
 the call budget and the round limit of each turn, refer to
@@ -106,6 +141,7 @@ reasoning as text, but the output tokens of the turn still count it.
 | `--seed INTEGER` | `0` | world seed. It sets the item positions. |
 | `--turns INTEGER` | `20` | turn budget, 1 to 10000 |
 | `--max-tool-rounds INTEGER` | `8` | maximum tool rounds in one turn, 1 to 64 |
+| `--max-output-tokens INTEGER` | `8192` | output-token limit for each request (llamad `max_tokens`), 1 to 2147483647 |
 | `--temperature NUMBER` | `0.0` | model sampling temperature, 0.0 to 2.0. It is independent of the world seed. |
 | `--sampling-seed INTEGER` | *(not set)* | model sampling seed, 0 to 4294967295. Pig Pen sends it as the llamad `SamplingParams.seed` only when you give it. Without it, llamad uses a random seed. |
 | `--timeout-seconds INTEGER` | `300` | wall-clock time limit for the full episode, 1 to 86400 |
@@ -144,7 +180,16 @@ effect of each flag, refer to
 | `3` | The `--timeout-seconds` time limit ended. |
 | `4` | Pig Pen could not write the metrics log. |
 | `5` | The episode completed without a decoded world-tool call. |
+| `6` | The episode ended with `context_exhausted`: the conversation no longer fits in the llamad context. |
 | `130` / `143` | `SIGINT` / `SIGTERM` |
+
+For exit code 6, the CLI writes the error of the turn and one more line to
+stderr. The line tells what to do:
+
+```
+error[turn=15]: llamad OUT_OF_RANGE: prompt is too long: 4140 tokens for a context of 4096
+context exhausted: the conversation filled the llamad context of 4096 tokens on turn 15 of 20. Pig Pen does not trim the history. Start llamad with a larger --ctx, or use fewer --turns.
+```
 
 `SIGINT` and `SIGTERM` start a cooperative cancellation. The CLI continues to
 pump until the cancellation callback for the active turn arrives. This makes
@@ -199,11 +244,14 @@ table (tick, turn, tool, arguments, result). It has a text filter.
   look, and Blind learning. If you change a checkbox, the dropdown changes to
   `Custom`. Pig Pen writes the preset name to the log as `prompt_variant`.
 - The seed (with **Reroll + Reset**), the turn budget, the tool rounds for each
-  turn, the temperature, an optional sampling seed, and the animation speed. To
-  send the sampling seed, select its checkbox. Changes to the temperature, the
+  turn, the maximum output tokens for each request, the temperature, an
+  optional sampling seed, and the animation speed. To send the sampling seed,
+  select its checkbox. Changes to the output tokens, the temperature, the
   sampling seed, and other session settings apply only after a reset.
 - *Episode*: **Play / Pause / Stop / Reset**, the current state, the log path,
-  and the error (if there is one).
+  the notices, and the error (if there is one). If the context of llamad is
+  smaller than the estimate for the turn budget, the notices include the
+  startup warning in amber. Refer to [The context size](#the-context-size).
 
 **Guidance**: Pig Pen keeps guidance messages in a FIFO queue. It sends one
 message for each model turn. Each row shows `Pending for turn N` or
@@ -229,7 +277,7 @@ the tools, and the log again as one new session. Changes to the animation speed 
 
 ## How an episode ends
 
-An episode ends for one of five reasons. The log footer records the reason as
+An episode ends for one of six reasons. The log footer records the reason as
 `finish_reason`:
 
 | reason | when |
@@ -239,6 +287,7 @@ An episode ends for one of five reasons. The log footer records the reason as
 | `stopped` | The user pushed **Stop**, or the CLI got a signal or a timeout. |
 | `cancelled` | The active model turn ended with a cancellation. |
 | `error` | llamad, the model turn, or the metrics writer had a terminal failure. Pig Pen does not try again. |
+| `context_exhausted` | The conversation no longer fits in the llamad context. Pig Pen does not trim the history, so the episode cannot continue. Refer to [The context size](#the-context-size). |
 
 If you close the window or reset during an episode, Pig Pen still writes a
 footer. This footer has `"complete": false` and the reason `abandoned`. Pig Pen
