@@ -32,8 +32,10 @@ public:
   /// @brief Open `unix:<socket_path>` and read the model information.
   /// @param deadline Time limit for the GetModelInfo call. The call does not
   /// wait for the daemon to start, so a missing socket fails at once.
-  /// @return The client, or a message when the daemon is unreachable or its
-  /// model cannot chat (an embedding model, or no chat template).
+  /// @return The client, or a message when the daemon is unreachable, is
+  /// not of the llamad minor series whose proto the build pins (0.2.x), or
+  /// serves a model that cannot chat (an embedding model, or no chat
+  /// template).
   [[nodiscard]] static std::expected<std::unique_ptr<LlamadChatClient>,
                                      std::string>
   connect(std::string socket_path,

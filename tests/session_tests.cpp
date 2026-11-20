@@ -135,6 +135,20 @@ TEST_CASE("an unreachable daemon is a clear error and leaves no log") {
   CHECK_FALSE(std::filesystem::exists(directory));
 }
 
+TEST_CASE("a daemon outside the llamad 0.2 series is refused and leaves no "
+          "log") {
+  const auto directory = session_test_directory();
+  for (const auto *version : {"", "0.1.0", "0.3.0"}) {
+    Daemon daemon{{.llamad_version = version}};
+    const auto created =
+        pigpen::agent::Session::create(daemon.config(), directory);
+    REQUIRE_FALSE(created);
+    CHECK(created.error().ends_with("but this Pig Pen needs llamad 0.2.x"));
+    CHECK_FALSE(std::filesystem::exists(directory));
+    CHECK(daemon.fake->requests().empty());
+  }
+}
+
 TEST_CASE("session atomically owns a seeded world, a connection, and a "
           "truthful log") {
   const auto directory = session_test_directory();
@@ -142,7 +156,10 @@ TEST_CASE("session atomically owns a seeded world, a connection, and a "
                  .n_params = 7,
                  .size_bytes = 8,
                  .n_ctx = 16'384,
-                 .n_ctx_train = 32'768}};
+                 .n_ctx_train = 32'768,
+                 .model_name = "Acme Pig",
+                 .model_file = "acme-pig-q4_k_m.gguf",
+                 .llamad_version = "0.2.3"}};
   auto config = daemon.config();
   config.seed = 2026;
   config.temperature = 0.2;
@@ -174,10 +191,14 @@ TEST_CASE("session atomically owns a seeded world, a connection, and a "
   CHECK(header.at("prompt_variant") == "test-preset");
   CHECK(header.at("model") == "acme/pig model:Q4_K_M");
   CHECK(header.at("socket") == daemon.directory.socket());
-  CHECK(header.at("model_info") == nlohmann::json{{"n_ctx", 16'384},
-                                                  {"n_ctx_train", 32'768},
-                                                  {"n_params", 7},
-                                                  {"size_bytes", 8}});
+  CHECK(header.at("model_info") ==
+        nlohmann::json{{"name", "Acme Pig"},
+                       {"file", "acme-pig-q4_k_m.gguf"},
+                       {"llamad_version", "0.2.3"},
+                       {"n_ctx", 16'384},
+                       {"n_ctx_train", 32'768},
+                       {"n_params", 7},
+                       {"size_bytes", 8}});
   CHECK_FALSE(header.contains("base_url"));
   CHECK(header.at("seed") == 2026);
   CHECK(header.at("temperature") == 0.2);
@@ -235,6 +256,7 @@ TEST_CASE("a scripted episode runs through llamad and logs every step") {
   REQUIRE(requests.size() == 4);
   for (const auto &request : requests) {
     CHECK(request.seed == 77U);
+    CHECK(request.reasoning == "REASONING_OFF");
     REQUIRE(request.tools.size() == 3);
     CHECK(request.messages.front().role == "system");
   }
@@ -299,6 +321,57 @@ TEST_CASE("a scripted episode runs through llamad and logs every step") {
   CHECK(footer.at("finish_reason") == "turn_budget");
   CHECK(footer.at("tool_call_counts") ==
         nlohmann::json{{"eat", 0}, {"look", 1}, {"move", 1}});
+
+  std::error_code ignored;
+  std::filesystem::remove_all(directory, ignored);
+}
+
+TEST_CASE("daemon timings sum across the rounds of a turn and reach the "
+          "log") {
+  const auto directory = session_test_directory();
+  Daemon daemon;
+  auto first =
+      FakeReply::calls({{.id = "c-look",
+                         .name = "look",
+                         .arguments_json = R"({"direction":"north"})"}});
+  first.progress = 1;
+  first.prompt_ms = 900.4;
+  first.completion_ms = 120.3;
+  auto second = FakeReply::say("Looked.");
+  second.progress = 1;
+  second.prompt_ms = 35.2;
+  second.completion_ms = 80.1;
+  daemon.fake->enqueue(std::move(first));
+  daemon.fake->enqueue(std::move(second));
+
+  auto config = daemon.config();
+  config.turn_budget = 1;
+  std::filesystem::path log_path;
+  {
+    auto created = pigpen::agent::Session::create(config, directory);
+    REQUIRE(created.has_value());
+    auto &session = **created;
+    log_path = session.metrics_path();
+    REQUIRE(session.play());
+    pump_until_finished(session);
+  }
+
+  const auto requests = daemon.fake->requests();
+  REQUIRE(requests.size() == 2);
+  for (const auto &request : requests) {
+    CHECK(request.reasoning == "REASONING_OFF");
+  }
+  const auto records = read_records(log_path);
+  REQUIRE(records.size() == 4);
+  const auto &turn = records[2];
+  REQUIRE(turn.at("type") == "turn");
+  CHECK(turn.at("requests") == 2);
+  // The progress chunks add no text.
+  CHECK(turn.at("assistant_text") == "Looked.");
+  // 900.4 + 35.2 and 120.3 + 80.1, rounded to whole milliseconds.
+  CHECK(turn.at("prompt_ms") == 936);
+  CHECK(turn.at("completion_ms") == 200);
+  CHECK(turn.at("latency_ms").is_number_integer());
 
   std::error_code ignored;
   std::filesystem::remove_all(directory, ignored);

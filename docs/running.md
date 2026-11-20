@@ -6,8 +6,8 @@ Pen does not start llamad. Start it first.
 
 ## Start llamad
 
-Build llamad from its repository. Then start it with the GGUF model that you
-want to use:
+Pig Pen needs llamad 0.2.x. Build llamad from its repository. Then start it
+with the GGUF model that you want to use:
 
 ```sh
 llamad --model /absolute/path/to/model.gguf --ctx 32768
@@ -23,7 +23,7 @@ Give llamad a large context with `--ctx`. llamad is stateless, so Pig Pen
 sends the full conversation again in each request, and each tool round is one
 request. llamad uses 4096 tokens by default, and it refuses a prompt that is
 longer than its context. That refusal ends the episode with an error, for
-example `llamad INVALID_ARGUMENT: ...`. A 20-turn episode can need tens of
+example `llamad OUT_OF_RANGE: prompt is too long: ...`. A 20-turn episode can need tens of
 thousands of tokens. Use the largest context that the model and the memory
 permit. The KV cache of llamad keeps the earlier part of the conversation, so
 a round decodes only its new messages.
@@ -31,6 +31,19 @@ a round decodes only its new messages.
 The model must have a chat template. Pig Pen refuses an embedding model and a
 model without a chat template when it connects. The socket has mode 0600, and
 it is the only credential. Pig Pen sends no API key.
+
+Pig Pen also refuses a daemon that is not llamad 0.2.x. Before version 1.0, a
+minor release of llamad can change the wire contract, and Pig Pen uses the
+`llamad.proto` of 0.2.0. llamad 0.1.x does not report its version. The
+refusal names the socket and the version that the daemon reports:
+
+```
+startup error: llamad at /run/user/1000/llamad.sock is older than 0.2.0, but this Pig Pen needs llamad 0.2.x
+startup error: llamad at /run/user/1000/llamad.sock is version 0.3.0, but this Pig Pen needs llamad 0.2.x
+```
+
+Then the CLI stops with exit code 1, and Pig Pen writes no log. The GUI shows
+the same message in the **Controls** panel.
 
 The model operates on its own. You do not write a user prompt. The system
 prompt tells the blob to explore without help. For each turn, Pig Pen sends an
@@ -45,15 +58,15 @@ automatic turn instruction until the episode ends.
 No option is necessary. The CLI connects to the default socket. The CLI prints
 this data:
 
-- At the start, the model description, the socket, the context size, the
-  session settings, and the log path.
+- At the start, the model description, the model file, the llamad version,
+  the socket, the context size, the session settings, and the log path.
 - The assistant text, when each streamed chunk arrives.
 - One line for each decoded world-tool call, with the position before and
   after the call.
 - At the end, a summary.
 
 ```
-session model="qwen2 0.5B Q4_K - Medium" socket="/run/user/1000/llamad.sock" n_ctx=32768 seed=42 turns=4 max_tool_rounds=8 max_world_tool_calls_per_turn=4 max_output_tokens=8192 temperature=0 sampling_seed=unset
+session model="qwen2 0.5B Q4_K - Medium" file="qwen2-0_5b-instruct-q4_k_m.gguf" llamad=0.2.0 socket="/run/user/1000/llamad.sock" n_ctx=32768 seed=42 turns=4 max_tool_rounds=8 max_world_tool_calls_per_turn=4 max_output_tokens=8192 temperature=0 sampling_seed=unset
 log_path="logs/20260807-101500-123-qwen2_0.5B_Q4_K_-_Medium-42.jsonl"
 tool[turn=1,tick=1] look args={"direction":"north"} result={"cells":[...],"direction":"north","ok":true,"wall_at_distance":5} position=(5,5)->(5,5)
 assistant[turn=1]: I
@@ -76,6 +89,14 @@ tells the model to call the registered world tools. It tells the model not to
 use extended thinking, and not to describe the actions that it will do. For
 the call budget and the round limit of each turn, refer to
 [Tool errors and limits](world.md#tool-errors-and-limits).
+
+Each request also asks llamad to turn reasoning off (`REASONING_OFF`). No
+option changes this. A reasoning model, for example Qwen3, then replies
+without a `<think>` block. Reasoning text would make each turn slower, and
+it would go into the transcript, the log, and the history that each request
+sends again. A model without reasoning is not affected. Some chat templates
+always open a reasoning block. With such a model, llamad does not send the
+reasoning as text, but the output tokens of the turn still count it.
 
 ### Options
 
@@ -171,7 +192,8 @@ table (tick, turn, tool, arguments, result). It has a text filter.
 **Controls**: This panel has these controls:
 
 - *Connection*: the llamad socket. After Pig Pen connects, this section also
-  shows the model description and the context size that llamad reports.
+  shows the model description, the model file, the llamad version, and the
+  context size that llamad reports.
 - *Scenario*: a preset dropdown, and a checkbox for each of the three scenario
   flags. The presets are Default, Hidden values, No reward feedback, Opaque
   look, and Blind learning. If you change a checkbox, the dropdown changes to

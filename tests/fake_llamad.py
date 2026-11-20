@@ -17,6 +17,9 @@ MODEL_INFO = {
     "n_ctx_train": 131072,
     "n_params": 1000000000,
     "size_bytes": 700000000,
+    "model_name": "Fake Pig 1B",
+    "model_file": "fake-pig-1b-q4_k_m.gguf",
+    "llamad_version": "0.2.0",
 }
 
 

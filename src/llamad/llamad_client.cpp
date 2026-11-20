@@ -6,6 +6,7 @@
 #include <llamad/v1/llamad.grpc.pb.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <deque>
 #include <mutex>
@@ -20,6 +21,12 @@ namespace pigpen::llamad {
 namespace {
 
 namespace wire = ::llamad::v1;
+
+/// @brief The llamad versions that this client speaks: the minor series of
+/// the llamad.proto that the build pins (cmake/dependencies.cmake). Before
+/// 1.0, a minor release can change the wire contract, so this moves with the
+/// pin.
+constexpr std::string_view required_llamad_series{"0.2."};
 
 using Terminal = std::expected<core::ChatFinish, core::ChatError>;
 
@@ -79,6 +86,11 @@ using Terminal = std::expected<core::ChatFinish, core::ChatError>;
   return static_cast<std::uint64_t>(std::max(value, std::int32_t{0}));
 }
 
+/// @brief A daemon timing; a negative or non-finite value counts as zero.
+[[nodiscard]] double milliseconds(const double value) noexcept {
+  return std::isfinite(value) && value > 0.0 ? value : 0.0;
+}
+
 [[nodiscard]] core::ChatToolCall from_wire(const wire::ToolCall &call) {
   return {.id = call.id(),
           .name = call.name(),
@@ -86,11 +98,13 @@ using Terminal = std::expected<core::ChatFinish, core::ChatError>;
 }
 
 [[nodiscard]] Terminal from_wire(const wire::Finish &finish) {
+  const auto &stats = finish.stats();
   core::ChatFinish result{
-      .stats = {.prompt_tokens = count(finish.stats().prompt_tokens()),
-                .completion_tokens = count(finish.stats().completion_tokens()),
-                .cached_prompt_tokens =
-                    count(finish.stats().cached_prompt_tokens())},
+      .stats = {.prompt_tokens = count(stats.prompt_tokens()),
+                .completion_tokens = count(stats.completion_tokens()),
+                .cached_prompt_tokens = count(stats.cached_prompt_tokens()),
+                .prompt_ms = milliseconds(stats.prompt_ms()),
+                .completion_ms = milliseconds(stats.completion_ms())},
   };
   switch (finish.reason()) {
   case wire::FINISH_REASON_EOG:
@@ -101,9 +115,6 @@ using Terminal = std::expected<core::ChatFinish, core::ChatError>;
     break;
   case wire::FINISH_REASON_STOP:
     result.reason = core::ChatFinishReason::stop;
-    break;
-  case wire::FINISH_REASON_CANCELLED:
-    result.reason = core::ChatFinishReason::cancelled;
     break;
   case wire::FINISH_REASON_TOOL_CALLS:
     result.reason = core::ChatFinishReason::tool_calls;
@@ -147,6 +158,9 @@ using Terminal = std::expected<core::ChatFinish, core::ChatError>;
   if (request.sampling.seed) {
     sampling.set_seed(*request.sampling.seed);
   }
+  result.set_reasoning(request.reasoning == core::ChatReasoning::off
+                           ? wire::REASONING_OFF
+                           : wire::REASONING_DEFAULT);
   return result;
 }
 
@@ -187,11 +201,17 @@ struct LlamadChatClient::Impl {
     wire::GenerateChunk chunk;
     std::optional<Terminal> finish;
     while (reader->Read(&chunk)) {
+      if (chunk.has_progress()) {
+        // A liveness chunk while the stream is silent. Pig Pen does not use
+        // liveness yet.
+        continue;
+      }
       if (chunk.has_text()) {
         push(id, chunk.text());
       } else if (chunk.has_finish() && !finish) {
         finish = from_wire(chunk.finish());
       }
+      // Any other chunk kind is skipped: a later llamad can add one.
     }
     const auto status = reader->Finish();
     Terminal terminal;
@@ -257,6 +277,16 @@ LlamadChatClient::connect(std::string socket_path,
                            " did not report its model (" + describe(status) +
                            ")");
   }
+  if (!info.llamad_version().starts_with(required_llamad_series)) {
+    // A daemon before 0.2.0 does not know the field and reports it empty.
+    const auto found = info.llamad_version().empty()
+                           ? std::string{"is older than "} +
+                                 std::string{required_llamad_series} + "0"
+                           : "is version " + info.llamad_version();
+    return std::unexpected("llamad at " + socket_path + " " + found +
+                           ", but this Pig Pen needs llamad " +
+                           std::string{required_llamad_series} + "x");
+  }
   if (info.serves_embeddings()) {
     return std::unexpected("llamad at " + socket_path +
                            " serves an embedding model (" + info.description() +
@@ -271,10 +301,14 @@ LlamadChatClient::connect(std::string socket_path,
   auto impl = std::make_unique<Impl>();
   impl->socket_path = std::move(socket_path);
   impl->info = {.description = info.description(),
+                .name = info.model_name(),
+                .file = info.model_file(),
                 .n_params = info.n_params(),
                 .size_bytes = info.size_bytes(),
                 .n_ctx = info.n_ctx(),
-                .n_ctx_train = info.n_ctx_train()};
+                .n_ctx_train = info.n_ctx_train(),
+                .daemon_version = info.llamad_version(),
+                .max_request_bytes = info.max_request_bytes()};
   impl->channel = std::move(channel);
   impl->stub = std::move(stub);
   return std::unique_ptr<LlamadChatClient>{

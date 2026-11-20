@@ -113,8 +113,14 @@ def test_valid_move(executables: tuple[str, str]) -> None:
     completed, requests, records, socket = run(
         executables,
         [
-            tool_call_reply(VALID_CALL_ID, "move", {"direction": "east"}),
-            text_reply(FINAL_TEXT),
+            # Daemon timings and progress chunks, as llamad 0.2 sends them.
+            {
+                **tool_call_reply(VALID_CALL_ID, "move", {"direction": "east"}),
+                "progress": 1,
+                "prompt_ms": 410.2,
+                "completion_ms": 95.6,
+            },
+            {**text_reply(FINAL_TEXT), "prompt_ms": 30.1, "completion_ms": 60.2},
         ],
         "--sampling-seed",
         str(SAMPLING_SEED),
@@ -131,6 +137,10 @@ def test_valid_move(executables: tuple[str, str]) -> None:
     check(
         all(body["sampling"].get("max_tokens") == 8192 for body in requests),
         "max_tokens was not sent on every request",
+    )
+    check(
+        all(body.get("reasoning") == "REASONING_OFF" for body in requests),
+        f"reasoning was not off on every request: {requests!r}",
     )
 
     result = {
@@ -153,8 +163,13 @@ def test_valid_move(executables: tuple[str, str]) -> None:
         'tool[turn=1,tick=1] move args={"direction":"east"} '
         f"result={canonical} position=(5,5)->(6,5)"
     )
+    session = (
+        f'session model="{MODEL_INFO["description"]}" '
+        f'file="{MODEL_INFO["model_file"]}" llamad={MODEL_INFO["llamad_version"]} '
+        f'socket="{socket}" n_ctx=32768'
+    )
     for line in (
-        f'session model="{MODEL_INFO["description"]}" socket="{socket}" n_ctx=32768',
+        session,
         activity,
         FINAL_TEXT,
         "summary finish_reason=turn_budget",
@@ -169,8 +184,13 @@ def test_valid_move(executables: tuple[str, str]) -> None:
         "socket": socket,
         "sampling_seed": SAMPLING_SEED,
         "model_info": {
-            key: MODEL_INFO[key]
-            for key in ("n_ctx", "n_ctx_train", "n_params", "size_bytes")
+            "name": MODEL_INFO["model_name"],
+            "file": MODEL_INFO["model_file"],
+            "llamad_version": MODEL_INFO["llamad_version"],
+            **{
+                key: MODEL_INFO[key]
+                for key in ("n_ctx", "n_ctx_train", "n_params", "size_bytes")
+            },
         },
     }
     check(subset(header, expected_header) == expected_header, f"header: {header!r}")
@@ -199,6 +219,9 @@ def test_valid_move(executables: tuple[str, str]) -> None:
         "input_tokens": 60,
         "output_tokens": 7,
         "cached_input_tokens": 18,
+        # 410.2 + 30.1 and 95.6 + 60.2, rounded to whole milliseconds.
+        "prompt_ms": 440,
+        "completion_ms": 156,
         "tool_stats": tool_stats(invalid_calls=0),
     }
     check([subset(t, expected_turn) for t in turns] == [expected_turn], f"{turns!r}")

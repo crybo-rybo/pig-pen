@@ -488,10 +488,6 @@ TEST_CASE("a turn that ends early after one answered round commits exactly "
     loop.chat.fail({.cancelled = true, .message = "cancelled"});
     expected_status = TurnStatus::cancelled;
   }
-  SECTION("a cancelled finish") {
-    loop.chat.finish({.reason = ChatFinishReason::cancelled});
-    expected_status = TurnStatus::cancelled;
-  }
   SECTION("a cancel that races a second tool-call reply") {
     REQUIRE(loop.transport.cancel());
     loop.chat.calls({call("late")});
@@ -680,13 +676,8 @@ TEST_CASE("a cancel that races a tool-call reply runs no tools") {
   CHECK(loop.chat.requests.size() == 1);
 }
 
-TEST_CASE("a cancelled finish and a reply with no calls end the turn") {
+TEST_CASE("a tool-call finish without calls ends the turn with an error") {
   Loop loop;
-  loop.send();
-  loop.chat.finish({.reason = ChatFinishReason::cancelled});
-  REQUIRE(loop.outcome);
-  CHECK(loop.outcome->status == TurnStatus::cancelled);
-
   loop.send();
   loop.chat.finish({.reason = ChatFinishReason::tool_calls});
   REQUIRE(loop.outcome);
@@ -708,6 +699,38 @@ TEST_CASE("token counts accumulate across the rounds of a turn") {
   CHECK(loop.outcome->output_tokens == 30);
   CHECK(loop.outcome->cached_input_tokens == 95);
   CHECK(loop.outcome->requests == 2);
+}
+
+TEST_CASE("model timings sum across the rounds of a turn") {
+  Loop loop;
+  loop.send();
+  loop.chat.calls({call("c1")}, {.prompt_ms = 120.25, .completion_ms = 40.5});
+  loop.chat.calls({call("c2")}, {.prompt_ms = 10.5, .completion_ms = 30.0});
+  loop.chat.reply("Done.", {.prompt_ms = 5.0, .completion_ms = 12.25});
+  REQUIRE(loop.outcome);
+  CHECK(loop.outcome->requests == 3);
+  CHECK(loop.outcome->model_prompt_ms == 135.75);
+  CHECK(loop.outcome->model_completion_ms == 82.75);
+
+  // A failed turn keeps the timings of the requests that finished.
+  loop.send();
+  loop.chat.calls({call("c3")}, {.prompt_ms = 7.5, .completion_ms = 2.5});
+  loop.chat.fail({.message = "llamad INTERNAL: decode failed"});
+  REQUIRE(loop.outcome);
+  CHECK(loop.outcome->status == TurnStatus::error);
+  CHECK(loop.outcome->model_prompt_ms == 7.5);
+  CHECK(loop.outcome->model_completion_ms == 2.5);
+}
+
+TEST_CASE("every request of a turn asks for no reasoning") {
+  Loop loop;
+  loop.send();
+  loop.chat.calls({call("c1")});
+  loop.chat.reply("Done.");
+  REQUIRE(loop.chat.requests.size() == 2);
+  for (const auto &request : loop.chat.requests) {
+    CHECK(request.reasoning == ChatReasoning::off);
+  }
 }
 
 TEST_CASE("destroying the tool loop cancels and ignores late delivery") {

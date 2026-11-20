@@ -78,7 +78,12 @@ struct TurnRecord {
   std::uint64_t cached_input_tokens{};
   std::uint32_t requests{};
   std::size_t tool_calls{};
+  /// Measured by Pig Pen, from the send of the turn to its outcome.
   std::chrono::milliseconds latency{};
+  /// Daemon time for prompt tokens that were not cached, and for generation,
+  /// summed over the requests of the turn (TurnOutcome).
+  double model_prompt_ms{};
+  double model_completion_ms{};
   TurnToolStats tool_stats{};
 };
 

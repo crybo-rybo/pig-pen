@@ -306,6 +306,8 @@ void print_updates(const pigpen::agent::Session &session,
 
   const auto &model = session->model_info();
   std::cout << "session model=" << std::quoted(model.description)
+            << " file=" << std::quoted(model.file)
+            << " llamad=" << model.daemon_version
             << " socket=" << std::quoted(config.socket_path)
             << " n_ctx=" << model.n_ctx << " seed=" << config.seed
             << " turns=" << config.turn_budget

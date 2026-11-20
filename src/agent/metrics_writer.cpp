@@ -6,8 +6,10 @@
 
 #include <scrydantic/scrydantic.hpp>
 
+#include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <ctime>
 #include <iomanip>
@@ -40,6 +42,16 @@ constexpr std::size_t max_filename_component_bytes{80};
     }
   }
   return value.empty() ? "model" : value;
+}
+
+/// @brief A daemon timing as whole milliseconds, rounded to the nearest.
+[[nodiscard]] std::int64_t rounded_milliseconds(const double value) noexcept {
+  // The client maps a negative or non-finite timing to zero; the bound only
+  // keeps the conversion defined.
+  constexpr double max_milliseconds{9.0e15};
+  return std::isfinite(value) && value > 0.0
+             ? std::llround(std::min(value, max_milliseconds))
+             : 0;
 }
 
 /// @brief Portable, reentrant localtime.
@@ -88,6 +100,9 @@ struct GridSize {
 };
 
 struct ModelInfoRecord {
+  std::string_view name{};
+  std::string_view file{};
+  std::string_view llamad_version{};
   std::uint32_t n_ctx{};
   std::uint32_t n_ctx_train{};
   std::uint64_t n_params{};
@@ -151,6 +166,8 @@ struct [[= scrydantic::tag{"turn"}]] TurnLogRecord {
   core::TurnToolStats tool_stats{};
   bool zero_tool_turn{};
   std::int64_t latency_ms{};
+  std::int64_t prompt_ms{};
+  std::int64_t completion_ms{};
 };
 
 struct [[= scrydantic::tag{"footer"}]] FooterRecord {
@@ -252,7 +269,10 @@ MetricsWriter::create(const std::filesystem::path &log_directory,
   const HeaderRecord header{
       .format = format_version,
       .model = model.description,
-      .model_info = {.n_ctx = model.n_ctx,
+      .model_info = {.name = model.name,
+                     .file = model.file,
+                     .llamad_version = model.daemon_version,
+                     .n_ctx = model.n_ctx,
                      .n_ctx_train = model.n_ctx_train,
                      .n_params = model.n_params,
                      .size_bytes = model.size_bytes},
@@ -361,6 +381,8 @@ MetricsWriter::record_turn(const core::TurnRecord &record) {
           .zero_tool_turn = record.status == core::TurnStatus::completed &&
                             record.tool_calls == 0U,
           .latency_ms = record.latency.count(),
+          .prompt_ms = rounded_milliseconds(record.model_prompt_ms),
+          .completion_ms = rounded_milliseconds(record.model_completion_ms),
       });
 }
 

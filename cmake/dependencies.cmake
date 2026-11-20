@@ -14,7 +14,8 @@ include(FetchContent)
 FetchContent_Declare(
   scrydantic
   GIT_REPOSITORY https://github.com/crybo-rybo/scrydantic.git
-  GIT_TAG v0.2.0
+  # scrydantic 0.2.0 (tag v0.2.0)
+  GIT_TAG 33ec842414b8ab10b43efd16bb1a8a82a6bbde1e
   GIT_PROGRESS TRUE
   SYSTEM
   EXCLUDE_FROM_ALL
@@ -22,10 +23,15 @@ FetchContent_Declare(
 
 # llamad: only its wire contract (proto/llamad/v1/llamad.proto) is used. No
 # submodules (llama.cpp) are cloned and its CMake project is never added.
+# Before 1.0, a minor release of llamad can change the contract, so the client
+# refuses a daemon of another minor series. When this pin moves to another
+# minor version, also change required_llamad_series in
+# src/llamad/llamad_client.cpp.
 FetchContent_Declare(
   llamad
   GIT_REPOSITORY https://github.com/crybo-rybo/llamad.git
-  GIT_TAG v0.1.0
+  # llamad 0.2.0 (main at version 0.2.0; not tagged yet)
+  GIT_TAG e1d8175ba425d543a41057be7ba9161653d1bc77
   GIT_SUBMODULES ""
   GIT_PROGRESS TRUE
   SOURCE_SUBDIR cmake-not-used

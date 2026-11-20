@@ -41,7 +41,6 @@ enum class FakeFinishReason : std::uint8_t {
   eog,
   length,
   stop,
-  cancelled,
   tool_calls,
   /// FINISH_REASON_UNSPECIFIED, which a real daemon never sends.
   unspecified,
@@ -59,12 +58,17 @@ struct FakeToolCall {
 struct FakeReply {
   /// Text chunks, written first, in order.
   std::vector<std::string> text{};
+  /// Progress chunks (liveness, no output) written before each text chunk
+  /// and again before the end of the stream, so also between text chunks.
+  std::uint32_t progress{};
   /// The finish chunk; nothing means the stream ends without one.
   std::optional<FakeFinishReason> finish{FakeFinishReason::eog};
   std::vector<FakeToolCall> tool_calls{};
   std::int32_t prompt_tokens{};
   std::int32_t completion_tokens{};
   std::int32_t cached_prompt_tokens{};
+  double prompt_ms{};
+  double completion_ms{};
   /// A gRPC status code; non-zero ends the stream with that status and no
   /// finish chunk.
   int status_code{};
@@ -89,6 +93,11 @@ struct FakeModelInfo {
   std::uint32_t n_ctx_train{131'072};
   bool has_chat_template{true};
   bool serves_embeddings{false};
+  std::string model_name{"Fake Pig 1B"};
+  std::string model_file{"fake-pig-1b-q4_k_m.gguf"};
+  /// Empty is what a daemon before 0.2.0 reports: it has no such field.
+  std::string llamad_version{"0.2.0"};
+  std::uint32_t max_request_bytes{4U * 1024U * 1024U};
 };
 
 struct ReceivedMessage {
@@ -113,6 +122,8 @@ struct ReceivedRequest {
   std::optional<std::int32_t> max_tokens{};
   std::optional<std::int32_t> top_k{};
   std::string response_json_schema{};
+  /// The wire name of the Reasoning value, for example "REASONING_OFF".
+  std::string reasoning{};
 };
 
 /// @brief The running fake daemon. Destruction shuts the server down and

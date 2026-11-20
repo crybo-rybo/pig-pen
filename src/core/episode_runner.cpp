@@ -183,6 +183,8 @@ void EpisodeRunner::process_pending_outcome() {
         .requests = outcome.requests,
         .tool_calls = tool_calls,
         .latency = snapshot_.last_turn_latency,
+        .model_prompt_ms = outcome.model_prompt_ms,
+        .model_completion_ms = outcome.model_completion_ms,
         .tool_stats = outcome.tool_stats,
     });
   }

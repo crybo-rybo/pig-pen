@@ -69,12 +69,27 @@ struct ChatSampling {
   friend bool operator==(const ChatSampling &, const ChatSampling &) = default;
 };
 
+/// @brief Whether a reasoning model writes reasoning before its reply.
+enum class ChatReasoning : std::uint8_t {
+  /// What the model's chat template does on its own. A reasoning model then
+  /// streams its reasoning as ordinary text.
+  model_default,
+  /// Ask the chat template to turn reasoning off. A template without
+  /// reasoning ignores it.
+  off,
+};
+
 /// @brief One complete, stateless chat request.
 struct ChatRequest {
   /// The whole conversation, in order; never empty.
   std::vector<ChatMessage> messages{};
   std::vector<ChatTool> tools{};
   ChatSampling sampling{};
+  /// Always `off` in Pig Pen; no option changes it. The system prompt tells
+  /// the model not to provide hidden chain-of-thought, and reasoning text
+  /// would go into the transcript, the log, and the history that each
+  /// request sends again.
+  ChatReasoning reasoning{ChatReasoning::off};
 };
 
 /// @brief Why one generation ended.
@@ -82,16 +97,19 @@ enum class ChatFinishReason : std::uint8_t {
   end_of_generation,
   length,
   stop,
-  cancelled,
   tool_calls,
 };
 
-/// @brief Token counts of one generation.
+/// @brief Token counts and timings of one generation.
 struct ChatStats {
   std::uint64_t prompt_tokens{};
   std::uint64_t completion_tokens{};
   /// Leading prompt tokens reused from the backend's KV cache.
   std::uint64_t cached_prompt_tokens{};
+  /// Time the backend spent decoding the prompt tokens that were not cached.
+  double prompt_ms{};
+  /// Time the backend spent generating, streaming included.
+  double completion_ms{};
 };
 
 /// @brief The terminal chunk of a successful generation.
@@ -102,7 +120,8 @@ struct ChatFinish {
   std::vector<ChatToolCall> tool_calls{};
 };
 
-/// @brief A request that ended without a finish chunk.
+/// @brief A request that ended without a finish chunk. A cancelled request
+/// always ends here, never with a finish chunk.
 struct ChatError {
   /// The request ended because of a local cancel().
   bool cancelled{};
@@ -120,13 +139,22 @@ struct ChatCallbacks {
 
 /// @brief What the backend reports about the one model that it serves.
 struct ModelInfo {
+  /// For example "qwen2 0.5B Q4_K - Medium".
   std::string description{};
+  /// The model's own name (GGUF `general.name`); empty when it has none.
+  std::string name{};
+  /// The file name of the loaded model, without its directory.
+  std::string file{};
   std::uint64_t n_params{};
   std::uint64_t size_bytes{};
   /// Context size the backend runs with, in tokens.
   std::uint32_t n_ctx{};
   /// Context size the model was trained with.
   std::uint32_t n_ctx_train{};
+  /// The version of the daemon, for example "0.2.0".
+  std::string daemon_version{};
+  /// The largest serialized request that the daemon accepts.
+  std::uint32_t max_request_bytes{};
 
   friend bool operator==(const ModelInfo &, const ModelInfo &) = default;
 };

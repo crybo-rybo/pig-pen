@@ -28,8 +28,6 @@ namespace wire = ::llamad::v1;
     return wire::FINISH_REASON_LENGTH;
   case FakeFinishReason::stop:
     return wire::FINISH_REASON_STOP;
-  case FakeFinishReason::cancelled:
-    return wire::FINISH_REASON_CANCELLED;
   case FakeFinishReason::tool_calls:
     return wire::FINISH_REASON_TOOL_CALLS;
   case FakeFinishReason::unspecified:
@@ -77,6 +75,7 @@ from_wire(const google::protobuf::RepeatedPtrField<wire::ToolCall> &calls) {
     result.top_k = sampling.top_k();
   }
   result.response_json_schema = request.response_json_schema();
+  result.reasoning = wire::Reasoning_Name(request.reasoning());
   return result;
 }
 
@@ -97,6 +96,10 @@ public:
     info->set_has_chat_template(info_.has_chat_template);
     info->set_serves_embeddings(info_.serves_embeddings);
     info->set_n_embd(info_.serves_embeddings ? 384U : 0U);
+    info->set_model_name(info_.model_name);
+    info->set_model_file(info_.model_file);
+    info->set_llamad_version(info_.llamad_version);
+    info->set_max_request_bytes(info_.max_request_bytes);
     return grpc::Status::OK;
   }
 
@@ -157,10 +160,21 @@ private:
     if (!reply) {
       return {grpc::StatusCode::INTERNAL, "no scripted reply"};
     }
+    const auto write_progress = [&](const wire::Stage stage) {
+      for (std::uint32_t count = 0; count < reply->progress; ++count) {
+        wire::GenerateChunk chunk;
+        auto &progress = *chunk.mutable_progress();
+        progress.set_stage(stage);
+        progress.set_prompt_tokens(reply->prompt_tokens);
+        writer.Write(chunk);
+      }
+    };
+    write_progress(wire::STAGE_PROMPT);
     for (const auto &text : reply->text) {
       wire::GenerateChunk chunk;
       chunk.set_text(text);
       writer.Write(chunk);
+      write_progress(wire::STAGE_GENERATING);
     }
     if (reply->hang) {
       while (!context.IsCancelled()) {
@@ -180,6 +194,8 @@ private:
       finish.mutable_stats()->set_completion_tokens(reply->completion_tokens);
       finish.mutable_stats()->set_cached_prompt_tokens(
           reply->cached_prompt_tokens);
+      finish.mutable_stats()->set_prompt_ms(reply->prompt_ms);
+      finish.mutable_stats()->set_completion_ms(reply->completion_ms);
       for (const auto &call : reply->tool_calls) {
         auto &sent = *finish.add_tool_calls();
         sent.set_id(call.id);
