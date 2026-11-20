@@ -76,6 +76,10 @@ struct FakeReply {
   /// After the text chunks, wait until the client cancels, then end with
   /// CANCELLED.
   bool hang{};
+  /// While it hangs, write a `progress` chunk (STAGE_QUEUED) at this
+  /// interval, as a live daemon does for a request in its queue. Zero keeps
+  /// the hanging stream silent, as a daemon that is stuck does.
+  std::chrono::milliseconds hang_progress_interval{};
 
   /// @brief A reply that finishes with tool calls.
   [[nodiscard]] static FakeReply calls(std::vector<FakeToolCall> tool_calls,
@@ -84,7 +88,7 @@ struct FakeReply {
   [[nodiscard]] static FakeReply say(std::string text);
 };
 
-/// @brief What GetModelInfo reports.
+/// @brief What GetModelInfo reports, and how it answers.
 struct FakeModelInfo {
   std::string description{"fake pig 1B Q4_K - Medium"};
   std::uint64_t n_params{1'000'000'000};
@@ -98,6 +102,13 @@ struct FakeModelInfo {
   /// Empty is what a daemon before 0.2.0 reports: it has no such field.
   std::string llamad_version{"0.2.0"};
   std::uint32_t max_request_bytes{4U * 1024U * 1024U};
+  /// GetModelInfo waits this long before it answers. A cancel by the client
+  /// (also its deadline) and the shutdown of the fake end the wait early.
+  std::chrono::milliseconds reply_delay{};
+  /// A gRPC status code; non-zero makes GetModelInfo answer with that status
+  /// (after reply_delay) instead of the model information.
+  int status_code{};
+  std::string status_message{};
 };
 
 struct ReceivedMessage {
@@ -132,10 +143,13 @@ class FakeLlamad final {
 public:
   /// @param on_request Called on a server thread for each Chat call, before
   /// the reply is written.
+  /// @param on_model_info Called on a server thread for each GetModelInfo
+  /// call, before FakeModelInfo::reply_delay starts.
   /// @return The server, or nothing when it cannot listen on @p socket_path.
   [[nodiscard]] static std::unique_ptr<FakeLlamad>
   start(const std::string &socket_path, FakeModelInfo info = {},
-        std::function<void(const ReceivedRequest &)> on_request = {});
+        std::function<void(const ReceivedRequest &)> on_request = {},
+        std::function<void()> on_model_info = {});
   ~FakeLlamad();
   FakeLlamad(const FakeLlamad &) = delete;
   FakeLlamad &operator=(const FakeLlamad &) = delete;

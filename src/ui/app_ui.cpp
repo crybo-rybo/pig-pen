@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <numbers>
@@ -23,6 +24,11 @@
 
 namespace pigpen::ui {
 namespace {
+
+/// @brief The llamad handshake deadline of Play and Reset. The handshake
+/// blocks the frame loop, so a daemon that does not answer freezes the
+/// window for at most this long. The connect error then names this limit.
+constexpr std::chrono::milliseconds connect_deadline{std::chrono::seconds{1}};
 
 struct ScenarioPreset final {
   const char *name;
@@ -248,9 +254,11 @@ core::Config AppUi::config_from_controls() const {
 }
 
 void AppUi::recreate_session(const bool auto_play) {
+  // Blocks this frame for the handshake, at most connect_deadline.
   auto created = agent::Session::create(
       config_from_controls(), "logs",
-      preset_ ? scenario_presets[*preset_].variant : "custom");
+      preset_ ? scenario_presets[*preset_].variant : "custom",
+      connect_deadline);
   if (!created) {
     visible_error_ = "Could not create session: " + created.error();
     return;

@@ -116,6 +116,13 @@ TEST_CASE("session rejects unsafe or incomplete runtime configuration") {
   CHECK_FALSE(pigpen::agent::Session::create(config, directory));
   config.temperature = std::numeric_limits<double>::quiet_NaN();
   CHECK_FALSE(pigpen::agent::Session::create(config, directory));
+
+  config.temperature = 0.0;
+  config.stall_timeout_seconds = 86'401;
+  const auto stall = pigpen::agent::Session::create(config, directory);
+  REQUIRE_FALSE(stall);
+  CHECK(stall.error() ==
+        "the stall timeout must be in the range 0..86400 seconds");
   CHECK_FALSE(std::filesystem::exists(directory));
   CHECK(daemon.fake->requests().empty());
 }
@@ -528,6 +535,48 @@ TEST_CASE("the startup warning appears only for a context below the "
   CHECK(warning_for(32'768).empty());
   // A daemon that reports no context size gets no warning.
   CHECK(warning_for(0).empty());
+
+  std::error_code ignored;
+  std::filesystem::remove_all(directory, ignored);
+}
+
+TEST_CASE("a stalled request ends the episode with an error and a complete "
+          "footer") {
+  const auto directory = session_test_directory();
+  Daemon daemon;
+  // The stream sends one text chunk, then nothing, as a stuck daemon does.
+  daemon.fake->enqueue({.text = {"Thinking"}, .hang = true});
+  auto config = daemon.config();
+  config.stall_timeout_seconds = 1;
+  const std::string expected_error{
+      "llamad sent nothing for 1 second, so Pig Pen stopped the request"};
+  std::filesystem::path log_path;
+  {
+    auto created = pigpen::agent::Session::create(config, directory);
+    REQUIRE(created.has_value());
+    auto &session = **created;
+    log_path = session.metrics_path();
+    REQUIRE(session.play());
+    pump_until_finished(session);
+    const auto snapshot = session.runner().snapshot();
+    CHECK(snapshot.finish_reason == pigpen::core::FinishReason::error);
+    CHECK(snapshot.error == expected_error);
+  }
+  // The watchdog cancelled the call, so the fake is idle again.
+  CHECK(daemon.fake->wait_until_idle());
+  CHECK(daemon.fake->requests().size() == 1);
+  const auto records = read_records(log_path);
+  REQUIRE(records.size() == 3);
+  const auto &turn = records[1];
+  CHECK(turn.at("type") == "turn");
+  CHECK(turn.at("status") == "error");
+  CHECK(turn.at("error") == expected_error);
+  CHECK(turn.at("requests") == 1);
+  const auto &footer = records.back();
+  CHECK(footer.at("type") == "footer");
+  CHECK(footer.at("complete") == true);
+  CHECK(footer.at("finish_reason") == "error");
+  CHECK(footer.at("error") == expected_error);
 
   std::error_code ignored;
   std::filesystem::remove_all(directory, ignored);

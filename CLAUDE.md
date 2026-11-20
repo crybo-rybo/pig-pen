@@ -154,6 +154,17 @@ Keep these invariants:
   Cancellation is cooperative (`ClientContext::TryCancel`). An episode is not
   finished until the terminal callback arrives. This makes sure that Pig Pen
   writes the JSONL footer, also after a SIGINT or a timeout.
+- **Pig Pen never waits on llamad without a limit.** `Session::create` is the
+  only blocking call: one `GetModelInfo` handshake with a deadline that the
+  caller gives (the CLI: `min(5 s, --timeout-seconds)`, on the episode clock;
+  the GUI: 1 s, because the frame waits). A startup error after a SIGINT or
+  SIGTERM exits with 128 + the signal. During a request, the stall watchdog
+  in `LlamadChatClient::pump()` stops a stream that is silent for longer
+  than `Config::stall_timeout_seconds` (`--stall-seconds`, default 120, 0 is
+  off). It ends as a `ChatErrorKind::failure`, never `cancelled`. It
+  measures silence, not duration: llamad sends `progress` chunks while a
+  request queues or runs, so a slow request is not stopped. Do not add a
+  per-request wall-clock deadline.
 - **Three test seams:** With `ITurnTransport`, a scripted transport can
   operate `EpisodeRunner`. With `IChatClient` and `IToolDispatcher`, a
   scripted chat client can operate `ToolLoopTransport`. `WorldTools` takes

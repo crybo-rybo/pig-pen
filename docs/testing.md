@@ -45,12 +45,12 @@ items:
 | `tests/world_tests.cpp` | Grid constants, item placement from the seed, movement, and wall failures. `look` rays, the `eat` action, and the score. The end of positive items, and seed determinism with `World::dump()`. |
 | `tests/world_tools_tests.cpp` | flat typed responses, and the `opaque_look` and `reward_feedback` toggles |
 | `tests/tool_loop_tests.cpp` | `ToolLoopTransport` with a scripted chat client and a fake dispatcher: the system message first, the tools on each round, the tool results with their call IDs, and the seed only when it is set. The call budget across batches and its reset for each turn, invalid calls that use the budget, admission refusals, and the round-limit completion (history kept, the count of calls that did not run, no call without an answer). An empty final reply as an empty assistant message, and the roles of the next request. The committed history after an error, a length limit, a full context, a cancellation, or a later round that cannot start: the answered rounds stay, and a turn without an answered round adds nothing. A `length` finish at a full context (`context_exhausted`), below the context (an error that names the output limit), and with an unknown context (an error that names both causes). The kind of a client error: `failure` is an error, `cancelled` is cancelled, and `prompt_too_long` is `context_exhausted` with the daemon's message, unless a cancel came first. A cancel during a request, during a tool call, and before an error or a final reply. The token totals and the daemon timings across rounds, reasoning off on each request, and destruction during a request. |
-| `tests/llamad_client_tests.cpp` | `LlamadChatClient` against the fake llamad: the wire mapping in both directions (with the reasoning field, the timings, and the model fields), the stream order, progress chunks that the client skips, each finish reason, each failure status, `OUT_OF_RANGE` as `prompt_too_long` with the daemon's message, a daemon that stops during a stream (an error, not a cancellation), cancellation, a cancel immediately after `start()` (before the request gets to the daemon), a cancel after the stream ended but before `pump()` delivers the result (the daemon's result, not a cancellation, and the next request is not affected), a callback that starts the next request, the bounded `pump()`, an undelivered terminal event that blocks the next request, the connect rejections (missing socket, a daemon that is not llamad 0.2.x, embedding model, no chat template), and destruction with a stream in flight. Each cancel test makes sure that exactly one `on_finished` arrives. |
+| `tests/llamad_client_tests.cpp` | `LlamadChatClient` against the fake llamad: the wire mapping in both directions (with the reasoning field, the timings, and the model fields), the stream order, progress chunks that the client skips, each finish reason, each failure status, `OUT_OF_RANGE` as `prompt_too_long` with the daemon's message, a daemon that stops during a stream (an error, not a cancellation), cancellation, a cancel immediately after `start()` (before the request gets to the daemon), a cancel after the stream ended but before `pump()` delivers the result (the daemon's result, not a cancellation, and the next request is not affected), a callback that starts the next request, the bounded `pump()`, an undelivered terminal event that blocks the next request, the connect rejections (missing socket, a daemon that is not llamad 0.2.x, embedding model, no chat template, a `GetModelInfo` failure status), and destruction with a stream in flight. The stall watchdog: a silent stream with a 200 ms stall limit ends as a `failure` (not `cancelled`) with the stall message, not before the limit, and the client is usable again. A stream that sends `progress` chunks each 25 ms is not stopped during five stall limits of 150 ms, and a local cancel then ends it as `cancelled`. A stall limit of zero never stops a silent stream. `connect()` against a `GetModelInfo` that does not answer gives up at its deadline of 200 ms, and reports the daemon as not reachable. Each cancel and stall test makes sure that exactly one `on_finished` arrives. |
 | `tests/world_tool_binding_tests.cpp` | The exact tool manifest (names, descriptions, and schema strings), the canonical encoder, decode errors and unknown tools that the model sees, the exact activity payloads and call identity, a wall as a typed outcome, and admission after objective completion and after a log failure, also in one batch through the real tool loop |
 | `tests/prompt_tests.cpp` | config defaults, and that each prompt flag does what it claims. This includes hidden rewards, and the separation of automatic recovery instructions from human guidance. |
 | `tests/episode_runner_tests.cpp` | the turn loop with a scripted transport: budget exhaustion, pause and resume, a stop that cancels an active turn, objective completion, terminal errors and log errors, a `context_exhausted` turn that ends the episode with that reason and its error text, and queued human input |
 | `tests/metrics_writer_tests.cpp` | header, tool, turn, and footer reconciliation (format 2), the incomplete footer at destruction, and footer finality |
-| `tests/session_tests.cpp` | config rejection, an unreachable daemon and a daemon that is not llamad 0.2.x that leave no log, and full scripted episodes through the real gRPC path with the log examined from start to end. This includes a stop during a request that hangs, and destruction during a request. A full context (`OUT_OF_RANGE`, and a `length` finish that fills `n_ctx`) after an answered round, with the configured `max_output_tokens` on the wire and the turn status and the footer in the log. The startup warning for a context below the estimate, and no warning at or above it, or without a context size. |
+| `tests/session_tests.cpp` | config rejection, an unreachable daemon and a daemon that is not llamad 0.2.x that leave no log, and full scripted episodes through the real gRPC path with the log examined from start to end. This includes a stop during a request that hangs, destruction during a request, and a stall limit above 86400 seconds that is refused. A request that stalls (a 1-second stall limit) ends the episode with the finish reason `error`, a turn with the status `error` and the stall message, and a complete footer. A full context (`OUT_OF_RANGE`, and a `length` finish that fills `n_ctx`) after an answered round, with the configured `max_output_tokens` on the wire and the turn status and the footer in the log. The startup warning for a context below the estimate, and no warning at or above it, or without a context size. |
 | `tests/world_animation_tests.cpp` | how the typed activity feed becomes an ordered visual timeline, with a time that the caller supplies |
 | `tests/gui_options_tests.cpp` | the GUI startup parser for `--socket`, `--play`, and `--help`, with the two value syntaxes and input that is not valid, and the llamad default socket rule |
 
@@ -58,6 +58,16 @@ items:
 start `pigpen_fake_llamad`, which is the same fake as a process. It reads a
 JSON script of replies, and writes each request that it gets as one JSON line.
 Thus, the Python tests do not need Python gRPC packages.
+
+The script can also make `GetModelInfo` wait (`reply_delay_ms`) or fail
+(`status_code`, `status_message`), and a reply that hangs can send a
+`progress` chunk at an interval (`hang_progress_interval_ms`). The fake
+writes one line for each `GetModelInfo` call to a second file. With
+`gate_model_info=True` (`--model-info-gate`), each `GetModelInfo` call waits
+until the test opens the gate. Thus, a test can act during the handshake
+without a race against a timer. The in-process fake has the same features
+(`FakeModelInfo::reply_delay`, `status_code`, `status_message`,
+`FakeReply::hang_progress_interval`, and the `on_model_info` callback).
 
 - `pigpen_headless_integration`: `tests/headless_integration_tests.py` runs
   the CLI against the fake llamad. It tests how the CLI reads argv (with
@@ -78,8 +88,9 @@ Thus, the Python tests do not need Python gRPC packages.
   `pigpen_headless_rejects_zero_max_output_tokens` (`--max-output-tokens 0`),
   `pigpen_headless_rejects_invalid_temperature` (`--temperature nan`), and
   `pigpen_headless_rejects_invalid_sampling_seed` (a value above the 32-bit
-  range): each test passes only if the CLI prints the correct option
-  diagnostic.
+  range), and `pigpen_headless_rejects_invalid_stall_seconds`
+  (`--stall-seconds 86401`): each test passes only if the CLI prints the
+  correct option diagnostic.
 - `pigpen_headless_graceful_sigint` / `_sigterm`:
   `tests/headless_signal_tests.py` does these steps:
   1. It starts the fake llamad with a reply that never finishes.
@@ -89,7 +100,7 @@ Thus, the Python tests do not need Python gRPC packages.
      turn records its one request, that the header has the model description
      and the socket, and that the JSONL file still ends with a final footer.
 
-- `pigpen_headless_daemon_killed` / `_timeout`:
+- `pigpen_headless_daemon_killed` / `_timeout` / `_stall`:
   `tests/headless_failure_tests.py` starts the fake llamad with a reply that
   never finishes, and waits for the first request of the CLI. Then:
   - `daemon_killed` stops the fake with `SIGKILL`. The CLI must exit with
@@ -101,11 +112,27 @@ Thus, the Python tests do not need Python gRPC packages.
     and write `timeout after 1 seconds` to stderr. The log must have one
     `cancelled` turn, and a footer with `complete: true` and
     `finish_reason: "stopped"`.
+  - `stall` uses a reply that is silent after its first text chunk, with
+    `--stall-seconds 1` and `--timeout-seconds 30`. The CLI must exit with
+    code `1` in less than 15 seconds, and write the stall message to stderr.
+    The log must have one `error` turn with the stall message, and a footer
+    with `complete: true` and `finish_reason: "error"`.
+
+- `pigpen_headless_connect_timeout`: the `GetModelInfo` of the fake waits 30
+  seconds. With `--timeout-seconds 1`, the CLI must exit with code `1` in
+  less than 4 seconds (not after the default handshake limit of 5 seconds),
+  with the startup error that names the limit of 1 second, and without a
+  log.
+- `pigpen_headless_handshake_sigint` / `_sigterm`: the `GetModelInfo` of the
+  fake waits on the gate, and then fails with `INTERNAL`. The test sends the
+  signal while the call waits, and then opens the gate. The CLI must print
+  the startup error with the status of the fake, exit with `128 + signal`,
+  and write no log.
 
   If an assertion fails, the test kills and reaps the CLI and the fake, and
   the failure message includes stdout and stderr of the CLI.
 
-When the tests are on, Python 3 is necessary. The two signal tests register
+When the tests are on, Python 3 is necessary. The four signal tests register
 only on UNIX.
 
 ## Run some of the tests

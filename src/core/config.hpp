@@ -18,6 +18,8 @@ inline constexpr std::uint32_t turn_budget_limit{10'000};
 inline constexpr std::uint32_t tool_rounds_limit{64};
 /// @brief llamad carries max_tokens as a signed 32-bit integer.
 inline constexpr std::uint32_t max_output_tokens_limit{2'147'483'647};
+/// @brief The longest stall timeout, one day, in seconds.
+inline constexpr std::uint32_t stall_timeout_seconds_limit{86'400};
 
 /// @brief The llamad default socket: `$XDG_RUNTIME_DIR/llamad.sock` when
 /// that variable is set and not empty, else `/tmp/llamad-<uid>.sock`.
@@ -51,6 +53,13 @@ struct Config {
   /// `SamplingParams.seed` when set and omitted when unset; repeatability is
   /// best-effort.
   std::optional<std::uint32_t> sampling_seed{};
+  /// The longest time that an open llamad stream can be silent before Pig
+  /// Pen stops the request as an error; 0 turns the check off. While a
+  /// request queues or runs, llamad is silent for at most about one second
+  /// plus its slowest engine step (one prompt batch, or one token), so a
+  /// slow but live request is not stopped by this limit. Keep it well above
+  /// the time of one prompt batch on the daemon's hardware.
+  std::uint32_t stall_timeout_seconds{120};
 
   /// Include the item/reward table in the system prompt.
   bool known_item_values{true};

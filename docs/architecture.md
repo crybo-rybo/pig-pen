@@ -163,8 +163,10 @@ flags, and its headers are system headers.
 `LlamadChatClient` implements `core::IChatClient`:
 
 - `connect()` opens `unix:<socket path>`. It calls `GetModelInfo` with a time
-  limit, and does not wait for the daemon. Thus, a missing socket fails
-  immediately. `connect()` refuses a daemon that is not llamad 0.2.x, because
+  limit (`ConnectOptions::deadline`, which the caller gives), and does not
+  wait for the daemon. Thus, a missing socket fails immediately. A process
+  that accepts the connection but does not answer fails at the time limit,
+  and the message names the limit. `connect()` refuses a daemon that is not llamad 0.2.x, because
   before 1.0 a minor release can change the contract. llamad 0.1.x reports no
   version. The required series is one constant, `required_llamad_series`. It
   changes with the pin. `connect()` also refuses an embedding model and a
@@ -174,18 +176,50 @@ flags, and its headers are system headers.
 - `start()` sends one `Chat` request. Each request reads its stream on its
   own worker thread. The worker only puts text and terminal events into a
   queue that a mutex protects. It puts the terminal event last, after the
-  stream finished. It skips `progress` chunks (liveness, which Pig Pen does
-  not use yet) and chunk kinds that it does not know.
-- `pump()` delivers the queued events on the thread that calls it, with a
-  maximum number of callbacks in each call.
+  stream finished. It skips `progress` chunks and chunk kinds that it does
+  not know, but it records each of them as a sign of life.
+- `pump()` first runs the stall watchdog. Then it delivers the queued events
+  on the thread that calls it, with a maximum number of callbacks in each
+  call.
+- The stall watchdog uses the liveness contract of llamad: while a request
+  queues or runs, the stream is silent for at most about one second longer
+  than the slowest step of the engine. The worker records the time of the
+  last sign of life: the start of the call, and each chunk that it reads.
+  If the silence is longer than `ConnectOptions::stall_timeout` (from
+  `Config::stall_timeout_seconds`, default 120 s, `0` is off), `pump()`
+  cancels the call and marks the request as stalled. The request then ends
+  through its normal terminal event, exactly one time, as a `failure` with
+  the message `llamad sent nothing for N seconds, so Pig Pen stopped the
+  request`. The watchdog measures silence, not the duration of the request.
+  Thus, a request that waits in the queue behind another client is not
+  stopped.
 - A stream that ends without a finish gives a `ChatError`. Its kind is
-  `cancelled` after a local cancel, `prompt_too_long` for the status
-  `OUT_OF_RANGE` (the prompt is longer than the context), and `failure` for
-  all other statuses. The message is `llamad <STATUS>: <message>`.
+  `failure` after a stall, `cancelled` after a local cancel,
+  `prompt_too_long` for the status `OUT_OF_RANGE` (the prompt is longer than
+  the context), and `failure` for all other statuses. The message is
+  `llamad <STATUS>: <message>`, or the stall message. A local cancel before
+  the stall has priority. A finish chunk that the daemon sent before the
+  cancel or the stall took effect has priority over both.
 - `cancel()` calls `ClientContext::TryCancel`. It is safe from the pump
   thread.
 - The destructor cancels the active request, joins the worker, and drops the
   events that it did not deliver.
+
+The threads use the client state in this way. All state that two threads
+use is under one mutex:
+
+| state | pump thread | worker thread |
+|---|---|---|
+| socket path, model info, stub, stall timeout | reads | reads (stub, stall timeout) |
+| event queue | pops (`pump()`), clears (destructor) | pushes |
+| context of the active call | sets (`start()`), resets (`pump()`, at the terminal event), cancels (`cancel()`, watchdog) | uses its own reference |
+| cancel flag | resets (`start()`), sets (`cancel()`) | reads after the stream ends |
+| stall flag | resets (`start()`), sets (watchdog, only if no cancel came first) | reads after the stream ends |
+| time of the last sign of life | sets (`start()`), reads (watchdog) | sets (each chunk), clears (end of the stream) |
+| callbacks, active flag, request ID, worker handle | reads and writes | — |
+
+`connect()` writes the first row before the client exists. Then no thread
+changes it, so it needs no lock.
 
 ## `src/agent`: the scrydantic integration
 
@@ -275,7 +309,11 @@ The GUI shows "Pending settings apply on Reset" instead.
 `Session::create()` does these steps in sequence:
 
 1. It validates the config.
-2. It connects to llamad.
+2. It connects to llamad. This is the only step that blocks: one
+   `GetModelInfo` call, with the deadline that the caller gives (default 5
+   seconds). The CLI gives `min(5 s, --timeout-seconds)`, and starts its
+   episode clock before this call. The GUI gives 1 second, because the
+   frame loop waits.
 3. It makes the world and the tool binding.
 4. It opens the log last.
 
@@ -301,8 +339,12 @@ the runner. Both front ends call `pump()` from their own loop:
   1 ms.
 
 gRPC reads occur on a worker thread that only queues events. Application
-callbacks and tools run only on the pump thread. Neither front end blocks to
-wait for a result.
+callbacks and tools run only on the pump thread. During an episode, neither
+front end blocks to wait for a result. The only blocking call is the
+creation of the session: one handshake with a deadline. Refer to
+[`Session` is the reset unit](#session-is-the-reset-unit). The stall watchdog
+runs in `pump()`. Thus, a daemon that stops sending ends the turn with an
+error, also when nobody pushes **Stop**.
 
 For the same reason, cancellation is cooperative. `stop()` asks the tool loop
 to cancel. The episode does not finish until the terminal callback arrives.
@@ -328,7 +370,8 @@ and the test binary both link `pigpen_ui`.
 
 - the parser for the arguments
 - the `SIGINT` and `SIGTERM` handler (the handler only writes a
-  `volatile sig_atomic_t`)
+  `volatile sig_atomic_t`). The handshake does not stop for a signal. A
+  startup error after a signal exits with 128 + the signal.
 - the incremental output of the transcript and the activity feed
 - the exit-code policy in [Run Pig Pen](running.md#exit-codes), with exit
   code 6 for `context_exhausted`

@@ -2,7 +2,8 @@
 /// @brief Covers LlamadChatClient against the scripted fake llamad over a
 /// real gRPC Unix socket: the wire mapping both ways, stream order, failure
 /// statuses, a daemon that stops mid-stream, cancellation (also in a race
-/// with the worker), connect rejections, and delivery after destruction.
+/// with the worker), the stall watchdog, the connect deadline, connect
+/// rejections, and delivery after destruction.
 
 #include "llamad/llamad_client.hpp"
 
@@ -11,6 +12,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
@@ -79,11 +81,12 @@ private:
 
 struct Harness {
   explicit Harness(pigpen::testing::FakeModelInfo info = {},
-                   std::function<void(const ReceivedRequest &)> on_request = {})
+                   std::function<void(const ReceivedRequest &)> on_request = {},
+                   pigpen::llamad::ConnectOptions options = {})
       : fake(FakeLlamad::start(directory.socket(), std::move(info),
                                std::move(on_request))) {
     REQUIRE(fake);
-    auto connected = LlamadChatClient::connect(directory.socket());
+    auto connected = LlamadChatClient::connect(directory.socket(), options);
     REQUIRE(connected.has_value());
     client = std::move(*connected);
   }
@@ -615,4 +618,155 @@ TEST_CASE("connect refuses a daemon outside the llamad 0.2 series") {
                              " is version 0.3.0, but this Pig Pen needs "
                              "llamad 0.2.x");
   CHECK(fake->requests().empty());
+}
+
+namespace {
+
+/// @brief A harness whose requests stop after @p stall_timeout of silence.
+[[nodiscard]] std::unique_ptr<Harness>
+stall_harness(const std::chrono::milliseconds stall_timeout) {
+  return std::make_unique<Harness>(
+      pigpen::testing::FakeModelInfo{}, nullptr,
+      pigpen::llamad::ConnectOptions{.stall_timeout = stall_timeout});
+}
+
+/// @brief Pump @p client for @p duration; false when @p finished turns true.
+[[nodiscard]] bool
+pump_while_unfinished(LlamadChatClient &client,
+                      const std::chrono::milliseconds duration,
+                      const std::size_t &finished) {
+  const auto until = std::chrono::steady_clock::now() + duration;
+  while (std::chrono::steady_clock::now() < until) {
+    static_cast<void>(client.pump());
+    if (finished != 0) {
+      return false;
+    }
+    std::this_thread::sleep_for(1ms);
+  }
+  return finished == 0;
+}
+
+} // namespace
+
+TEST_CASE("a silent stream ends as a stall failure, exactly once, and the "
+          "client is usable afterwards") {
+  constexpr auto stall_timeout = 200ms;
+  auto run = stall_harness(stall_timeout);
+  run->fake->enqueue({.text = {"thinking"}, .hang = true});
+  std::size_t finished{};
+  std::optional<Finished> result;
+  std::vector<std::string> texts;
+  const auto started = std::chrono::steady_clock::now();
+  REQUIRE(run->client->start(
+      Harness::basic_request(),
+      {.on_text = [&](auto text) { texts.emplace_back(text); },
+       .on_finished =
+           [&](Finished value) {
+             ++finished;
+             result = std::move(value);
+           }}));
+  REQUIRE(pump_until(*run->client, [&] { return result.has_value(); }));
+  const auto elapsed = std::chrono::steady_clock::now() - started;
+  // The watchdog counts the silence after the last chunk, so it cannot fire
+  // before the stall timeout.
+  CHECK(elapsed >= stall_timeout);
+  REQUIRE_FALSE(result->has_value());
+  CHECK(result->error().kind == ChatErrorKind::failure);
+  CHECK(result->error().message ==
+        "llamad sent nothing for 0.2 seconds, so Pig Pen stopped the request");
+  CHECK(texts == std::vector<std::string>{"thinking"});
+  CHECK_FALSE(run->client->cancel());
+  // The watchdog cancelled the call, so the fake is idle again.
+  CHECK(run->fake->wait_until_idle());
+
+  // The client is usable again, and the stalled request delivers nothing
+  // more.
+  run->fake->enqueue(FakeReply::say("again"));
+  run->start();
+  run->finish();
+  REQUIRE(run->finished->has_value());
+  CHECK(run->events == std::vector<std::string>{"again", "<finished>"});
+  CHECK(finished == 1);
+}
+
+TEST_CASE("progress chunks keep a slow request alive past the stall "
+          "timeout, and a local cancel then ends it as cancelled") {
+  // A live daemon that queues the request sends a progress chunk now and
+  // then. The interval is far below the stall timeout, and the request is
+  // watched for five stall timeouts.
+  constexpr auto stall_timeout = 150ms;
+  auto run = stall_harness(stall_timeout);
+  run->fake->enqueue(
+      {.text = {"queued"}, .hang = true, .hang_progress_interval = 25ms});
+  std::size_t finished{};
+  std::optional<Finished> result;
+  REQUIRE(run->client->start(Harness::basic_request(),
+                             {.on_finished = [&](Finished value) {
+                               ++finished;
+                               result = std::move(value);
+                             }}));
+  REQUIRE(run->fake->wait_for_requests(1));
+  CHECK(pump_while_unfinished(*run->client, 5 * stall_timeout, finished));
+
+  REQUIRE(run->client->cancel());
+  REQUIRE(pump_until(*run->client, [&] { return result.has_value(); }));
+  REQUIRE_FALSE(result->has_value());
+  CHECK(result->error().kind == ChatErrorKind::cancelled);
+  CHECK(finished == 1);
+  CHECK(run->fake->wait_until_idle());
+}
+
+TEST_CASE("a stall timeout of zero never stops a silent stream") {
+  auto run = stall_harness(0ms);
+  run->fake->enqueue({.hang = true});
+  std::size_t finished{};
+  std::optional<Finished> result;
+  REQUIRE(run->client->start(Harness::basic_request(),
+                             {.on_finished = [&](Finished value) {
+                               ++finished;
+                               result = std::move(value);
+                             }}));
+  REQUIRE(run->fake->wait_for_requests(1));
+  CHECK(pump_while_unfinished(*run->client, 300ms, finished));
+  REQUIRE(run->client->cancel());
+  REQUIRE(pump_until(*run->client, [&] { return result.has_value(); }));
+  REQUIRE_FALSE(result->has_value());
+  CHECK(result->error().kind == ChatErrorKind::cancelled);
+  CHECK(finished == 1);
+}
+
+TEST_CASE("connect gives up at its deadline when GetModelInfo does not "
+          "answer") {
+  pigpen::testing::TempSocketDirectory directory;
+  // Written on a server thread.
+  std::atomic<std::size_t> calls{};
+  auto fake = FakeLlamad::start(directory.socket(), {.reply_delay = 30s}, {},
+                                [&calls] { ++calls; });
+  REQUIRE(fake);
+  const auto started = std::chrono::steady_clock::now();
+  const auto connected =
+      LlamadChatClient::connect(directory.socket(), {.deadline = 200ms});
+  const auto elapsed = std::chrono::steady_clock::now() - started;
+  REQUIRE_FALSE(connected);
+  CHECK(connected.error().starts_with(
+      "could not reach llamad at " + directory.socket() +
+      ": it did not answer within 0.2 seconds (llamad DEADLINE_EXCEEDED"));
+  // The call reached the fake, and connect waited for the deadline, but not
+  // for the delay of the fake or for the default deadline of 5 s.
+  CHECK(calls == 1);
+  CHECK(elapsed >= 150ms);
+  CHECK(elapsed < 3s);
+}
+
+TEST_CASE("connect reports a GetModelInfo failure status") {
+  pigpen::testing::TempSocketDirectory directory;
+  auto fake = FakeLlamad::start(
+      directory.socket(),
+      {.status_code = 13, .status_message = "the model is loading"});
+  REQUIRE(fake);
+  const auto connected = LlamadChatClient::connect(directory.socket());
+  REQUIRE_FALSE(connected);
+  CHECK(connected.error() == "llamad at " + directory.socket() +
+                                 " did not report its model (llamad INTERNAL: "
+                                 "the model is loading)");
 }

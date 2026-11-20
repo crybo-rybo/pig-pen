@@ -82,6 +82,21 @@ using Terminal = std::expected<core::ChatFinish, core::ChatError>;
   return text;
 }
 
+/// @brief "1 second", "120 seconds", or "0.25 seconds".
+[[nodiscard]] std::string
+seconds_text(const std::chrono::milliseconds duration) {
+  const auto milliseconds = std::max<std::int64_t>(duration.count(), 0);
+  auto text = std::to_string(milliseconds / 1'000);
+  if (const auto fraction = milliseconds % 1'000; fraction != 0) {
+    auto digits = std::to_string(1'000 + fraction).substr(1);
+    while (digits.back() == '0') {
+      digits.pop_back();
+    }
+    text += "." + digits;
+  }
+  return text + (milliseconds == 1'000 ? " second" : " seconds");
+}
+
 [[nodiscard]] std::uint64_t count(const std::int32_t value) noexcept {
   return static_cast<std::uint64_t>(std::max(value, std::int32_t{0}));
 }
@@ -167,21 +182,42 @@ using Terminal = std::expected<core::ChatFinish, core::ChatError>;
 } // namespace
 
 struct LlamadChatClient::Impl {
+  using Clock = std::chrono::steady_clock;
+
   struct Event {
     std::uint64_t request{};
     std::variant<std::string, Terminal> payload{};
   };
 
+  // Written by connect() before the client exists, then only read, by the
+  // pump thread and by the workers. Needs no lock.
   std::string socket_path{};
   core::ModelInfo info{};
   std::shared_ptr<grpc::Channel> channel{};
   std::unique_ptr<wire::Llama::Stub> stub{};
+  std::chrono::milliseconds stall_timeout{};
 
-  // Shared with the worker thread.
+  // Shared by the pump thread and the worker thread. Every access holds
+  // `mutex`.
   std::mutex mutex{};
+  /// Worker: pushes. Pump thread: pops in pump(), clears in the destructor.
   std::deque<Event> events{};
+  /// The context of the active call. Pump thread: set by start(), reset by
+  /// pump() when it takes the terminal event, read by cancel_active() and by
+  /// the watchdog. The worker keeps its own reference and does not read this
+  /// member.
   std::shared_ptr<grpc::ClientContext> context{};
+  /// Pump thread: reset by start(), set by cancel_active(). Worker: read
+  /// after Finish().
   bool cancel_requested{};
+  /// Pump thread: reset by start(), set by the watchdog in pump() only when
+  /// no cancel came first. Worker: read after Finish().
+  bool stalled{};
+  /// The last sign of life of the open stream; empty when no stream is
+  /// open. Pump thread: set by start() (the call starts), read by the
+  /// watchdog. Worker: set on each chunk that it reads, reset when the
+  /// stream has ended.
+  std::optional<Clock::time_point> alive_at{};
 
   // Pump-thread state.
   std::uint64_t request{};
@@ -194,6 +230,12 @@ struct LlamadChatClient::Impl {
     events.push_back({.request = id, .payload = std::move(event)});
   }
 
+  /// @brief Worker: a chunk arrived, of any kind.
+  void note_sign_of_life() {
+    const std::scoped_lock lock{mutex};
+    alive_at = Clock::now();
+  }
+
   /// @brief The body of one worker thread: read the stream, queue events.
   void read_stream(const std::uint64_t id, grpc::ClientContext &call_context,
                    const wire::ChatRequest &request_message) {
@@ -201,9 +243,10 @@ struct LlamadChatClient::Impl {
     wire::GenerateChunk chunk;
     std::optional<Terminal> finish;
     while (reader->Read(&chunk)) {
+      // Every chunk is a sign of life, also one that is skipped below.
+      note_sign_of_life();
       if (chunk.has_progress()) {
-        // A liveness chunk while the stream is silent. Pig Pen does not use
-        // liveness yet.
+        // A liveness chunk while the stream is silent. It has no output.
         continue;
       }
       if (chunk.has_text()) {
@@ -213,6 +256,11 @@ struct LlamadChatClient::Impl {
       }
       // Any other chunk kind is skipped: a later llamad can add one.
     }
+    {
+      // The stream has ended, so the watchdog has nothing more to watch.
+      const std::scoped_lock lock{mutex};
+      alive_at.reset();
+    }
     const auto status = reader->Finish();
     Terminal terminal;
     if (status.ok() && finish) {
@@ -221,13 +269,26 @@ struct LlamadChatClient::Impl {
       terminal = std::unexpected(core::ChatError{
           .message = "llamad ended the stream without a finish chunk"});
     } else {
+      // A local TryCancel ends the call with CANCELLED. Another status is
+      // the daemon's own answer, and it is reported as such.
+      const bool cancelled_status =
+          status.error_code() == grpc::StatusCode::CANCELLED;
+      bool stall{};
       bool cancelled{};
       {
         const std::scoped_lock lock{mutex};
-        cancelled = cancel_requested &&
-                    status.error_code() == grpc::StatusCode::CANCELLED;
+        stall = stalled && cancelled_status;
+        cancelled = cancel_requested && cancelled_status;
       }
-      if (cancelled) {
+      if (stall) {
+        // The watchdog sets `stalled` only when no cancel came first, so a
+        // later cancel does not change this outcome.
+        terminal = std::unexpected(
+            core::ChatError{.kind = core::ChatErrorKind::failure,
+                            .message = "llamad sent nothing for " +
+                                       seconds_text(stall_timeout) +
+                                       ", so Pig Pen stopped the request"});
+      } else if (cancelled) {
         terminal = std::unexpected(
             core::ChatError{.kind = core::ChatErrorKind::cancelled,
                             .message = "the model request was cancelled"});
@@ -253,11 +314,28 @@ struct LlamadChatClient::Impl {
       context->TryCancel();
     }
   }
+
+  /// @brief Pump thread: stop the open stream when it has been silent for
+  /// longer than the stall timeout.
+  void watch_for_stall() noexcept {
+    if (stall_timeout <= std::chrono::milliseconds::zero()) {
+      return;
+    }
+    const std::scoped_lock lock{mutex};
+    if (!context || !alive_at || cancel_requested || stalled) {
+      return;
+    }
+    if (Clock::now() - *alive_at <= stall_timeout) {
+      return;
+    }
+    stalled = true;
+    context->TryCancel();
+  }
 };
 
 std::expected<std::unique_ptr<LlamadChatClient>, std::string>
 LlamadChatClient::connect(std::string socket_path,
-                          const std::chrono::milliseconds deadline) {
+                          const ConnectOptions options) {
   if (socket_path.empty()) {
     return std::unexpected("the llamad socket path is empty");
   }
@@ -271,16 +349,27 @@ LlamadChatClient::connect(std::string socket_path,
   auto stub = wire::Llama::NewStub(channel);
 
   grpc::ClientContext context;
-  context.set_deadline(std::chrono::system_clock::now() + deadline);
+  context.set_deadline(std::chrono::system_clock::now() + options.deadline);
   wire::ModelInfo info;
   if (const auto status = stub->GetModelInfo(&context, {}, &info);
       !status.ok()) {
-    if (status.error_code() == grpc::StatusCode::UNAVAILABLE ||
-        status.error_code() == grpc::StatusCode::DEADLINE_EXCEEDED) {
+    if (status.error_code() == grpc::StatusCode::UNAVAILABLE) {
       return std::unexpected("could not reach llamad at " + socket_path + " (" +
                              describe(status) +
                              "). Start the daemon with: llamad --model " +
                              "MODEL.gguf --socket " + socket_path);
+    }
+    if (status.error_code() == grpc::StatusCode::DEADLINE_EXCEEDED) {
+      // Without wait-for-ready, a socket that nothing serves fails with
+      // UNAVAILABLE at once. A deadline means that a process accepted the
+      // connection but did not answer in time.
+      return std::unexpected(
+          "could not reach llamad at " + socket_path +
+          ": it did not answer within " + seconds_text(options.deadline) +
+          " (" + describe(status) +
+          "). The daemon can be busy or stuck. Try again, or start it again "
+          "with: llamad --model MODEL.gguf --socket " +
+          socket_path);
     }
     return std::unexpected("llamad at " + socket_path +
                            " did not report its model (" + describe(status) +
@@ -320,6 +409,7 @@ LlamadChatClient::connect(std::string socket_path,
                 .max_request_bytes = info.max_request_bytes()};
   impl->channel = std::move(channel);
   impl->stub = std::move(stub);
+  impl->stall_timeout = options.stall_timeout;
   return std::unique_ptr<LlamadChatClient>{
       new LlamadChatClient{std::move(impl)}};
 }
@@ -360,9 +450,13 @@ LlamadChatClient::start(core::ChatRequest request,
   auto message = to_wire(request);
   auto context = std::make_shared<grpc::ClientContext>();
   {
+    // The call starts now: the watchdog counts the silence from here, also
+    // while the worker thread starts and the daemon queues the request.
     const std::scoped_lock lock{impl.mutex};
     impl.context = context;
     impl.cancel_requested = false;
+    impl.stalled = false;
+    impl.alive_at = Impl::Clock::now();
   }
   const auto id = impl.request + 1;
   std::jthread worker;
@@ -376,6 +470,7 @@ LlamadChatClient::start(core::ChatRequest request,
     // the client idle.
     const std::scoped_lock lock{impl.mutex};
     impl.context.reset();
+    impl.alive_at.reset();
     return std::unexpected(
         std::string{"could not start the llamad request thread: "} +
         error.what());
@@ -399,6 +494,8 @@ bool LlamadChatClient::cancel() noexcept {
 
 DeliveryStats LlamadChatClient::pump(const std::size_t max_callbacks) {
   auto &impl = *impl_;
+  // Before delivery, so a pump(0) also watches the stream.
+  impl.watch_for_stall();
   DeliveryStats stats;
   while (stats.callbacks_delivered < max_callbacks) {
     Impl::Event event;
