@@ -1,7 +1,7 @@
 /// @file tool_loop_tests.cpp
 /// @brief Covers ToolLoopTransport with a scripted chat client and a fake
 /// dispatcher: request contents, the call budget, admission refusals, the
-/// round limit, transactional history, failures, cancellation, and stats.
+/// round limit, the committed history, failures, cancellation, and stats.
 ///
 /// No gRPC, reflection, or model: each test delivers the replies of the chat
 /// client at the exact moment under test.
@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <expected>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -100,6 +101,9 @@ public:
     dispatched.push_back({context.round, context.index,
                           std::string{context.call_id}, std::string{name},
                           std::string{arguments_json}});
+    if (on_dispatch) {
+      on_dispatch();
+    }
     if (refuse) {
       return {.status = ToolDispatchStatus::refused,
               .content = R"({"error":"refused"})"};
@@ -114,6 +118,8 @@ public:
   }
 
   bool refuse{false};
+  /// Runs inside each dispatch(), before the result is made.
+  std::function<void()> on_dispatch{};
   std::vector<Dispatched> dispatched{};
 
 private:
@@ -168,6 +174,40 @@ bool mentions(const std::vector<ChatMessage> &messages,
     }
   }
   return false;
+}
+
+/// @brief The roles of @p messages, in order.
+std::vector<ChatRole> roles(const std::vector<ChatMessage> &messages) {
+  std::vector<ChatRole> result;
+  for (const auto &message : messages) {
+    result.push_back(message.role);
+  }
+  return result;
+}
+
+/// @brief Whether every call in @p messages has a `tool` message answer.
+bool all_calls_answered(const std::vector<ChatMessage> &messages) {
+  return std::ranges::all_of(messages, [&](const ChatMessage &message) {
+    return std::ranges::all_of(
+        message.tool_calls, [&](const ChatToolCall &tool_call) {
+          return std::ranges::any_of(messages, [&](const ChatMessage &answer) {
+            return answer.role == ChatRole::tool &&
+                   answer.tool_call_id == tool_call.id;
+          });
+        });
+  });
+}
+
+/// @brief The committed history after one answered round with call `c1`.
+std::vector<ChatMessage> one_answered_round(const std::string &user) {
+  return {
+      {.role = ChatRole::system, .content = "SYSTEM"},
+      {.role = ChatRole::user, .content = user},
+      {.role = ChatRole::assistant, .tool_calls = {call("c1")}},
+      {.role = ChatRole::tool,
+       .content = R"({"moved":1})",
+       .tool_call_id = "c1"},
+  };
 }
 
 } // namespace
@@ -300,8 +340,14 @@ TEST_CASE("admission refusals are rejected calls whose answers stay in the "
   CHECK(loop.outcome->status == TurnStatus::completed);
   CHECK(loop.outcome->tool_stats ==
         TurnToolStats{.rounds = 2, .calls = 2, .rejected_calls = 1});
-  CHECK(mentions(loop.transport.history(), "allowed"));
-  CHECK(mentions(loop.transport.history(), "refused"));
+  const auto &history = loop.transport.history();
+  REQUIRE(history.size() == 7);
+  CHECK(history[3] == ChatMessage{.role = ChatRole::tool,
+                                  .content = R"({"moved":1})",
+                                  .tool_call_id = "allowed"});
+  CHECK(history[5] == ChatMessage{.role = ChatRole::tool,
+                                  .content = R"({"error":"refused"})",
+                                  .tool_call_id = "refused"});
 }
 
 TEST_CASE("the round limit completes the turn without dangling calls") {
@@ -325,15 +371,7 @@ TEST_CASE("the round limit completes the turn without dangling calls") {
   CHECK_FALSE(mentions(history, "dropped-eat"));
   CHECK(history.back() == ChatMessage{.role = ChatRole::assistant,
                                       .content = "I will continue east."});
-  // Every call in the history has an answer.
-  for (const auto &message : history) {
-    for (const auto &tool_call : message.tool_calls) {
-      CHECK(std::ranges::any_of(history, [&](const ChatMessage &answer) {
-        return answer.role == ChatRole::tool &&
-               answer.tool_call_id == tool_call.id;
-      }));
-    }
-  }
+  CHECK(all_calls_answered(history));
 
   loop.send();
   loop.chat.reply("Continuing from the actual position.");
@@ -343,17 +381,44 @@ TEST_CASE("the round limit completes the turn without dangling calls") {
   CHECK_FALSE(mentions(loop.chat.requests.back().messages, "dropped-move"));
 }
 
-TEST_CASE("a round-limit reply without text adds no assistant message") {
+TEST_CASE("a round-limit reply without text commits an empty assistant "
+          "message") {
   Loop loop{{.max_tool_rounds = 1}};
   loop.send();
   loop.chat.calls({call("executed")});
   loop.chat.calls({call("dropped")});
   REQUIRE(loop.outcome);
+  CHECK(loop.outcome->status == TurnStatus::completed);
   CHECK(loop.outcome->tool_stats.unexecuted_calls == 1);
-  CHECK(loop.transport.history().back().role == ChatRole::tool);
+  const auto &history = loop.transport.history();
+  CHECK(roles(history) == std::vector{ChatRole::system, ChatRole::user,
+                                      ChatRole::assistant, ChatRole::tool,
+                                      ChatRole::assistant});
+  CHECK(history.back() == ChatMessage{.role = ChatRole::assistant});
+  CHECK(all_calls_answered(history));
+  CHECK_FALSE(mentions(history, "dropped"));
 }
 
-TEST_CASE("an output-token limit is a turn error that rolls the turn back") {
+TEST_CASE("an empty final reply commits an empty assistant message, so the "
+          "next request alternates roles") {
+  Loop loop;
+  loop.send("Turn one.");
+  loop.chat.finish({.reason = ChatFinishReason::end_of_generation});
+  REQUIRE(loop.outcome);
+  CHECK(loop.outcome->status == TurnStatus::completed);
+  CHECK(loop.outcome->text.empty());
+  CHECK(loop.transport.history().back() ==
+        ChatMessage{.role = ChatRole::assistant});
+
+  loop.send("Turn two.");
+  const auto &messages = loop.chat.requests.back().messages;
+  CHECK(roles(messages) == std::vector{ChatRole::system, ChatRole::user,
+                                       ChatRole::assistant, ChatRole::user});
+  CHECK(messages.back().content == "Turn two.");
+}
+
+TEST_CASE("an output-token limit before a tool round is a turn error that "
+          "commits nothing") {
   Loop loop;
   loop.send();
   loop.chat.text("Incomplete.");
@@ -377,12 +442,12 @@ TEST_CASE("a stop string completes the turn like the end of generation") {
   CHECK(loop.transport.history().back().content == "Stopped.");
 }
 
-TEST_CASE("a failure after a tool round keeps the side effects and discards "
-          "the history") {
+TEST_CASE("a failure after a tool round keeps the side effects and commits "
+          "the answered round") {
   Loop loop;
   loop.send();
-  loop.chat.calls({call("executed")},
-                  {.prompt_tokens = 100, .completion_tokens = 5});
+  loop.chat.calls({call("c1")}, {.prompt_tokens = 100, .completion_tokens = 5});
+  loop.chat.text("Unanswered reply.");
   loop.chat.fail({.message = "llamad INTERNAL: decode failed"});
 
   REQUIRE(loop.outcome);
@@ -393,24 +458,101 @@ TEST_CASE("a failure after a tool round keeps the side effects and discards "
   CHECK(loop.outcome->tool_stats ==
         TurnToolStats{.rounds = 1, .calls = 1, .rejected_calls = 0});
   REQUIRE(loop.dispatcher.dispatched.size() == 1);
-  CHECK(loop.transport.history().size() == 1);
+  // The round ran, so the history keeps it; the failed reply is discarded.
+  CHECK(loop.transport.history() == one_answered_round("Continue."));
 
-  // The next turn starts from the committed history only.
+  // The next turn starts from the answered round.
   loop.send("Again.");
-  CHECK(loop.chat.requests.back().messages.size() == 2);
-  CHECK_FALSE(mentions(loop.chat.requests.back().messages, "executed"));
+  auto expected = one_answered_round("Continue.");
+  expected.push_back({.role = ChatRole::user, .content = "Again."});
+  CHECK(loop.chat.requests.back().messages == expected);
+}
+
+TEST_CASE("a turn that ends early after one answered round commits exactly "
+          "that round") {
+  Loop loop;
+  loop.send();
+  loop.chat.calls({call("c1")});
+  REQUIRE(loop.chat.active);
+  loop.chat.text("Unanswered reply.");
+  auto expected_status = TurnStatus::error;
+
+  SECTION("a client error") {
+    loop.chat.fail({.message = "llamad INTERNAL: decode failed"});
+  }
+  SECTION("a length finish") {
+    loop.chat.finish({.reason = ChatFinishReason::length});
+  }
+  SECTION("a cancellation") {
+    REQUIRE(loop.transport.cancel());
+    loop.chat.fail({.cancelled = true, .message = "cancelled"});
+    expected_status = TurnStatus::cancelled;
+  }
+  SECTION("a cancelled finish") {
+    loop.chat.finish({.reason = ChatFinishReason::cancelled});
+    expected_status = TurnStatus::cancelled;
+  }
+  SECTION("a cancel that races a second tool-call reply") {
+    REQUIRE(loop.transport.cancel());
+    loop.chat.calls({call("late")});
+    expected_status = TurnStatus::cancelled;
+  }
+
+  REQUIRE(loop.outcome);
+  CHECK(loop.outcome->status == expected_status);
+  CHECK(loop.outcome->requests == 2);
+  CHECK(loop.dispatcher.dispatched.size() == 1);
+  CHECK(loop.transport.history() == one_answered_round("Continue."));
+  CHECK(all_calls_answered(loop.transport.history()));
+
+  loop.send("Again.");
+  auto expected = one_answered_round("Continue.");
+  expected.push_back({.role = ChatRole::user, .content = "Again."});
+  CHECK(loop.chat.requests.back().messages == expected);
+}
+
+TEST_CASE("a failure before any round was answered leaves the history "
+          "unchanged") {
+  Loop loop;
+  loop.send("Turn one.");
+  loop.chat.reply("Done.");
+  REQUIRE(loop.outcome);
+  const auto before = loop.transport.history();
+  REQUIRE(before.size() == 3);
+
+  loop.send("Turn two.");
+  loop.chat.text("Partial.");
+  SECTION("a client error") {
+    loop.chat.fail({.message = "llamad INTERNAL: decode failed"});
+    REQUIRE(loop.outcome);
+    CHECK(loop.outcome->status == TurnStatus::error);
+  }
+  SECTION("a length finish") {
+    loop.chat.finish({.reason = ChatFinishReason::length});
+    REQUIRE(loop.outcome);
+    CHECK(loop.outcome->status == TurnStatus::error);
+  }
+  SECTION("a cancellation") {
+    REQUIRE(loop.transport.cancel());
+    loop.chat.fail({.cancelled = true, .message = "cancelled"});
+    REQUIRE(loop.outcome);
+    CHECK(loop.outcome->status == TurnStatus::cancelled);
+  }
+  // No lone `user` message: the failed turn left nothing.
+  CHECK(loop.transport.history() == before);
 }
 
 TEST_CASE("a later round that cannot start ends the turn through on_finished") {
   Loop loop;
   loop.chat.fail_starts_after = 1;
   loop.send();
-  loop.chat.calls({call("executed")});
+  loop.chat.calls({call("c1")});
   REQUIRE(loop.outcome);
   CHECK(loop.outcome->status == TurnStatus::error);
   CHECK(loop.outcome->error == "could not start the request");
   CHECK(loop.outcome->requests == 1);
-  CHECK(loop.transport.history().size() == 1);
+  // The round ran before the next request failed to start, so it commits.
+  CHECK(loop.transport.history() == one_answered_round("Continue."));
   CHECK_FALSE(loop.transport.turn_active());
 }
 
@@ -437,10 +579,11 @@ TEST_CASE("overlapping sends are rejected") {
   CHECK(loop.chat.requests.size() == 1);
 }
 
-TEST_CASE("cancellation mid-round ends the turn cancelled and rolls it back") {
+TEST_CASE("cancellation mid-round ends the turn cancelled and commits the "
+          "answered round") {
   Loop loop;
   loop.send();
-  loop.chat.calls({call("executed")});
+  loop.chat.calls({call("c1")});
   loop.chat.text("Partial ");
   REQUIRE(loop.transport.cancel());
   CHECK(loop.chat.cancel_count == 1);
@@ -452,8 +595,78 @@ TEST_CASE("cancellation mid-round ends the turn cancelled and rolls it back") {
   CHECK(loop.outcome->requests == 2);
   CHECK(loop.outcome->text == "Partial ");
   CHECK(loop.outcome->tool_stats.calls == 1);
-  CHECK(loop.transport.history().size() == 1);
+  CHECK(loop.transport.history() == one_answered_round("Continue."));
+  const auto forwarded = loop.chat.cancel_count;
+  // Without a turn, cancel() does nothing.
   CHECK_FALSE(loop.transport.cancel());
+  CHECK(loop.chat.cancel_count == forwarded);
+}
+
+TEST_CASE("a second cancel during a request reaches the client again and "
+          "returns false") {
+  Loop loop;
+  loop.send();
+  REQUIRE(loop.transport.cancel());
+  CHECK(loop.chat.cancel_count == 1);
+  CHECK_FALSE(loop.transport.cancel());
+  CHECK(loop.chat.cancel_count == 2);
+  loop.chat.fail({.cancelled = true, .message = "cancelled"});
+  REQUIRE(loop.outcome);
+  CHECK(loop.outcome->status == TurnStatus::cancelled);
+}
+
+TEST_CASE("a cancel from inside dispatch finishes the round and starts no "
+          "request") {
+  Loop loop;
+  std::optional<bool> accepted;
+  loop.dispatcher.on_dispatch = [&loop, &accepted] {
+    if (!accepted) {
+      accepted = loop.transport.cancel();
+    }
+  };
+  loop.send();
+  loop.chat.calls({call("c1"), call("c2")});
+
+  CHECK(accepted == true);
+  REQUIRE(loop.outcome);
+  CHECK(loop.outcome->status == TurnStatus::cancelled);
+  CHECK(loop.outcome->requests == 1);
+  CHECK(loop.chat.requests.size() == 1);
+  CHECK_FALSE(loop.chat.active);
+  CHECK_FALSE(loop.transport.turn_active());
+  // The round finishes, so each call has its answer, and it commits.
+  CHECK(loop.dispatcher.dispatched.size() == 2);
+  CHECK(loop.outcome->tool_stats.rounds == 1);
+  const auto &history = loop.transport.history();
+  CHECK(roles(history) == std::vector{ChatRole::system, ChatRole::user,
+                                      ChatRole::assistant, ChatRole::tool,
+                                      ChatRole::tool});
+  CHECK(all_calls_answered(history));
+}
+
+TEST_CASE("a cancel followed by a client error ends the turn cancelled") {
+  Loop loop;
+  loop.send();
+  REQUIRE(loop.transport.cancel());
+  loop.chat.fail({.message = "llamad UNAVAILABLE: connection reset"});
+  REQUIRE(loop.outcome);
+  CHECK(loop.outcome->status == TurnStatus::cancelled);
+  CHECK(loop.outcome->error == "llamad UNAVAILABLE: connection reset");
+  CHECK(loop.transport.history().size() == 1);
+}
+
+TEST_CASE("a cancel that loses the race to a final reply completes and "
+          "commits") {
+  Loop loop;
+  loop.send();
+  loop.chat.calls({call("c1")});
+  REQUIRE(loop.transport.cancel());
+  loop.chat.reply("Done.");
+  REQUIRE(loop.outcome);
+  CHECK(loop.outcome->status == TurnStatus::completed);
+  auto expected = one_answered_round("Continue.");
+  expected.push_back({.role = ChatRole::assistant, .content = "Done."});
+  CHECK(loop.transport.history() == expected);
 }
 
 TEST_CASE("a cancel that races a tool-call reply runs no tools") {

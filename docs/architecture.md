@@ -79,24 +79,39 @@ message is first. One turn does these steps:
      used its four requests, the call does not run, and the model gets the
      tool error for the call limit. Otherwise the call uses one request of the
      budget, also if it is not valid, and the dispatcher runs it. The loop
-     stages one `tool` message for each call, with the call ID. Then it starts
-     the next round.
+     stages one `tool` message for each call, with the call ID. The round is
+     then answered. If a cancel occurred during the round, the turn ends as
+     cancelled. Otherwise the loop starts the next round.
    - **Tool calls at the round limit.** This is the round-limit completion.
-     The calls do not run. The history keeps the text of the reply, if it is
-     not empty, without the calls. Thus, the history never holds a call
-     without an answer. The turn completes, and the outcome records the
-     number of calls that did not run.
-   - **End of generation, or a stop string.** The turn completes.
+     The calls do not run. The history keeps an assistant message with the
+     text of the reply, without the calls. The text can be empty. Thus, the
+     history never holds a call without an answer. The turn completes, and
+     the outcome records the number of calls that did not run.
+   - **End of generation, or a stop string.** The turn completes. The loop
+     stages an assistant message with the text of the reply. The text can be
+     empty.
    - **Length.** The turn ends with an error, because the response got to its
      output-token limit.
    - **Cancelled.** The turn ends as cancelled.
    - **Error.** The turn ends with the llamad status and message.
-4. The history is transactional. The loop commits the staged messages only
-   when the turn completes. This includes the round-limit completion. A turn
-   that fails or is cancelled discards them. The world side effects of the
-   calls that ran stay, and the log records them.
+4. The history always matches the world. The calls of an answered round
+   ran, and their side effects stay. Thus, the loop always commits each
+   answered round:
+   - A completed turn commits all its staged messages. This includes the
+     round-limit completion. The turn always ends with an assistant message,
+     so the roles alternate on the next turn.
+   - A turn that fails or is cancelled commits the user message and the
+     answered rounds. It discards only the reply after the last answered
+     round.
+   - A turn that fails before it answers a round commits nothing. Thus, the
+     history never holds a `user` message without a reply.
+   - The log records the side effects of all calls that ran.
 5. If a later round cannot start, the turn ends with an error through
-   `on_finished`.
+   `on_finished`. The answered rounds stay in the history.
+6. Each `cancel()` during a turn goes to the chat client. Only the first
+   `cancel()` of a turn returns `true`. A cancel from inside a tool call
+   does not stop the round. The round gets all its answers, and the next
+   request does not start.
 
 The loop counts the requests of the turn, the dispatched rounds, all calls in
 these rounds, the rejected calls (budget and admission), and the invalid
@@ -157,7 +172,7 @@ Three seams make the layers testable:
 - With `IChatClient` and `IToolDispatcher`, a scripted chat client in
   `tests/tool_loop_tests.cpp` can operate `ToolLoopTransport`. The tests use
   this seam to cover the request contents, the budget, the round limit, the
-  transactional history, failures, and cancellation.
+  committed history after each type of turn end, failures, and cancellation.
 - `WorldTools` takes world values and returns the plain response types. The
   tests use this seam to examine world behavior, fixed response shapes, and
   scenario visibility without reflection, JSON, or a binding.
@@ -198,7 +213,7 @@ encode a payload a second time.
 1. **Admission.** After objective completion or a log failure, the
    dispatcher refuses all world actions. This includes the subsequent calls
    in the same batch. A log failure ends the episode after the active turn
-   ends. If the turn completes, the results of the executed calls can commit.
+   ends. The results of the executed calls commit with their round.
 2. **Lookup.** An unknown tool name is not valid. The model gets the list of
    the registered tools.
 3. **Decode and call.** Arguments that do not decode are not valid. The model
