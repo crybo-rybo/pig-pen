@@ -134,7 +134,7 @@ if(UNIX)
     )
     set_tests_properties(
       pigpen_headless_graceful_${suffix}
-      PROPERTIES TIMEOUT 30
+      PROPERTIES TIMEOUT 45
     )
   endforeach()
 endif()

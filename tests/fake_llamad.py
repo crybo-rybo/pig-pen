@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 import time
 from types import TracebackType
-from typing import Any, Self
+from typing import Any
 
 # What the fake reports from GetModelInfo; the CLI prints and logs it.
 MODEL_INFO = {
@@ -91,7 +91,8 @@ class FakeLlamad:
             time.sleep(0.01)
         raise AssertionError(f"expected {count} requests, got {self.requests()!r}")
 
-    def __enter__(self) -> Self:
+    # typing.Self needs Python 3.11; CMake accepts any Python 3.
+    def __enter__(self) -> FakeLlamad:  # noqa: PYI034
         return self
 
     def __exit__(
