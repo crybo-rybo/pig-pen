@@ -176,7 +176,8 @@ TEST_CASE("each round resends the history with the tools and the sampling") {
   Loop loop;
   loop.send("Turn one.");
   REQUIRE(loop.chat.requests.size() == 1);
-  const auto &first = loop.chat.requests[0];
+  // A copy: the next round appends to `requests`, which can reallocate it.
+  const auto first = loop.chat.requests[0];
   REQUIRE(first.messages.size() == 2);
   CHECK(first.messages[0] ==
         ChatMessage{.role = ChatRole::system, .content = "SYSTEM"});

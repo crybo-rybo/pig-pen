@@ -21,9 +21,17 @@
 namespace pigpen::agent {
 namespace {
 
-/// @brief Replace filename-hostile bytes with '_'; an empty component
-/// becomes "model" so the log stem stays well-formed.
+/// @brief The longest model component of a log file name, in bytes. It keeps
+/// the whole name far below the usual 255-byte limit.
+constexpr std::size_t max_filename_component_bytes{80};
+
+/// @brief Keep the first max_filename_component_bytes bytes and replace
+/// filename-hostile bytes with '_'; an empty component becomes "model" so the
+/// log stem stays well-formed.
 [[nodiscard]] std::string sanitized_filename_component(std::string value) {
+  if (value.size() > max_filename_component_bytes) {
+    value.resize(max_filename_component_bytes);
+  }
   for (auto &character : value) {
     const auto byte = static_cast<unsigned char>(character);
     if (std::isalnum(byte) == 0 && character != '-' && character != '_' &&
@@ -226,8 +234,11 @@ MetricsWriter::create(const std::filesystem::path &log_directory,
                     std::to_string(config.seed);
   auto path = log_directory / (stem + ".jsonl");
   std::ofstream stream{path, std::ios::out | std::ios::noreplace};
-  for (std::size_t suffix = 1; !stream && std::filesystem::exists(path);
-       ++suffix) {
+  // The error_code overload: a path the file system rejects (for example,
+  // one that is too long) ends the loop with an error instead of a throw.
+  std::error_code exists_error;
+  for (std::size_t suffix = 1;
+       !stream && std::filesystem::exists(path, exists_error); ++suffix) {
     path = log_directory / (stem + '-' + std::to_string(suffix) + ".jsonl");
     stream = std::ofstream{path, std::ios::out | std::ios::noreplace};
   }
@@ -294,6 +305,13 @@ std::expected<void, std::string>
 MetricsWriter::record_tool(const core::ToolActivity &activity) {
   if (finalized_) {
     return std::unexpected("cannot record a tool after the metrics footer");
+  }
+  // The payloads are spliced verbatim, and the log keeps the exact text that
+  // the model saw, so a raw line break would split the record over lines.
+  constexpr std::string_view line_breaks{"\n\r"};
+  if (activity.arguments_json.find_first_of(line_breaks) != std::string::npos ||
+      activity.result_json.find_first_of(line_breaks) != std::string::npos) {
+    return std::unexpected("tool payload contains a raw line break");
   }
   auto written = write_line(stream_, path_,
                             ToolRecord{

@@ -46,8 +46,10 @@ pigpen_target(pigpen_world)
 
 # The runtime that needs neither reflection nor gRPC: the episode state
 # machine, the tool loop, prompts, and world actions. It links neither
-# scrydantic nor gRPC, so a <scrydantic/...> or <grpcpp/...> include here
-# cannot compile.
+# scrydantic nor gRPC. A <scrydantic/...> include here cannot compile, because
+# the fetched scrydantic headers are only on the targets that link it. Keeping
+# gRPC out is a convention: a system gRPC package has its headers in the
+# default include path, so a <grpcpp/...> include here can compile.
 add_library(pigpen_core STATIC
   src/core/config.cpp
   src/core/episode_runner.cpp

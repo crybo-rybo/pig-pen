@@ -59,6 +59,8 @@ public:
   MetricsWriter &operator=(const MetricsWriter &) = delete;
 
   /// @brief Append one successfully decoded world-tool invocation.
+  /// @return An error when the write fails, or when a payload is not JSON or
+  /// contains a raw line break; for a payload error, nothing is written.
   [[nodiscard]] std::expected<void, std::string>
   record_tool(const core::ToolActivity &activity);
   /// @brief Append one finished model turn.

@@ -14,8 +14,9 @@ runs a tool. scrydantic only binds and codes tools. Thus, Pig Pen owns the
 loop: the conversation history, the tool rounds, the call budget, and the
 round limit.
 
-Only `src/agent` uses C++26 reflection. Only `src/llamad` uses gRPC. With
-these layers, you can test all code without a window or a model.
+Only `src/agent` uses C++26 reflection. In the application, only
+`src/llamad` uses gRPC. The fake llamad of the tests also uses it. With these
+layers, you can test all code without a window or a model.
 
 ```
 src/app/main.cpp              src/app/headless_main.cpp
@@ -44,8 +45,9 @@ For more data, refer to [World and tools](world.md).
 ## `src/core`: the runtime without reflection or gRPC
 
 This layer is plain C++23 in the namespace `pigpen::core`. The build makes it
-as `pigpen_core`. Code in this layer cannot include a scrydantic header or a
-gRPC header.
+as `pigpen_core`. Code in this layer cannot include a scrydantic header, and
+must not include a gRPC header. The build enforces only the first rule. For
+more data, refer to [Build layout](#build-layout).
 
 | unit | responsibility |
 |---|---|
@@ -106,8 +108,9 @@ the calls that did not run.
 ## `src/llamad`: the gRPC client
 
 This layer is C++23 in the namespace `pigpen::llamad`. The build makes it as
-`pigpen_llamad`. It is the only Pig Pen code that includes gRPC and Protobuf
-headers. Its public header, `llamad_client.hpp`, is free of gRPC.
+`pigpen_llamad`. It is the only application code that includes gRPC and
+Protobuf headers. The fake llamad of the tests also includes them. Its public
+header, `llamad_client.hpp`, is free of gRPC.
 
 The build gets `proto/llamad/v1/llamad.proto` from the pinned llamad release,
 and generates the C++ messages and the gRPC stubs into
@@ -201,9 +204,11 @@ encode a payload a second time.
 3. **Decode and call.** Arguments that do not decode are not valid. The model
    gets the scrydantic `model_message`.
 
-scrydantic encodes all error results as `{"error": ...}`. Pig Pen never puts
-model text into JSON by hand. Refused calls and calls that are not valid
-never become world activity.
+scrydantic encodes all dispatcher error results as `{"error": ...}`. The
+only other error result is the call-limit result of the tool loop. It is a
+fixed string constant, `tool_call_limit_result` in `src/core/tool_loop.hpp`.
+Pig Pen never puts model text into JSON by hand. Refused calls and calls that
+are not valid never become world activity.
 
 ### `Session` is the reset unit
 
@@ -288,10 +293,15 @@ and fetches the runtime dependencies, and finds gRPC and Protobuf.
 | `pigpen_llamad` | C++23 | core (public); proto, gRPC (private) | `src/llamad` |
 | `pigpen_agent` | C++26 + `-freflection` (private) | core (public); llamad, scrydantic (private) | `src/agent` |
 | `pigpen_ui` (GUI or tests) | C++23 | core | `gui_options.cpp` and `world_animation.cpp` |
+| `pigpen_test_support` (tests only) | C++23 | proto, gRPC (private) | `tests/support/fake_llamad.cpp`, the fake llamad |
 
-`pigpen_core` links neither `scrydantic::scrydantic` nor gRPC. Because of
-this, a `<scrydantic/...>` or `<grpcpp/...>` include in `pigpen_core` does
-not compile. The linkage enforces the boundary, not a convention.
+`pigpen_core` links neither `scrydantic::scrydantic` nor gRPC. The build
+fetches scrydantic, and its headers are only on the include path of the
+targets that link it. Because of this, a `<scrydantic/...>` include in
+`pigpen_core` does not compile. The linkage enforces this boundary. For gRPC,
+the boundary is only a convention. When gRPC is a system package, for
+example the Debian packages of the CI, its headers are in the default include
+path. Thus, a `<grpcpp/...>` include in `pigpen_core` can compile.
 
 `pigpen_agent` links scrydantic privately and requests C++26 privately.
 Because of this, the C++26 standard and `-freflection` do not go to the

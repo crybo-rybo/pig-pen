@@ -11,6 +11,7 @@
 #include <mutex>
 #include <optional>
 #include <string_view>
+#include <system_error>
 #include <thread>
 #include <utility>
 #include <variant>
@@ -231,8 +232,13 @@ LlamadChatClient::connect(std::string socket_path,
   if (socket_path.empty()) {
     return std::unexpected("the llamad socket path is empty");
   }
-  auto channel = grpc::CreateChannel("unix:" + socket_path,
-                                     grpc::InsecureChannelCredentials());
+  // A local subchannel pool: with the global pool, a new channel can reuse
+  // the subchannel of an earlier failed connect, still in backoff, and fail
+  // at once although the daemon now listens.
+  grpc::ChannelArguments arguments;
+  arguments.SetInt(GRPC_ARG_USE_LOCAL_SUBCHANNEL_POOL, 1);
+  auto channel = grpc::CreateCustomChannel(
+      "unix:" + socket_path, grpc::InsecureChannelCredentials(), arguments);
   auto stub = wire::Llama::NewStub(channel);
 
   grpc::ClientContext context;
@@ -308,19 +314,35 @@ LlamadChatClient::start(core::ChatRequest request,
   if (impl.worker.joinable()) {
     impl.worker.join();
   }
+  auto message = to_wire(request);
   auto context = std::make_shared<grpc::ClientContext>();
   {
     const std::scoped_lock lock{impl.mutex};
     impl.context = context;
     impl.cancel_requested = false;
   }
-  const auto id = ++impl.request;
+  const auto id = impl.request + 1;
+  std::jthread worker;
+  try {
+    worker = std::jthread{[&impl, id, context = std::move(context),
+                           message = std::move(message)] {
+      impl.read_stream(id, *context, message);
+    }};
+  } catch (const std::system_error &error) {
+    // No worker exists, so nothing was queued: undo the context and leave
+    // the client idle.
+    const std::scoped_lock lock{impl.mutex};
+    impl.context.reset();
+    return std::unexpected(
+        std::string{"could not start the llamad request thread: "} +
+        error.what());
+  }
+  // The worker only queues events, and pump() runs on this thread, so the
+  // request state can commit after the thread exists.
+  impl.request = id;
   impl.active = true;
   impl.callbacks = std::move(callbacks);
-  impl.worker = std::jthread{
-      [&impl, id, context = std::move(context), message = to_wire(request)] {
-        impl.read_stream(id, *context, message);
-      }};
+  impl.worker = std::move(worker);
   return {};
 }
 
