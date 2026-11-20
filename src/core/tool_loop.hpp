@@ -5,7 +5,8 @@
 /// llamad is stateless and never runs a tool, and scrydantic only binds and
 /// codes tools. This class is the agent loop between them: it resends the
 /// whole conversation on each round, dispatches the calls of each reply, and
-/// commits the messages of a turn only when the turn completes.
+/// keeps a history that always matches the world: every tool round that was
+/// answered is committed, whatever happens later in the turn.
 #pragma once
 
 #include "core/chat_client.hpp"
@@ -13,6 +14,7 @@
 #include "core/tool_dispatcher.hpp"
 #include "core/turn_transport.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <memory>
@@ -43,6 +45,22 @@ inline constexpr std::string_view tool_call_limit_result{
 /// (the pump thread). Tools run synchronously inside that delivery. The
 /// client must outlive this object; destruction cancels an active request
 /// and ignores anything that the client delivers later.
+///
+/// History contract, for each turn:
+/// - A round is answered when one `tool` message is staged for each of its
+///   calls. The calls of the round were dispatched or refused, and the side
+///   effects of the dispatched ones persist.
+/// - A completed turn commits all its messages and always ends with an
+///   assistant message. The content of that message is the text of the final
+///   reply, and it is empty when the reply had no text. At the round limit,
+///   it holds the text only, never the calls that did not run.
+/// - A turn that does not complete (error, cancel, `length`, a round that
+///   cannot start) commits its answered prefix: the user message and every
+///   answered round. It discards only the reply after the last answered
+///   round. A turn that fails before it answers a round commits nothing.
+/// - Thus, the history never holds a tool call without its answer, and an
+///   assistant message always follows each committed `user` message.
+/// - The history is committed before on_finished runs.
 class ToolLoopTransport final : public ITurnTransport {
 public:
   ToolLoopTransport(IChatClient &client, IToolDispatcher &dispatcher,
@@ -58,8 +76,13 @@ public:
   /// cannot start; nothing is then staged.
   [[nodiscard]] std::expected<void, std::string>
   send(std::string user_message, TurnCallbacks callbacks) override;
-  /// @brief Ask the active turn to stop; it ends with TurnStatus::cancelled
-  /// unless its current reply already completed it.
+  /// @brief Ask the active turn to stop.
+  ///
+  /// Each call during a turn forwards to IChatClient::cancel(). The turn
+  /// ends with TurnStatus::cancelled, unless its current reply already
+  /// completed it. A cancel from inside IToolDispatcher::dispatch() lets the
+  /// round finish, and then the next request does not start.
+  /// @return true only for the first cancel() of a turn.
   bool cancel() noexcept override;
 
   /// @brief The committed conversation, system message first.
@@ -72,8 +95,10 @@ public:
 private:
   struct ActiveTurn {
     TurnCallbacks callbacks{};
-    /// Messages of this turn, committed only when the turn completes.
+    /// Messages of this turn that are not committed yet.
     std::vector<ChatMessage> staged{};
+    /// The leading messages of `staged` that commit however the turn ends.
+    std::size_t answered{};
     std::string round_text{};
     TurnOutcome outcome{};
     std::uint32_t calls_spent{};
@@ -84,7 +109,7 @@ private:
   void on_round_finished(std::expected<ChatFinish, ChatError> finished);
   void dispatch_round(std::uint32_t round,
                       const std::vector<ChatToolCall> &calls);
-  void complete_turn();
+  void complete_turn(std::string final_text);
   void end_turn(TurnStatus status, std::string error);
 
   IChatClient &client_;

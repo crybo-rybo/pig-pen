@@ -376,9 +376,14 @@ TEST_CASE("the tool message is the logged result, and side effects survive "
   REQUIRE(loop.outcome);
   CHECK(loop.outcome->status == pigpen::core::TurnStatus::error);
   CHECK(loop.outcome->tool_stats.invalid_calls == 1);
-  // The world action happened and was published once; the history did not
-  // keep the failed turn.
+  // The world action happened and was published once, and the history keeps
+  // the answered round, so it matches the world.
   CHECK(loop.tools.world.position() == (pigpen::world::Position{6, 5}));
   CHECK(loop.tools.activities.size() == 1);
-  CHECK(loop.transport.history().size() == 1);
+  const auto &history = loop.transport.history();
+  REQUIRE(history.size() == 5);
+  CHECK(history.back() == pigpen::core::ChatMessage{
+                              .role = pigpen::core::ChatRole::tool,
+                              .content = loop.tools.activities[0].result_json,
+                              .tool_call_id = "first"});
 }

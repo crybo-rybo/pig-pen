@@ -131,8 +131,11 @@ Keep these invariants:
   committed history (system message first), the rounds, the four-request
   budget, and the round-limit completion that keeps history without
   unanswered calls. Calls that are not valid also count for the limit. The
-  history is transactional: a turn that fails or is cancelled discards its
-  messages, but its world side effects stay and are logged.
+  history always matches the world. Every answered tool round is committed,
+  also when the turn fails or is cancelled later. Only the unanswered reply
+  after it is discarded. A completed turn always ends with an assistant
+  message, also when the reply has no text. A cancel during tool dispatch
+  stops the turn before the next request.
   `WorldToolDispatcher` owns admission, lookup, and decode. `WorldTools` owns
   only world semantics and visibility.
 - **Application callbacks and tools run on the pump thread.** gRPC reads occur

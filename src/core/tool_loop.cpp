@@ -2,6 +2,7 @@
 /// @brief ToolLoopTransport implementation; the contract is in the header.
 #include "core/tool_loop.hpp"
 
+#include <cstddef>
 #include <utility>
 
 namespace pigpen::core {
@@ -40,12 +41,13 @@ ToolLoopTransport::send(std::string user_message, TurnCallbacks callbacks) {
 }
 
 bool ToolLoopTransport::cancel() noexcept {
-  if (!turn_ || turn_->cancel_requested) {
+  if (!turn_) {
     return false;
   }
-  turn_->cancel_requested = true;
+  // Forwarded every time: a cancel from inside dispatch() reaches no request,
+  // so a later cancel must still reach the next one.
   static_cast<void>(client_.cancel());
-  return true;
+  return !std::exchange(turn_->cancel_requested, true);
 }
 
 std::expected<void, std::string> ToolLoopTransport::start_round() {
@@ -105,11 +107,7 @@ void ToolLoopTransport::on_round_finished(
   switch (finished->reason) {
   case ChatFinishReason::end_of_generation:
   case ChatFinishReason::stop:
-    if (!turn.round_text.empty()) {
-      turn.staged.push_back(
-          {.role = ChatRole::assistant, .content = turn.round_text});
-    }
-    complete_turn();
+    complete_turn(std::move(turn.round_text));
     return;
   case ChatFinishReason::length:
     end_turn(TurnStatus::error,
@@ -135,13 +133,9 @@ void ToolLoopTransport::on_round_finished(
   if (stats.rounds >= limits_.max_tool_rounds) {
     // Round-limit completion: the calls never run, and the history keeps
     // only the reply's text, so it never holds an unanswered call.
-    if (!turn.round_text.empty()) {
-      turn.staged.push_back(
-          {.role = ChatRole::assistant, .content = turn.round_text});
-    }
     stats.round_limit_reached = true;
     stats.unexecuted_calls = finished->tool_calls.size();
-    complete_turn();
+    complete_turn(std::move(turn.round_text));
     return;
   }
 
@@ -150,6 +144,11 @@ void ToolLoopTransport::on_round_finished(
                          .content = turn.round_text,
                          .tool_calls = finished->tool_calls});
   dispatch_round(stats.rounds, finished->tool_calls);
+  if (turn.cancel_requested) {
+    // A cancel from inside dispatch(): the answered round stays committed.
+    end_turn(TurnStatus::cancelled, "the model turn was cancelled");
+    return;
+  }
   if (auto started = start_round(); !started) {
     end_turn(TurnStatus::error, std::move(started.error()));
   }
@@ -182,20 +181,27 @@ void ToolLoopTransport::dispatch_round(const std::uint32_t round,
                            .content = std::move(content),
                            .tool_call_id = call.id});
   }
+  // Every call has its answer, and the calls ran: the round must commit.
+  turn.answered = turn.staged.size();
 }
 
-void ToolLoopTransport::complete_turn() {
-  auto &staged = turn_->staged;
-  history_.insert(history_.end(), std::make_move_iterator(staged.begin()),
-                  std::make_move_iterator(staged.end()));
-  staged.clear();
+void ToolLoopTransport::complete_turn(std::string final_text) {
+  // Always an assistant message, also without text, so roles alternate.
+  auto &turn = *turn_;
+  turn.staged.push_back(
+      {.role = ChatRole::assistant, .content = std::move(final_text)});
+  turn.answered = turn.staged.size();
   end_turn(TurnStatus::completed, {});
 }
 
 void ToolLoopTransport::end_turn(const TurnStatus status, std::string error) {
-  // Staged messages of a turn that did not complete are discarded here.
   auto turn = std::move(*turn_);
   turn_.reset();
+  // Commit the answered prefix; only a reply after it is discarded.
+  const auto answered =
+      turn.staged.begin() + static_cast<std::ptrdiff_t>(turn.answered);
+  history_.insert(history_.end(), std::make_move_iterator(turn.staged.begin()),
+                  std::make_move_iterator(answered));
   turn.outcome.status = status;
   turn.outcome.error = std::move(error);
   if (turn.callbacks.on_finished) {
