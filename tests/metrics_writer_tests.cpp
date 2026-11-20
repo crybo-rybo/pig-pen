@@ -209,6 +209,71 @@ TEST_CASE("metrics log rejects a tool payload that is not JSON") {
   std::filesystem::remove_all(directory, ignored);
 }
 
+TEST_CASE("metrics log rejects a tool payload with a raw line break") {
+  const auto directory = test_directory();
+  auto created = pigpen::agent::MetricsWriter::create(
+      directory, pigpen::core::Config{}, pigpen::core::ModelInfo{},
+      "line-break-test");
+  REQUIRE(created.has_value());
+  auto writer = std::move(*created);
+  const auto path = writer->path();
+
+  // Valid but pretty-printed JSON, in each payload.
+  const auto pretty_arguments = writer->record_tool({
+      .kind = pigpen::core::ToolKind::eat,
+      .arguments_json = "{\n}",
+      .eaten = pigpen::world::ItemType::berry,
+  });
+  REQUIRE_FALSE(pretty_arguments);
+  CHECK(pretty_arguments.error() == "tool payload contains a raw line break");
+  CHECK_FALSE(writer->record_tool({
+      .kind = pigpen::core::ToolKind::look,
+      .result_json = "{\r\n  \"ok\": true\r\n}",
+  }));
+  REQUIRE(
+      writer->record_tool({.kind = pigpen::core::ToolKind::move}).has_value());
+  REQUIRE(writer->finish({.reason = pigpen::core::FinishReason::stopped}, 0)
+              .has_value());
+
+  // Only the valid call was appended, and every line is one JSON object.
+  const auto records = read_records(path);
+  REQUIRE(records.size() == 3);
+  for (const auto &record : records) {
+    CHECK(record.is_object());
+  }
+  CHECK(records[1].at("type") == "tool");
+  CHECK(records[1].at("tool") == "move");
+  CHECK(records.back().at("tool_call_counts").at("eat") == 0);
+  CHECK(records.back().at("tool_call_counts").at("look") == 0);
+  CHECK(records.back().at("tool_call_counts").at("move") == 1);
+  CHECK(records.back().at("items_eaten").at("berry") == 0);
+
+  std::error_code ignored;
+  std::filesystem::remove_all(directory, ignored);
+}
+
+TEST_CASE("a long model description is cut in the file name only") {
+  const auto directory = test_directory();
+  const std::string description(300, 'm');
+  auto created = pigpen::agent::MetricsWriter::create(
+      directory, pigpen::core::Config{},
+      pigpen::core::ModelInfo{.description = description}, "long-name-test");
+  REQUIRE(created.has_value());
+  auto writer = std::move(*created);
+  const auto path = writer->path();
+  CHECK(std::filesystem::exists(path));
+  CHECK(path.filename().string().size() <= 255);
+  REQUIRE(writer->finish({.reason = pigpen::core::FinishReason::stopped}, 0)
+              .has_value());
+
+  const auto records = read_records(path);
+  REQUIRE(records.size() == 2);
+  CHECK(records.front().at("model") == description);
+
+  std::error_code ignored;
+  std::filesystem::remove_all(directory, ignored);
+}
+
 TEST_CASE("metrics footer is final and cannot be duplicated") {
   const auto directory = test_directory();
   auto created = pigpen::agent::MetricsWriter::create(
