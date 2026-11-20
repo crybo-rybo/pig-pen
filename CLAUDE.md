@@ -28,12 +28,17 @@ derive data again:
 
 ## Build and test
 
-GCC 16.2 or later (for C++26 reflection), CMake 3.31 or later, and the system
-gRPC and Protobuf (with `protoc` and `grpc_cpp_plugin`) are necessary. The
-first configure step fetches pinned dependencies. Network access is necessary
-for this step. The CI builds in the `gcc:16.2.0` container image with the
-Debian packages in `.github/workflows/ci.yml`. macOS is not supported in this
-version.
+GCC 16.2 or later (for C++26 reflection), CMake 3.31 or later, and gRPC and
+Protobuf built with libstdc++ (with `protoc` and `grpc_cpp_plugin`) are
+necessary. The first configure step fetches pinned dependencies. Network
+access is necessary for this step. The CI builds in the `gcc:16.2.0` container
+image with the Debian packages in `.github/workflows/ci.yml`. The CI does not
+test macOS. On macOS, the Homebrew gRPC uses libc++ and cannot link. Build the
+pinned gRPC one time with `scripts/build-grpc.sh` (`just grpc`, into
+`build/deps/grpc`, which the configure step finds automatically). Then
+configure with `CC=/usr/bin/cc CXX=g++-16` (Apple Clang for the SDL3
+Objective-C code). The configure step links a test program with the gRPC that
+it finds, and stops with a clear message if the link fails.
 
 ```sh
 just build                 # cmake --preset dev + build (Debug)
@@ -42,6 +47,7 @@ just build release         # the other preset
 just run dev --play        # build + start the GUI and the episode
 just run-headless dev --turns 4 --seed 42
 just ci                    # all GitHub PR checks: fmt-check + lint + dev/release/headless builds and tests (uses CC/CXX)
+just grpc                  # build the pinned gRPC with the project compiler (needed on macOS)
 just fmt                   # clang-format all C++ + ruff format the Python tests
 just fmt-check             # the CI format check
 just lint                  # ruff check on the Python tests

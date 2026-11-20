@@ -47,13 +47,77 @@ if(NOT EXISTS "${PIGPEN_LLAMAD_PROTO}")
   )
 endif()
 
-# gRPC and Protobuf come from the system. Prefer Protobuf's own CMake config
-# and fall back to CMake's FindProtobuf module, as llamad's build does.
+# gRPC and Protobuf come from the system, or from a prefix that
+# scripts/build-grpc.sh built with the project compiler. That script installs
+# into build/deps/grpc by default, and that prefix is used when it exists. The
+# prefix is searched first. To change it in an existing build directory,
+# configure again with --fresh.
+set(
+  PIGPEN_GRPC_ROOT ""
+  CACHE PATH "A gRPC and Protobuf install prefix to search first"
+)
+set(_pigpen_grpc_root "${PIGPEN_GRPC_ROOT}")
+if(_pigpen_grpc_root STREQUAL "" AND
+   EXISTS "${PROJECT_SOURCE_DIR}/build/deps/grpc/lib/cmake/grpc")
+  set(_pigpen_grpc_root "${PROJECT_SOURCE_DIR}/build/deps/grpc")
+endif()
+if(NOT _pigpen_grpc_root STREQUAL "")
+  if(NOT IS_DIRECTORY "${_pigpen_grpc_root}")
+    message(
+      FATAL_ERROR
+      "PIGPEN_GRPC_ROOT is not a directory: ${_pigpen_grpc_root}"
+    )
+  endif()
+  list(PREPEND CMAKE_PREFIX_PATH "${_pigpen_grpc_root}")
+endif()
+
+# Prefer Protobuf's own CMake config and fall back to CMake's FindProtobuf
+# module, as llamad's build does.
 find_package(Protobuf CONFIG QUIET)
 if(NOT Protobuf_FOUND)
   find_package(Protobuf REQUIRED)
 endif()
 find_package(gRPC CONFIG REQUIRED)
+message(STATUS "Using gRPC ${gRPC_VERSION} from ${gRPC_DIR}")
+
+# GCC code cannot link a gRPC that was built for a different C++ standard
+# library, for example Homebrew's (Apple Clang and libc++). Without this check,
+# that fails only when the executables link. A passing result is cached for
+# each gRPC_DIR; a failing result is never cached.
+include(CheckCXXSourceCompiles)
+include(CMakePushCheckState)
+if(NOT "${PIGPEN_GRPC_LINK_CHECKED_DIR}" STREQUAL "${gRPC_DIR}")
+  unset(PIGPEN_GRPC_LINKS CACHE)
+endif()
+cmake_push_check_state(RESET)
+set(CMAKE_REQUIRED_LIBRARIES gRPC::grpc++)
+check_cxx_source_compiles(
+  [=[
+    #include <string>
+    #include <grpcpp/grpcpp.h>
+    int main() {
+      const std::string target = "unix:/tmp/pigpen-link-check.sock";
+      auto channel =
+          grpc::CreateChannel(target, grpc::InsecureChannelCredentials());
+      return channel ? 0 : 1;
+    }
+  ]=]
+  PIGPEN_GRPC_LINKS
+)
+cmake_pop_check_state()
+if(NOT PIGPEN_GRPC_LINKS)
+  unset(PIGPEN_GRPC_LINKS CACHE)
+  message(
+    FATAL_ERROR
+    "Pig Pen cannot link the gRPC at ${gRPC_DIR}. That gRPC was built with a "
+    "different C++ standard library than this compiler uses "
+    "(${CMAKE_CXX_COMPILER}). Run scripts/build-grpc.sh (or just grpc) to "
+    "build gRPC with this compiler, then configure again with --fresh. See "
+    "docs/building.md. CMakeFiles/CMakeConfigureLog.yaml shows the failed "
+    "link."
+  )
+endif()
+set(PIGPEN_GRPC_LINK_CHECKED_DIR "${gRPC_DIR}" CACHE INTERNAL "")
 
 if(PIGPEN_BUILD_GUI)
   # Link SDL3 statically into the GUI binary.

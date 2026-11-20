@@ -72,13 +72,17 @@ Before you build Pig Pen, install these tools:
 - GCC 16.2 or later (for C++26 reflection)
 - CMake 3.31 or later
 - Ninja
-- gRPC and Protobuf for C++, with `protoc` and `grpc_cpp_plugin`
+- gRPC and Protobuf for C++, with `protoc` and `grpc_cpp_plugin`. On
+  macOS, `scripts/build-grpc.sh` builds them with GCC, because the Homebrew
+  packages use a different C++ standard library.
 - Python 3 (for the tests)
 - OpenGL 3.2 or later (for the GUI)
 - `just` (optional). The short commands in this file use it.
 
-CMake gets all other dependencies. For the setup on each platform, refer to
-[Build Pig Pen](docs/building.md).
+CMake gets all other dependencies. Pig Pen builds on Linux and on macOS. The
+hosted CI tests only Linux. For the setup on each platform, refer to
+[Build Pig Pen](docs/building.md). On macOS, select the compilers on the first
+configure step: `CC=/usr/bin/cc CXX=g++-16 cmake --preset dev --fresh`.
 
 1. Build [llamad](https://github.com/crybo-rybo/llamad) and start it with the
    GGUF model that you want to use. Give it a large context, because Pig Pen

@@ -19,14 +19,19 @@ run-headless profile="dev" *args: (configure profile)
     cmake --build --preset {{profile}} --target pig-pen-headless
     ./build/{{profile}}/pig-pen-headless {{args}}
 
+# Build the pinned gRPC with the project compiler (scripts/build-grpc.sh --help).
+grpc *args:
+    scripts/build-grpc.sh {{args}}
+
 # Same pinned versions as .github/workflows/ci.yml.
 clang_format := "uvx clang-format@22.1.8"
 ruff := "uvx ruff@0.16.1"
 
-# The compilers for `ci`: CC and CXX when set, else gcc and g++ (GCC 16.2 or
-# later, as in the gcc:16.2.0 CI image).
-ci_cc := env("CC", "gcc")
-ci_cxx := env("CXX", "g++")
+# The compilers for `ci`: CC and CXX when set. Else gcc and g++ (GCC 16.2 or
+# later, as in the gcc:16.2.0 CI image). On macOS, Apple Clang compiles SDL3's
+# Objective-C (GCC lacks -fobjc-arc) and Homebrew's g++-16 compiles the C++.
+ci_cc := env("CC", if os() == "macos" { "/usr/bin/cc" } else { "gcc" })
+ci_cxx := env("CXX", if os() == "macos" { "g++-16" } else { "g++" })
 
 fmt:
     git ls-files '*.cpp' '*.hpp' | xargs {{clang_format}} -i
