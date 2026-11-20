@@ -2,7 +2,7 @@
 
 ```sh
 just test              # build the dev preset, then run ctest
-just ci                # format + lint + dev/release/headless (the GitHub PR checks)
+just ci                # format + lint + dev/release/headless/asan (the GitHub PR checks)
 ```
 
 If you do not use `just`, use these commands:
@@ -45,7 +45,7 @@ items:
 | `tests/world_tests.cpp` | Grid constants, item placement from the seed, movement, and wall failures. `look` rays, the `eat` action, and the score. The end of positive items, and seed determinism with `World::dump()`. |
 | `tests/world_tools_tests.cpp` | flat typed responses, and the `opaque_look` and `reward_feedback` toggles |
 | `tests/tool_loop_tests.cpp` | `ToolLoopTransport` with a scripted chat client and a fake dispatcher: the system message first, the tools on each round, the tool results with their call IDs, and the seed only when it is set. The call budget across batches and its reset for each turn, invalid calls that use the budget, admission refusals, and the round-limit completion (history kept, the count of calls that did not run, no call without an answer). The length limit as an error, an error after a tool round, a later round that cannot start, cancellation during a round, the transactional rollback, the token totals across rounds, and destruction during a request. |
-| `tests/llamad_client_tests.cpp` | `LlamadChatClient` against the fake llamad: the wire mapping in both directions, the stream order, each finish reason, each failure status, cancellation, a callback that starts the next request, the bounded `pump()`, an undelivered terminal event that blocks the next request, the connect rejections (missing socket, embedding model, no chat template), and destruction with a stream in flight |
+| `tests/llamad_client_tests.cpp` | `LlamadChatClient` against the fake llamad: the wire mapping in both directions, the stream order, each finish reason, each failure status, a daemon that stops during a stream (an error, not a cancellation), cancellation, a cancel immediately after `start()` (before the request gets to the daemon), a cancel after the stream ended but before `pump()` delivers the result (the daemon's result, not a cancellation, and the next request is not affected), a callback that starts the next request, the bounded `pump()`, an undelivered terminal event that blocks the next request, the connect rejections (missing socket, embedding model, no chat template), and destruction with a stream in flight. Each cancel test makes sure that exactly one `on_finished` arrives. |
 | `tests/world_tool_binding_tests.cpp` | The exact tool manifest (names, descriptions, and schema strings), the canonical encoder, decode errors and unknown tools that the model sees, the exact activity payloads and call identity, a wall as a typed outcome, and admission after objective completion and after a log failure, also in one batch through the real tool loop |
 | `tests/prompt_tests.cpp` | config defaults, and that each prompt flag does what it claims. This includes hidden rewards, and the separation of automatic recovery instructions from human guidance. |
 | `tests/episode_runner_tests.cpp` | the turn loop with a scripted transport: budget exhaustion, pause and resume, a stop that cancels an active turn, objective completion, terminal errors and log errors, and queued human input |
@@ -81,6 +81,22 @@ Thus, the Python tests do not need Python gRPC packages.
      turn records its one request, that the header has the model description
      and the socket, and that the JSONL file still ends with a final footer.
 
+- `pigpen_headless_daemon_killed` / `_timeout`:
+  `tests/headless_failure_tests.py` starts the fake llamad with a reply that
+  never finishes, and waits for the first request of the CLI. Then:
+  - `daemon_killed` stops the fake with `SIGKILL`. The CLI must exit with
+    code `1`. The log must have one `turn` record with the status `error` and
+    an error that starts with `llamad `, and a footer with `complete: true`
+    and `finish_reason: "error"`. The test does not examine the gRPC status
+    name or message, because they are different in different gRPC versions.
+  - `timeout` uses `--timeout-seconds 1`. The CLI must exit with code `3`
+    and write `timeout after 1 seconds` to stderr. The log must have one
+    `cancelled` turn, and a footer with `complete: true` and
+    `finish_reason: "stopped"`.
+
+  If an assertion fails, the test kills and reaps the CLI and the fake, and
+  the failure message includes stdout and stderr of the CLI.
+
 When the tests are on, Python 3 is necessary. The two signal tests register
 only on UNIX.
 
@@ -93,6 +109,53 @@ ctest --preset dev -R world              # by test name
 ./build/dev/pigpen_tests -s "eating consumes each item and applies its reward"
 ./build/dev/pigpen_reflection_tests --list-tests
 ```
+
+## Run the suite with the sanitizers
+
+The `asan` preset is a Debug build without the GUI. It adds
+AddressSanitizer and UndefinedBehaviorSanitizer to the compile step and the
+link step of all code that the build compiles: Pig Pen and the fetched
+sources (`-fsanitize=address,undefined -fno-sanitize-recover=undefined
+-fno-omit-frame-pointer`). Warnings are errors, as in the other presets. The
+CI runs the preset as one more entry of the `build-and-test` matrix, and
+`just ci` runs it too.
+
+```sh
+just test asan
+```
+
+If you do not use `just`, use these commands. On macOS, add `CXX=g++-16` to
+the configure step.
+
+```sh
+cmake --preset asan
+cmake --build --preset asan
+ctest --preset asan
+```
+
+The test preset sets `UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1`, so
+the first undefined behavior stops the test with a stack trace. An
+AddressSanitizer report always stops the test. To run a test binary directly,
+set the same variables:
+
+```sh
+UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 ASAN_OPTIONS=detect_leaks=0 \
+  ./build/asan/pigpen_tests "[determinism]"
+```
+
+Know these limits:
+
+- The sanitizers do not instrument gRPC and Protobuf, because the build
+  does not compile them. On Linux they are system packages. On macOS, they
+  are the `build/deps/grpc` build. Thus, the sanitizers find errors in Pig
+  Pen code and in the fetched sources, but not in gRPC.
+- Leak detection is off (`ASAN_OPTIONS=detect_leaks=0`). GCC's
+  LeakSanitizer does not run on macOS. On Linux, nobody has examined what it
+  reports for the system gRPC.
+- ThreadSanitizer is not part of the preset. GCC's ThreadSanitizer runtime
+  does not link on macOS. On Linux, the system gRPC is not instrumented, so
+  ThreadSanitizer cannot see its synchronization, and its reports would not
+  be reliable.
 
 ## Test with a real model
 

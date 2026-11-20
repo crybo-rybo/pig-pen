@@ -120,6 +120,22 @@ add_test(
 )
 set_tests_properties(pigpen_headless_integration PROPERTIES TIMEOUT 45)
 
+# A request that hangs, then a daemon killed with SIGKILL (exit 1) or the
+# --timeout-seconds limit (exit 3). Both must still write a complete footer.
+foreach(scenario IN ITEMS daemon-killed timeout)
+  string(REPLACE "-" "_" suffix "${scenario}")
+  add_test(
+    NAME pigpen_headless_${suffix}
+    COMMAND
+      "${Python3_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/headless_failure_tests.py"
+      "$<TARGET_FILE:pig-pen-headless>"
+      "$<TARGET_FILE:pigpen_fake_llamad>"
+      ${scenario}
+  )
+  set_tests_properties(pigpen_headless_${suffix} PROPERTIES TIMEOUT 45)
+endforeach()
+
 if(UNIX)
   foreach(signal IN ITEMS SIGINT SIGTERM)
     string(TOLOWER "${signal}" suffix)

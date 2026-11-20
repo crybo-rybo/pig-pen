@@ -45,6 +45,19 @@
         "CMAKE_BUILD_TYPE": "Debug",
         "PIGPEN_BUILD_GUI": false
       }
+    },
+    {
+      "name": "asan",
+      "displayName": "AddressSanitizer + UBSan",
+      "description": "Debug build with tests and no GUI, instrumented with ASan and UBSan",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "PIGPEN_BUILD_GUI": false,
+        "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer",
+        "CMAKE_SHARED_LINKER_FLAGS": "-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer"
+      }
     }
   ],
   "buildPresets": [
@@ -59,6 +72,10 @@
     {
       "name": "headless",
       "configurePreset": "headless"
+    },
+    {
+      "name": "asan",
+      "configurePreset": "asan"
     }
   ],
   "testPresets": [
@@ -86,6 +103,20 @@
       "name": "headless",
       "inherits": "base",
       "configurePreset": "headless"
+    },
+    {
+      "name": "asan",
+      "inherits": "base",
+      "configurePreset": "asan",
+      "environment": {
+        "UBSAN_OPTIONS": "print_stacktrace=1:halt_on_error=1",
+        "ASAN_OPTIONS": "detect_leaks=0"
+      },
+      "vendor": {
+        "pig-pen": {
+          "detect_leaks": "Off: GCC's LeakSanitizer does not run on macOS, and on Linux nobody has checked what it reports for the uninstrumented system gRPC."
+        }
+      }
     }
   ]
 }

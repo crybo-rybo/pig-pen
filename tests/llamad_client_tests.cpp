@@ -1,8 +1,8 @@
 /// @file llamad_client_tests.cpp
 /// @brief Covers LlamadChatClient against the scripted fake llamad over a
 /// real gRPC Unix socket: the wire mapping both ways, stream order, failure
-/// statuses, cancellation, connect rejections, and delivery after
-/// destruction.
+/// statuses, a daemon that stops mid-stream, cancellation (also in a race
+/// with the worker), connect rejections, and delivery after destruction.
 
 #include "llamad/llamad_client.hpp"
 
@@ -10,9 +10,14 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <chrono>
+#include <condition_variable>
+#include <cstddef>
 #include <expected>
+#include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
@@ -28,6 +33,7 @@ using pigpen::llamad::LlamadChatClient;
 using pigpen::testing::FakeFinishReason;
 using pigpen::testing::FakeLlamad;
 using pigpen::testing::FakeReply;
+using pigpen::testing::ReceivedRequest;
 
 namespace {
 
@@ -35,9 +41,46 @@ using namespace std::chrono_literals;
 
 using Finished = std::expected<ChatFinish, ChatError>;
 
+/// @brief Pump @p client until @p done is true or 5 s pass.
+[[nodiscard]] bool pump_until(LlamadChatClient &client,
+                              const std::function<bool()> &done) {
+  const auto deadline = std::chrono::steady_clock::now() + 5s;
+  while (!done() && std::chrono::steady_clock::now() < deadline) {
+    static_cast<void>(client.pump());
+    std::this_thread::sleep_for(1ms);
+  }
+  return done();
+}
+
+/// @brief Holds the fake's Chat handlers in on_request until open(), so the
+/// fake cannot reply before the test acts. A wait ends after 5 s, so a
+/// failed test cannot block the fake's shutdown forever.
+class Gate final {
+public:
+  void open() {
+    {
+      const std::scoped_lock lock{mutex_};
+      open_ = true;
+    }
+    changed_.notify_all();
+  }
+
+  void wait() {
+    std::unique_lock lock{mutex_};
+    static_cast<void>(changed_.wait_for(lock, 5s, [this] { return open_; }));
+  }
+
+private:
+  std::mutex mutex_{};
+  std::condition_variable changed_{};
+  bool open_{};
+};
+
 struct Harness {
-  explicit Harness(pigpen::testing::FakeModelInfo info = {})
-      : fake(FakeLlamad::start(directory.socket(), std::move(info))) {
+  explicit Harness(pigpen::testing::FakeModelInfo info = {},
+                   std::function<void(const ReceivedRequest &)> on_request = {})
+      : fake(FakeLlamad::start(directory.socket(), std::move(info),
+                               std::move(on_request))) {
     REQUIRE(fake);
     auto connected = LlamadChatClient::connect(directory.socket());
     REQUIRE(connected.has_value());
@@ -247,6 +290,23 @@ TEST_CASE("failure statuses become errors with the status name") {
   CHECK(run.finished->error().message == "llamad INTERNAL: no scripted reply");
 }
 
+TEST_CASE("a daemon that stops mid-stream ends the request with an error, "
+          "not a cancellation") {
+  Harness run;
+  run.fake->enqueue({.text = {"partial"}, .hang = true});
+  run.start();
+  REQUIRE(run.fake->wait_for_requests(1));
+  // The server shuts down and drops the call that hangs. The status name
+  // and message depend on the gRPC version, so the test does not pin them.
+  run.fake.reset();
+  run.finish();
+  REQUIRE_FALSE(run.finished->has_value());
+  CHECK_FALSE(run.finished->error().cancelled);
+  CHECK(run.finished->error().message.starts_with("llamad "));
+  CHECK(std::ranges::count(run.events, std::string{"<finished>"}) == 1);
+  CHECK_FALSE(run.client->cancel());
+}
+
 TEST_CASE("cancel ends an in-flight request with a cancelled error") {
   Harness run;
   CHECK_FALSE(run.client->cancel());
@@ -266,6 +326,87 @@ TEST_CASE("cancel ends an in-flight request with a cancelled error") {
   run.start();
   run.finish();
   CHECK(run.finished->has_value());
+}
+
+TEST_CASE("cancel immediately after start ends the request as cancelled") {
+  // The gate holds a request that reaches the fake until after cancel(), so
+  // the fake cannot finish it first. Both replies are the same: the
+  // follow-up gets one whether or not the first request reached the fake.
+  Gate gate;
+  Harness run{{}, [&gate](const ReceivedRequest &) { gate.wait(); }};
+  run.fake->enqueue(FakeReply::say("ok"));
+  run.fake->enqueue(FakeReply::say("ok"));
+  std::size_t first_finished{};
+  std::optional<Finished> first;
+  REQUIRE(run.client->start(Harness::basic_request(),
+                            {.on_finished = [&](Finished result) {
+                              ++first_finished;
+                              first = std::move(result);
+                            }}));
+  // No wait for the daemon: the worker may not have started the call yet.
+  REQUIRE(run.client->cancel());
+  gate.open();
+  REQUIRE(pump_until(*run.client, [&] { return first.has_value(); }));
+  REQUIRE_FALSE(first->has_value());
+  CHECK(first->error().cancelled);
+  CHECK_FALSE(run.client->cancel());
+
+  // The client is usable again. start() joins the first worker, so every
+  // event of the first request is queued before the follow-up starts, and
+  // the follow-up's pump drains them.
+  run.start();
+  run.finish();
+  REQUIRE(run.finished->has_value());
+  CHECK(run.events == std::vector<std::string>{"ok", "<finished>"});
+  CHECK(first_finished == 1);
+}
+
+TEST_CASE("cancel after the stream ended but before delivery keeps the "
+          "result that the daemon sent") {
+  Harness run;
+  run.fake->enqueue({.text = {"a"}, .finish = FakeFinishReason::stop});
+  std::size_t finished{};
+  std::optional<Finished> result;
+  std::vector<std::string> texts;
+  REQUIRE(run.client->start(
+      Harness::basic_request(),
+      {.on_text = [&](auto text) { texts.emplace_back(text); },
+       .on_finished =
+           [&](Finished value) {
+             ++finished;
+             result = std::move(value);
+           }}));
+  // pump(0) delivers nothing. Two queued events (the text, then the
+  // terminal event, queued after Finish() returned) show that the stream
+  // ended on the worker.
+  const auto deadline = std::chrono::steady_clock::now() + 5s;
+  pigpen::llamad::DeliveryStats stats;
+  while (stats.events_remaining < 2 &&
+         std::chrono::steady_clock::now() < deadline) {
+    stats = run.client->pump(0);
+    std::this_thread::sleep_for(1ms);
+  }
+  REQUIRE(stats.events_remaining == 2);
+
+  // The request stays active until on_finished, so cancel() accepts it. But
+  // the daemon already finished the generation, and the result reports what
+  // actually happened: the daemon's finish, not a cancellation.
+  CHECK(run.client->cancel());
+  REQUIRE(pump_until(*run.client, [&] { return result.has_value(); }));
+  REQUIRE(result->has_value());
+  CHECK((*result)->reason == ChatFinishReason::stop);
+  CHECK(texts == std::vector<std::string>{"a"});
+  CHECK_FALSE(run.client->cancel());
+
+  // The late cancel does not leak into the next request: a CANCELLED status
+  // from the server is again an error that is not marked cancelled.
+  run.fake->enqueue({.status_code = 1, .status_message = "server shutdown"});
+  run.start();
+  run.finish();
+  REQUIRE_FALSE(run.finished->has_value());
+  CHECK_FALSE(run.finished->error().cancelled);
+  CHECK(run.finished->error().message == "llamad CANCELLED: server shutdown");
+  CHECK(finished == 1);
 }
 
 TEST_CASE("on_finished can start the next request") {
