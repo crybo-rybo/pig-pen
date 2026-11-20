@@ -7,7 +7,7 @@
 | CMake 3.31 or later | The presets use schema version 6. |
 | Ninja | The presets use the Ninja generator. |
 | GCC 16.2 or later | Necessary for C++26 P2996/P3394 reflection. scrydantic refuses older compilers, also GCC 16 snapshots before 16.2. |
-| gRPC and Protobuf for C++ | With `protoc` and `grpc_cpp_plugin`. The build generates the llamad stubs with them. They must be built with the same C++ standard library as Pig Pen (libstdc++). |
+| gRPC and Protobuf for C++ | With `protoc` and `grpc_cpp_plugin`. The build generates the llamad stubs with them. They must be built with the same C++ standard library as Pig Pen (libstdc++). On Linux, the system packages are applicable. On macOS, `scripts/build-grpc.sh` builds them (refer to [macOS](#macos)). |
 | Python 3 | Necessary when the test suite is on. Python runs the CLI tests. |
 | OpenGL 3.2 or later | Necessary only for the GUI target. SDL3 creates the platform context. |
 
@@ -66,13 +66,83 @@ Make sure that `gcc --version` shows 16.2 or later.
 The Ubuntu toolchain PPA has only GCC 16 snapshots, and scrydantic refuses
 them. Use the `gcc:16.2.0` container image as described for Debian.
 
+If you have a GCC 16.2 and your system gRPC is not applicable, you can use
+the same script as on macOS: `CC=gcc-16 CXX=g++-16 scripts/build-grpc.sh`.
+On Linux, the script uses the system OpenSSL, zlib, and c-ares. On Debian and
+Ubuntu, install `git cmake ninja-build libssl-dev zlib1g-dev libc-ares-dev`.
+The developers tested the script only on macOS.
+
 ## macOS
 
-This version of Pig Pen does not support macOS yet. Pig Pen must compile with
-GCC and libstdc++, because Apple Clang has no C++26 reflection. But the
-Homebrew gRPC and Protobuf packages are built with Apple Clang and libc++.
-GCC code cannot link them. A future change can build a pinned gRPC and
-Protobuf from source with the project compiler.
+On macOS, Pig Pen uses two compilers:
+
+- Homebrew GCC 16 compiles the C++ code. GCC 16.2 or later is necessary.
+- Apple Clang compiles the SDL3 C and Objective-C platform code.
+
+Pig Pen must compile with GCC and libstdc++, because Apple Clang has no C++26
+reflection. The Homebrew gRPC and Protobuf packages are built with Apple Clang
+and libc++. GCC code cannot link them. Because of this, you build gRPC one
+time with the same GCC. The script `scripts/build-grpc.sh` does this.
+
+1. Install the packages:
+
+   ```sh
+   brew install gcc cmake ninja just openssl@3 c-ares
+   g++-16 --version   # must show 16.2 or later
+   ```
+
+2. Build gRPC:
+
+   ```sh
+   scripts/build-grpc.sh   # or: just grpc
+   ```
+
+   The script clones gRPC v1.84.0, and makes sure that the tag is at the
+   pinned commit. It builds gRPC with the Protobuf, Abseil, and RE2 versions
+   that gRPC bundles. It installs them as static libraries into
+   `build/deps/grpc`. Network access is necessary. The build takes about ten
+   minutes on 12 cores. The installed prefix is about 120 MB.
+
+   The script writes a stamp file into the prefix. When the stamp shows the
+   same gRPC version and the same compilers, the script stops immediately.
+   To build again, use `--force`. For all options, run
+   `scripts/build-grpc.sh --help`.
+
+3. Configure, build, and test. Select the compilers on the first configure
+   step:
+
+   ```sh
+   CC=/usr/bin/cc CXX=g++-16 cmake --preset dev --fresh
+   cmake --build --preset dev
+   ctest --preset dev
+   ```
+
+The configure step uses `build/deps/grpc` automatically when it exists. It
+searches that prefix before the Homebrew and system directories. Thus, a
+Homebrew gRPC can stay installed. To use a gRPC in a different prefix, give
+`-DPIGPEN_GRPC_ROOT=/absolute/path/to/prefix`. The configure step shows the
+gRPC that it uses, for example
+`Using gRPC 1.84.0 from .../build/deps/grpc/lib/cmake/grpc`.
+
+The configure step then links a small test program with that gRPC. If the
+link fails, the configure step stops. The message names the gRPC directory.
+Usually, that gRPC was built with a different C++ standard library, for
+example the Homebrew gRPC. Without this check, the build fails only at the
+end, when the executables link (undefined `std::__cxx11` symbols).
+
+The binaries link gRPC, Protobuf, and Abseil statically. They use the
+Homebrew OpenSSL and c-ares as shared libraries.
+
+`build/deps/grpc` is in the `build/` directory. If you delete `build/`, you
+also delete the gRPC build. To keep it, delete only `build/<preset>/`.
+
+SDL3 keeps Cocoa behind its C API. Because of this, GCC does not parse the
+Apple framework headers when it compiles the ImGui backend and the
+application. Pig Pen still uses the deprecated Apple OpenGL implementation to
+render. The build suppresses that SDK deprecation diagnostic.
+
+The developers tested this setup on macOS 26 on Apple silicon, with Homebrew
+GCC 16.2. The hosted CI does not test macOS.
 
 ## Presets
 
@@ -116,8 +186,11 @@ argument. Always give the preset first. If you type
 `just run-headless --turns 4`, the recipe reads `--turns` as a preset name.
 
 `just ci` uses the compilers in `CC` and `CXX`. If they are not set, it uses
-`gcc` and `g++`. To use other compilers, set the variables, for example
-`CC=gcc-16 CXX=g++-16 just ci`.
+`gcc` and `g++`. On macOS, it uses `/usr/bin/cc` and `g++-16`. To use other
+compilers, set the variables, for example `CC=gcc-16 CXX=g++-16 just ci`.
+
+`just grpc` runs `scripts/build-grpc.sh`. The recipe sends all arguments to
+the script, for example `just grpc --force`.
 
 ## CMake options
 
@@ -126,8 +199,9 @@ argument. Always give the preset first. If you type
 | `PIGPEN_BUILD_GUI` | `ON` | Builds `pig-pen`. Set it to `OFF` to build without SDL3, ImGui, and OpenGL. |
 | `PIGPEN_BUILD_TESTS` | `ON` | Builds the two Catch2 test binaries and the fake llamad, and registers all CTest cases. |
 | `PIGPEN_WARNINGS_AS_ERRORS` | `ON` | Uses `-Werror` for Pig Pen code only. |
+| `PIGPEN_GRPC_ROOT` | *(empty)* | A gRPC and Protobuf install prefix. The configure step searches it first. If it is empty and `build/deps/grpc` exists, the configure step uses `build/deps/grpc`. |
 
-The presets set these options explicitly. When you run a preset again, it sets
+The presets set the first three options explicitly. When you run a preset again, it sets
 these options back to the preset values. This also occurs when the cache has
 these options set to `OFF`.
 
@@ -174,9 +248,30 @@ configure step clones the dependencies. Examine the network access and the
 proxy settings. The configure log shows the `GIT_PROGRESS` output.
 
 **The configure step cannot find gRPC or Protobuf.** Install the development
-packages, with `protoc` and `grpc_cpp_plugin`. CMake first looks for the
-Protobuf CMake config, and then uses its own `FindProtobuf` module. gRPC must
-supply its CMake config (`gRPCConfig.cmake`).
+packages, with `protoc` and `grpc_cpp_plugin`. On macOS, run
+`scripts/build-grpc.sh`. CMake first looks for the Protobuf CMake config, and
+then uses its own `FindProtobuf` module. gRPC must supply its CMake config
+(`gRPCConfig.cmake`).
+
+**The configure step stops with "Pig Pen cannot link the gRPC at ...".** The
+configure step found a gRPC that was built with a different C++ standard
+library. On macOS, this is usually the Homebrew gRPC.
+
+1. Run `scripts/build-grpc.sh` (or `just grpc`).
+2. Configure again with `--fresh`, for example
+   `CC=/usr/bin/cc CXX=g++-16 cmake --preset dev --fresh`.
+
+`CMakeFiles/CMakeConfigureLog.yaml` in the build directory shows the failed
+link.
+
+**The configure step uses the old gRPC after you build gRPC or change
+`PIGPEN_GRPC_ROOT`.** CMake keeps `gRPC_DIR`, `Protobuf_DIR`, and the
+directories of the other packages in the cache. Configure again with
+`--fresh`.
+
+**`scripts/build-grpc.sh` stops with "is not GCC 16.2 or later".** The script
+uses `gcc-16` and `g++-16` on macOS, and `gcc` and `g++` on other systems.
+Set `CC` and `CXX` to the GCC that builds Pig Pen.
 
 **SDL3 cannot enable a Linux display backend.**
 

@@ -282,7 +282,8 @@ and the test binary both link `pigpen_ui`.
 ## Build layout
 
 `CMakeLists.txt` describes the Pig Pen targets. `cmake/dependencies.cmake` pins
-and fetches the runtime dependencies, and finds gRPC and Protobuf.
+and fetches the runtime dependencies, finds gRPC and Protobuf, and makes sure
+that Pig Pen can link that gRPC.
 `cmake/testing.cmake` adds Catch2, the fake llamad, and the test suite.
 
 | library | standard | links | sources |
