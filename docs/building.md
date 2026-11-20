@@ -216,8 +216,9 @@ The presets set the first three options explicitly. When you run a preset again,
 these options back to the preset values. This also occurs when the cache has
 these options set to `OFF`.
 
-Pig Pen uses C++26 reflection only in `pigpen_agent`. All other code builds as
-C++23 (refer to [Architecture](architecture.md#build-layout)). But
+Pig Pen uses C++26 reflection only in `pigpen_agent` and the reflection
+tests. All other code builds as C++23, also `pigpen_runtime` with `Session`
+(refer to [Architecture](architecture.md#build-layout)). But
 `pigpen_agent` and scrydantic need GCC 16.2. Because of this, the configure
 step does not accept compilers that are not GNU, or GCC versions before 16.2.
 

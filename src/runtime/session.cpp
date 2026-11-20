@@ -1,11 +1,12 @@
 /// @file session.cpp
 /// @brief Session implementation: config validation, the llamad connection,
 /// and composition; the contract is in the header.
-#include "agent/session.hpp"
+#include "runtime/session.hpp"
 
 #include "agent/metrics_writer.hpp"
-#include "agent/world_tool_binding.hpp"
+#include "agent/world_tool_dispatcher.hpp"
 #include "core/prompt.hpp"
+#include "core/tool_dispatcher.hpp"
 #include "core/tool_loop.hpp"
 #include "llamad/llamad_client.hpp"
 
@@ -15,7 +16,7 @@
 #include <string>
 #include <utility>
 
-namespace pigpen::agent {
+namespace pigpen::runtime {
 namespace {
 
 /// @brief The bounds that Session::create enforces before it connects.
@@ -78,16 +79,31 @@ struct Session::Impl {
   Impl(core::Config initial_config,
        std::unique_ptr<llamad::LlamadChatClient> initial_client,
        std::unique_ptr<world::World> initial_world,
-       std::shared_ptr<WorldToolBinding> initial_binding,
-       std::unique_ptr<MetricsWriter> initial_metrics)
+       std::unique_ptr<agent::MetricsWriter> initial_metrics)
       : config(std::move(initial_config)),
         startup_warning(context_warning(initial_client->model_info(), config)),
         world(std::move(initial_world)), metrics(std::move(initial_metrics)),
-        binding(std::move(initial_binding)),
-        dispatcher(binding, [this] { return !metrics_error.empty(); }),
+        // The observers run only inside dispatch(), after construction, so
+        // they may use the runner that is declared later.
+        dispatcher(agent::make_world_tool_dispatcher(
+            *world, config,
+            {
+                .on_activity =
+                    [this](core::ToolActivity activity) {
+                      activity.tick = activities.size() + 1U;
+                      activity.turn = runner.snapshot().turns_used + 1U;
+                      activities.push_back(std::move(activity));
+                      if (auto recorded =
+                              metrics->record_tool(activities.back());
+                          !recorded) {
+                        metrics_error = std::move(recorded.error());
+                      }
+                    },
+                .logging_failed = [this] { return !metrics_error.empty(); },
+            })),
         client(std::move(initial_client)),
         tool_loop(
-            *client, dispatcher, core::build_system_prompt(config),
+            *client, *dispatcher, core::build_system_prompt(config),
             {.temperature = config.temperature,
              .max_tokens = config.max_output_tokens,
              .seed = config.sampling_seed},
@@ -118,16 +134,7 @@ struct Session::Impl {
                       }
                     },
             },
-            [this] { return activities.size(); }) {
-    dispatcher.on_activity = [this](core::ToolActivity activity) {
-      activity.tick = activities.size() + 1U;
-      activity.turn = runner.snapshot().turns_used + 1U;
-      activities.push_back(std::move(activity));
-      if (auto recorded = metrics->record_tool(activities.back()); !recorded) {
-        metrics_error = std::move(recorded.error());
-      }
-    };
-  }
+            [this] { return activities.size(); }) {}
 
   // Destruction runs in reverse: the runner and the tool loop go first and
   // cancel the active request, then the client joins its worker and drops
@@ -136,11 +143,10 @@ struct Session::Impl {
   std::string startup_warning;
   std::unique_ptr<world::World> world;
   core::ToolActivityFeed activities{};
-  std::unique_ptr<MetricsWriter> metrics;
+  std::unique_ptr<agent::MetricsWriter> metrics;
   std::string metrics_error{};
   TokenTotals totals{};
-  std::shared_ptr<WorldToolBinding> binding;
-  WorldToolDispatcher dispatcher;
+  std::unique_ptr<core::IToolDispatcher> dispatcher;
   std::unique_ptr<llamad::LlamadChatClient> client;
   core::ToolLoopTransport tool_loop;
   core::EpisodeRunner runner;
@@ -161,18 +167,18 @@ Session::create(core::Config config, std::filesystem::path log_directory,
     return std::unexpected(std::move(client.error()));
   }
   auto world = std::make_unique<world::World>(config.seed);
-  auto binding = std::make_shared<WorldToolBinding>(*world, config);
-  // Opened last so a rejected config or daemon leaves no log behind.
-  auto metrics =
-      MetricsWriter::create(log_directory, config, (*client)->model_info(),
-                            std::move(prompt_variant));
+  // Opened last so a rejected config or daemon leaves no log behind. Impl
+  // binds the tools.
+  auto metrics = agent::MetricsWriter::create(log_directory, config,
+                                              (*client)->model_info(),
+                                              std::move(prompt_variant));
   if (!metrics) {
     return std::unexpected(std::move(metrics.error()));
   }
 
-  return std::shared_ptr<Session>{new Session{std::make_unique<Impl>(
-      std::move(config), std::move(*client), std::move(world),
-      std::move(binding), std::move(*metrics))}};
+  return std::shared_ptr<Session>{new Session{
+      std::make_unique<Impl>(std::move(config), std::move(*client),
+                             std::move(world), std::move(*metrics))}};
 }
 
 Session::Session(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
@@ -232,4 +238,4 @@ const std::string &Session::metrics_error() const noexcept {
   return impl_->metrics_error;
 }
 
-} // namespace pigpen::agent
+} // namespace pigpen::runtime

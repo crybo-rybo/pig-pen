@@ -1,16 +1,18 @@
 /// @file world_tool_binding_tests.cpp
-/// @brief Covers the reflected world tools: the exact manifest, the encoder,
-/// decode errors, unknown tools, exact activity payloads and call identity,
-/// and admission after objective completion and after a log failure, also
-/// inside one batch driven by the real tool loop.
+/// @brief Covers the reflected world tools through the dispatcher factory:
+/// the exact manifest, the encoder, decode errors, unknown tools, exact
+/// activity payloads and call identity, and how the dispatcher applies the
+/// admission policy, also inside one batch driven by the real tool loop.
 ///
 /// These TUs compile as C++26 with reflection, because they include the
-/// scrydantic toolbox. No gRPC or model: a scripted chat client drives the
-/// tool loop.
+/// scrydantic contract. No gRPC or model: a scripted chat client drives the
+/// tool loop. The admission policy itself is plain C++23 and is covered in
+/// world_tools_tests.cpp.
 
-#include "agent/world_tool_binding.hpp"
-
+#include "agent/tool_contract.hpp"
+#include "agent/world_tool_dispatcher.hpp"
 #include "core/tool_loop.hpp"
+#include "core/world_tools.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 #include <nlohmann/json.hpp>
@@ -24,8 +26,6 @@
 #include <vector>
 
 using pigpen::agent::DirectionArguments;
-using pigpen::agent::WorldToolBinding;
-using pigpen::agent::WorldToolDispatcher;
 using pigpen::core::ToolDispatchStatus;
 
 namespace {
@@ -37,24 +37,27 @@ constexpr std::string_view eat_schema =
 
 struct Tools {
   explicit Tools(std::uint64_t seed = 37)
-      : world(seed), binding(std::make_shared<WorldToolBinding>(
-                         world, pigpen::core::Config{})),
-        dispatcher(binding, [this] { return logging_failed; }) {
-    dispatcher.on_activity = [this](pigpen::core::ToolActivity activity) {
-      activities.push_back(std::move(activity));
-      if (fail_log_on_activity) {
-        logging_failed = true;
-      }
-    };
-  }
+      : world(seed),
+        dispatcher(pigpen::agent::make_world_tool_dispatcher(
+            world, pigpen::core::Config{},
+            {
+                .on_activity =
+                    [this](pigpen::core::ToolActivity activity) {
+                      activities.push_back(std::move(activity));
+                      if (fail_log_on_activity) {
+                        logging_failed = true;
+                      }
+                    },
+                .logging_failed = [this] { return logging_failed; },
+            })) {}
 
   pigpen::core::ToolDispatchResult dispatch(const std::string_view name,
                                             const std::string_view arguments,
                                             const std::string_view id = "call",
                                             const std::uint32_t round = 1,
                                             const std::uint32_t index = 0) {
-    return dispatcher.dispatch({.round = round, .index = index, .call_id = id},
-                               name, arguments);
+    return dispatcher->dispatch({.round = round, .index = index, .call_id = id},
+                                name, arguments);
   }
 
   /// @brief Walk to every positive item and eat all but the last one.
@@ -88,8 +91,7 @@ struct Tools {
   }
 
   pigpen::world::World world;
-  std::shared_ptr<WorldToolBinding> binding;
-  WorldToolDispatcher dispatcher;
+  std::unique_ptr<pigpen::core::IToolDispatcher> dispatcher;
   std::vector<pigpen::core::ToolActivity> activities{};
   bool logging_failed{false};
   bool fail_log_on_activity{false};
@@ -133,7 +135,7 @@ private:
 /// @brief The real tool loop over the real world dispatcher.
 struct Loop {
   Loop()
-      : transport(chat, tools.dispatcher, "SYSTEM", {},
+      : transport(chat, *tools.dispatcher, "SYSTEM", {},
                   {.max_tool_rounds = 8, .max_tool_calls_per_turn = 4}) {}
 
   void send() {
@@ -192,7 +194,7 @@ TEST_CASE("scrydantic encodes typed arguments and responses canonically") {
 
 TEST_CASE("the world tools export their exact reflected contract") {
   Tools run;
-  const auto &tools = run.dispatcher.tools();
+  const auto &tools = run.dispatcher->tools();
   REQUIRE(tools.size() == 3);
   CHECK(tools[0] ==
         pigpen::core::ChatTool{

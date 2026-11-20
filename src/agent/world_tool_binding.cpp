@@ -1,6 +1,6 @@
 /// @file world_tool_binding.cpp
-/// @brief The world toolbox and its dispatcher; the contract is in the
-/// header.
+/// @brief The world toolbox, its dispatcher, and the dispatcher factory; the
+/// contracts are in the headers.
 #include "agent/world_tool_binding.hpp"
 
 #include <algorithm>
@@ -35,47 +35,47 @@ WorldToolBinding::WorldToolBinding(world::World &world,
 WorldToolBinding::~WorldToolBinding() = default;
 
 core::MoveToolResponse
-WorldToolBinding::move(const core::ToolCallContext &context,
+WorldToolBinding::move(const WorldToolCall &context,
                        const DirectionArguments arguments) {
   const auto before = world_.position();
   auto response = tools_.move(arguments.direction);
-  auto &activity = stage(context, core::ToolKind::move,
-                         response.reason ? core::ToolOutcome::blocked_by_wall
-                                         : core::ToolOutcome::succeeded,
-                         before);
+  auto &activity = record(context, core::ToolKind::move,
+                          response.reason ? core::ToolOutcome::blocked_by_wall
+                                          : core::ToolOutcome::succeeded,
+                          before);
   activity.direction = arguments.direction;
   activity.arguments_json = canonical(arguments);
   return response;
 }
 
 core::LookToolResponse
-WorldToolBinding::look(const core::ToolCallContext &context,
+WorldToolBinding::look(const WorldToolCall &context,
                        const DirectionArguments arguments) {
   const auto before = world_.position();
   auto response = tools_.look(arguments.direction);
-  auto &activity = stage(context, core::ToolKind::look,
-                         core::ToolOutcome::succeeded, before);
+  auto &activity = record(context, core::ToolKind::look,
+                          core::ToolOutcome::succeeded, before);
   activity.direction = arguments.direction;
   activity.arguments_json = canonical(arguments);
   return response;
 }
 
-core::EatToolResponse
-WorldToolBinding::eat(const core::ToolCallContext &context) {
+core::EatToolResponse WorldToolBinding::eat(const WorldToolCall &context) {
   const auto before = world_.position();
   auto response = tools_.eat();
-  stage(context, core::ToolKind::eat,
-        response.reason ? core::ToolOutcome::nothing_to_eat
-                        : core::ToolOutcome::succeeded,
-        before)
+  record(context, core::ToolKind::eat,
+         response.reason ? core::ToolOutcome::nothing_to_eat
+                         : core::ToolOutcome::succeeded,
+         before)
       .eaten = response.ate;
   return response;
 }
 
-core::ToolActivity &WorldToolBinding::stage(
-    const core::ToolCallContext &context, const core::ToolKind kind,
-    const core::ToolOutcome outcome, const world::Position before) {
-  return staged_.emplace(core::ToolActivity{
+core::ToolActivity &WorldToolBinding::record(const WorldToolCall &context,
+                                             const core::ToolKind kind,
+                                             const core::ToolOutcome outcome,
+                                             const world::Position before) {
+  return context.activity.emplace(core::ToolActivity{
       .kind = kind,
       .outcome = outcome,
       .arguments_json = "{}",
@@ -83,34 +83,18 @@ core::ToolActivity &WorldToolBinding::stage(
       .before = before,
       .after = world_.position(),
       .score_after = world_.score(),
-      .call_id = std::string{context.call_id},
-      .round = context.round,
-      .index = context.index,
+      .call_id = std::string{context.call.call_id},
+      .round = context.call.round,
+      .index = context.call.index,
   });
 }
 
-std::optional<std::string_view>
-WorldToolBinding::admission_refusal(const bool logging_failed) const {
-  if (logging_failed) {
-    return "World tools are unavailable because the episode log failed. "
-           "Summarize the actions already taken.";
-  }
-  if (world_.all_positive_items_eaten()) {
-    return "All positive-value items have been eaten. Summarize the "
-           "completed episode without more tools.";
-  }
-  return std::nullopt;
-}
-
-std::optional<core::ToolActivity> WorldToolBinding::take_staged() {
-  return std::exchange(staged_, std::nullopt);
-}
-
-WorldToolDispatcher::WorldToolDispatcher(
-    std::shared_ptr<WorldToolBinding> binding,
-    std::function<bool()> logging_failed)
-    : binding_(std::move(binding)), logging_failed_(std::move(logging_failed)),
-      bound_(scrydantic::bind<core::ToolCallContext>(binding_)) {
+WorldToolDispatcher::WorldToolDispatcher(world::World &world,
+                                         const core::Config &config,
+                                         WorldToolObservers observers)
+    : world_(world), observers_(std::move(observers)),
+      bound_(scrydantic::bind<WorldToolCall>(
+          std::make_shared<WorldToolBinding>(world, config))) {
   std::vector<std::string_view> names;
   for (const auto &tool : bound_) {
     tools_.push_back({.name = tool.name,
@@ -131,8 +115,9 @@ core::ToolDispatchResult
 WorldToolDispatcher::dispatch(const core::ToolCallContext &context,
                               const std::string_view name,
                               const std::string_view arguments_json) {
-  if (const auto refusal =
-          binding_->admission_refusal(logging_failed_ && logging_failed_())) {
+  const bool logging_failed =
+      observers_.logging_failed && observers_.logging_failed();
+  if (const auto refusal = core::admission_refusal(world_, logging_failed)) {
     return {.status = core::ToolDispatchStatus::refused,
             .content = error_result(std::string{*refusal})};
   }
@@ -145,9 +130,11 @@ WorldToolDispatcher::dispatch(const core::ToolCallContext &context,
                              "\"; registered tools: " + registered_names_)};
   }
 
-  auto result = tool->invoke(
-      context, scrydantic::Json{.text = std::string{arguments_json}});
-  auto activity = binding_->take_staged();
+  // The output slot of this call; the member fills it when its action runs.
+  std::optional<core::ToolActivity> activity;
+  auto result =
+      tool->invoke(WorldToolCall{.call = context, .activity = activity},
+                   scrydantic::Json{.text = std::string{arguments_json}});
   std::string content;
   if (result) {
     content = std::move(result->text);
@@ -162,11 +149,18 @@ WorldToolDispatcher::dispatch(const core::ToolCallContext &context,
             .content = std::move(content)};
   }
   activity->result_json = content;
-  if (on_activity) {
-    on_activity(std::move(*activity));
+  if (observers_.on_activity) {
+    observers_.on_activity(std::move(*activity));
   }
   return {.status = core::ToolDispatchStatus::executed,
           .content = std::move(content)};
+}
+
+std::unique_ptr<core::IToolDispatcher>
+make_world_tool_dispatcher(world::World &world, const core::Config &config,
+                           WorldToolObservers observers) {
+  return std::make_unique<WorldToolDispatcher>(world, config,
+                                               std::move(observers));
 }
 
 } // namespace pigpen::agent

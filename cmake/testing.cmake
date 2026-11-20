@@ -42,8 +42,8 @@ target_link_libraries(
 )
 pigpen_target(pigpen_fake_llamad)
 
-# C++23 test TUs. They link the reflection layer's objects (Session,
-# MetricsWriter) through pigpen_agent but never include a scrydantic header.
+# C++23 test TUs. They link Session through pigpen_runtime and MetricsWriter
+# through pigpen_agent, but never include a scrydantic header.
 add_executable(
   pigpen_tests
     tests/episode_runner_tests.cpp
@@ -60,7 +60,7 @@ add_executable(
 target_link_libraries(
   pigpen_tests
   PRIVATE Catch2::Catch2WithMain nlohmann_json::nlohmann_json pigpen_agent
-          pigpen_llamad pigpen_test_support pigpen_ui
+          pigpen_llamad pigpen_runtime pigpen_test_support pigpen_ui
 )
 pigpen_target(pigpen_tests)
 catch_discover_tests(pigpen_tests)

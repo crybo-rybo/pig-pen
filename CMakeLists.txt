@@ -100,23 +100,36 @@ target_link_libraries(
 )
 pigpen_target(pigpen_llamad)
 
-# The reflection layer: the tool contract and toolbox, the reflected JSONL
-# writer, and the Session that composes everything. Every TU here compiles as
-# C++26 with -freflection (carried by scrydantic::scrydantic). Scrydantic and
-# the C++26 requirement stay PRIVATE, so everything that links this library,
-# including both front ends, stays C++23 and reflection-free.
+# The reflection layer: the tool contract, the toolbox and its dispatcher,
+# and the reflected JSONL writer. Nothing else: code goes here only when
+# reflection replaces hand-written shape code. Every TU here compiles as C++26
+# with -freflection (carried by scrydantic::scrydantic). Scrydantic and the
+# C++26 requirement stay PRIVATE, so everything that links this library stays
+# C++23 and reflection-free, and includes only its C++23 headers
+# (agent/metrics_writer.hpp, agent/world_tool_dispatcher.hpp).
 add_library(pigpen_agent STATIC
   src/agent/metrics_writer.cpp
-  src/agent/session.cpp
   src/agent/world_tool_binding.cpp
 )
 target_link_libraries(
   pigpen_agent
   PUBLIC pigpen_core
-  PRIVATE pigpen_llamad scrydantic::scrydantic
+  PRIVATE scrydantic::scrydantic
 )
 pigpen_target(pigpen_agent)
 target_compile_features(pigpen_agent PRIVATE cxx_std_26)
+
+# The composition root: Session validates the config, connects to llamad, and
+# wires the world, the tool loop, the dispatcher, the runner, and the log. It
+# is C++23, so clang-tidy can analyse it. It links the llamad client and the
+# reflection layer PRIVATE, so neither gRPC nor scrydantic reaches its users.
+add_library(pigpen_runtime STATIC src/runtime/session.cpp)
+target_link_libraries(
+  pigpen_runtime
+  PUBLIC pigpen_core
+  PRIVATE pigpen_llamad pigpen_agent
+)
+pigpen_target(pigpen_runtime)
 
 # ImGui-free UI logic shared by the GUI and the tests.
 if(PIGPEN_BUILD_GUI OR PIGPEN_BUILD_TESTS)
@@ -126,7 +139,7 @@ if(PIGPEN_BUILD_GUI OR PIGPEN_BUILD_TESTS)
 endif()
 
 add_executable(pig-pen-headless src/app/headless_main.cpp)
-target_link_libraries(pig-pen-headless PRIVATE pigpen_agent)
+target_link_libraries(pig-pen-headless PRIVATE pigpen_runtime)
 pigpen_target(pig-pen-headless)
 
 if(PIGPEN_BUILD_GUI)
@@ -156,7 +169,7 @@ if(PIGPEN_BUILD_GUI)
   )
 
   add_executable(pig-pen src/app/main.cpp src/ui/app_ui.cpp)
-  target_link_libraries(pig-pen PRIVATE pigpen_imgui pigpen_ui pigpen_agent)
+  target_link_libraries(pig-pen PRIVATE pigpen_imgui pigpen_ui pigpen_runtime)
   pigpen_target(pig-pen)
 endif()
 

@@ -76,8 +76,8 @@ bytes. Warnings are errors only for Pig Pen code.
 `.github/workflows/ci.yml` enforces the format with
 clang-format 22.1.8. Use the same major version locally. `.clang-tidy` is
 advisory. It runs only on the C++23 TUs (`src/world`, `src/core`,
-`src/llamad`, `src/ui`), because clang cannot parse the `-freflection` TUs in
-`src/agent`.
+`src/llamad`, `src/runtime`, `src/ui`), because clang cannot parse the
+`-freflection` TUs in `src/agent`.
 
 The formatter cannot enforce these conventions:
 
@@ -93,8 +93,8 @@ The formatter cannot enforce these conventions:
 ## Architecture
 
 For the layers (`src/world`, `src/core`, `src/llamad`, `src/agent`,
-`src/ui`, `src/app`), refer to `docs/architecture.md`. `Session` is the reset
-unit. A partial reset is not possible.
+`src/runtime`, `src/ui`, `src/app`), refer to `docs/architecture.md`.
+`runtime::Session` is the reset unit. A partial reset is not possible.
 
 Keep these invariants:
 
@@ -109,12 +109,22 @@ Keep these invariants:
     belong to `WorldToolDispatcher` (scrydantic), and never get to
     `WorldTools`.
   - All other code is C++23: `pigpen_world`, `pigpen_core` (`src/core`,
-    namespace `pigpen::core`: runner, tool loop, prompt, `WorldTools`),
-    `pigpen_llamad`, `pigpen_ui`, both entry points, and `pigpen_tests`.
-  - `pigpen_agent` (`src/agent`: tool contract, toolbox and dispatcher,
-    reflected JSONL writer, `Session`) links scrydantic and requests C++26
+    namespace `pigpen::core`: runner, tool loop, prompt, `WorldTools`, the
+    admission policy `admission_refusal()`), `pigpen_llamad`,
+    `pigpen_runtime` (`src/runtime`, namespace `pigpen::runtime`: `Session`,
+    `PumpStats`, `TokenTotals`), `pigpen_ui`, both entry points, and
+    `pigpen_tests`.
+  - `pigpen_agent` (`src/agent`) contains only the tool contract, the
+    toolbox and its dispatcher, the dispatcher factory
+    (`world_tool_dispatcher.hpp`), and the reflected JSONL writer. It links
+    `pigpen_core` publicly and scrydantic privately, and requests C++26
     privately. These settings do not go to the targets that link
-    `pigpen_agent`.
+    `pigpen_agent`. It does not link `pigpen_llamad`.
+  - `pigpen_runtime` links `pigpen_core` publicly, and `pigpen_llamad` and
+    `pigpen_agent` privately. It holds the dispatcher as a
+    `std::unique_ptr<core::IToolDispatcher>` from
+    `agent::make_world_tool_dispatcher()`, whose observers are fixed at
+    construction. Both front ends and `pigpen_tests` link it.
   - `pigpen_core` links neither scrydantic nor gRPC. The build enforces the
     scrydantic boundary: its headers are only on the include path of the
     targets that link it, so a `<scrydantic/...>` include in `pigpen_core`
@@ -122,7 +132,11 @@ Keep these invariants:
     a system package, its headers are in the default include path, so a
     `<grpcpp/...>` include in `pigpen_core` can compile.
   - Put code in `src/agent` only when reflection replaces hand-written shape
-    code. Keep the public headers of `src/agent` C++23-parseable.
+    code. Policy without reflection goes to `src/core`, and composition goes
+    to `src/runtime`. The `src/agent` headers that C++23 targets include
+    (`world_tool_dispatcher.hpp`, `metrics_writer.hpp`) must stay
+    C++23-parseable. `tool_contract.hpp` and `world_tool_binding.hpp` are
+    C++26 only: include them only in `src/agent` and the reflection tests.
 - **Only `pigpen_llamad` uses gRPC in the application.** The test-only
   library `pigpen_test_support` (the fake llamad) also uses it.
   `src/llamad/llamad_client.hpp` is gRPC-free (pimpl). The generated stubs
@@ -137,8 +151,9 @@ Keep these invariants:
   after it is discarded. A completed turn always ends with an assistant
   message, also when the reply has no text. A cancel during tool dispatch
   stops the turn before the next request.
-  `WorldToolDispatcher` owns admission, lookup, and decode. `WorldTools` owns
-  only world semantics and visibility.
+  `WorldToolDispatcher` applies admission, and owns lookup and decode.
+  `core::admission_refusal()` owns the admission decision and the refusal
+  texts. `WorldTools` owns only world semantics and visibility.
 - **Pig Pen does not trim the history.** When the conversation no longer fits
   in the llamad context (`OUT_OF_RANGE`, which the client maps to
   `ChatErrorKind::prompt_too_long`, or a `length` finish whose prompt and
@@ -167,14 +182,17 @@ Keep these invariants:
   per-request wall-clock deadline.
 - **Three test seams:** With `ITurnTransport`, a scripted transport can
   operate `EpisodeRunner`. With `IChatClient` and `IToolDispatcher`, a
-  scripted chat client can operate `ToolLoopTransport`. `WorldTools` takes
-  world values and returns the plain response types. Make sure that you can
-  test new code through one of these seams, or through the fake llamad.
+  scripted chat client can operate `ToolLoopTransport`. `WorldTools` and
+  `admission_refusal()` take world values and return plain types. Make sure
+  that you can test new code through one of these seams, or through the fake
+  llamad. The reflection tests make the real dispatcher with
+  `make_world_tool_dispatcher()`, and examine it through its observers.
 - The bound tool handlers share ownership of the world bindings. The world
-  exists longer than the tools. `Session` destroys the runner, then the tool
-  loop, then the client (which cancels and joins its worker), then the tools,
-  then the world. `Session::create()` opens the log last, so a rejected
-  config or an unreachable daemon leaves no log.
+  exists longer than the dispatcher. `Session` destroys the runner, then the
+  tool loop, then the client (which cancels and joins its worker), then the
+  dispatcher with the tools, then the world. In `Session::create()`, the log
+  is the last step that can return an error, so a rejected config or an
+  unreachable daemon leaves no log.
 - llamad serves exactly one model. `Config` has `socket_path`, not a model
   name. The model identity comes from `GetModelInfo`, and the log header
   records it. The socket mode (0600) is the only credential.

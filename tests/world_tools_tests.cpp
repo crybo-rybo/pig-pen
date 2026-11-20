@@ -1,19 +1,24 @@
 /// @file world_tools_tests.cpp
-/// @brief Covers typed world results and the opaque_look / reward_feedback
-/// visibility toggles.
+/// @brief Covers typed world results, the opaque_look / reward_feedback
+/// visibility toggles, and the admission policy for world actions.
 ///
-/// WorldTools takes world values and returns the plain response types, so
-/// everything here runs without reflection, JSON, a tool binding, or a model.
+/// WorldTools and admission_refusal take world values and return plain
+/// types, so everything here runs without reflection, JSON, a tool binding,
+/// or a model.
 
 #include "core/world_tools.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstdint>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <vector>
 
 namespace {
 
+using pigpen::core::admission_refusal;
 using pigpen::core::Config;
 using pigpen::core::WorldTools;
 using pigpen::world::Direction;
@@ -57,6 +62,13 @@ struct ItemViewpoint {
       .direction = Direction::west,
   };
 }
+
+constexpr std::string_view log_failed_refusal =
+    "World tools are unavailable because the episode log failed. Summarize "
+    "the actions already taken.";
+constexpr std::string_view objective_complete_refusal =
+    "All positive-value items have been eaten. Summarize the completed "
+    "episode without more tools.";
 
 } // namespace
 
@@ -133,4 +145,35 @@ TEST_CASE(
   CHECK_FALSE(hidden.score);
   CHECK(hidden.ate == placement.item);
   CHECK(hidden_world.score() == pigpen::world::item_reward(placement.item));
+}
+
+TEST_CASE("admission refuses world actions after a log failure") {
+  const World world{37};
+  CHECK(admission_refusal(world, false) == std::nullopt);
+  CHECK(admission_refusal(world, true) ==
+        std::optional<std::string_view>{log_failed_refusal});
+}
+
+TEST_CASE("admission refuses world actions once every positive item is "
+          "eaten") {
+  World world{37};
+  std::vector<Position> positive_cells;
+  for (const auto &placement : world.items()) {
+    if (pigpen::world::item_reward(placement.item) > 0) {
+      positive_cells.push_back(placement.position);
+    }
+  }
+  REQUIRE_FALSE(positive_cells.empty());
+  for (const auto cell : positive_cells) {
+    // Each action before the last positive item is still admitted.
+    CHECK(admission_refusal(world, false) == std::nullopt);
+    move_to(world, cell);
+    REQUIRE(world.eat().ok);
+  }
+  REQUIRE(world.all_positive_items_eaten());
+  CHECK(admission_refusal(world, false) ==
+        std::optional<std::string_view>{objective_complete_refusal});
+  // A log failure takes priority over the completed objective.
+  CHECK(admission_refusal(world, true) ==
+        std::optional<std::string_view>{log_failed_refusal});
 }

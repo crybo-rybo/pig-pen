@@ -6,7 +6,7 @@
 /// Session is the reset unit: creation either yields the whole composed
 /// object or fails without side effects (no directory, no log file).
 
-#include "agent/session.hpp"
+#include "runtime/session.hpp"
 
 #include "core/config.hpp"
 #include "support/fake_llamad.hpp"
@@ -49,7 +49,7 @@ read_records(const std::filesystem::path &path) {
   return records;
 }
 
-void pump_until_finished(pigpen::agent::Session &session) {
+void pump_until_finished(pigpen::runtime::Session &session) {
   const auto deadline = std::chrono::steady_clock::now() + 10s;
   while (session.runner().snapshot().state !=
              pigpen::core::RunState::finished &&
@@ -87,39 +87,39 @@ TEST_CASE("session rejects unsafe or incomplete runtime configuration") {
   auto config = daemon.config();
 
   config.socket_path.clear();
-  CHECK_FALSE(pigpen::agent::Session::create(config, directory));
+  CHECK_FALSE(pigpen::runtime::Session::create(config, directory));
   config.socket_path = daemon.directory.socket();
 
   config.turn_budget = 0;
-  CHECK_FALSE(pigpen::agent::Session::create(config, directory));
+  CHECK_FALSE(pigpen::runtime::Session::create(config, directory));
   config.turn_budget = 10'001;
-  CHECK_FALSE(pigpen::agent::Session::create(config, directory));
+  CHECK_FALSE(pigpen::runtime::Session::create(config, directory));
   config.turn_budget = 20;
 
   config.max_tool_rounds = 0;
-  CHECK_FALSE(pigpen::agent::Session::create(config, directory));
+  CHECK_FALSE(pigpen::runtime::Session::create(config, directory));
   config.max_tool_rounds = 65;
-  CHECK_FALSE(pigpen::agent::Session::create(config, directory));
+  CHECK_FALSE(pigpen::runtime::Session::create(config, directory));
 
   config.max_tool_rounds = 8;
   config.max_output_tokens = 0;
-  CHECK_FALSE(pigpen::agent::Session::create(config, directory));
+  CHECK_FALSE(pigpen::runtime::Session::create(config, directory));
   config.max_output_tokens = 2'147'483'648U;
-  CHECK_FALSE(pigpen::agent::Session::create(config, directory));
+  CHECK_FALSE(pigpen::runtime::Session::create(config, directory));
 
   config.max_output_tokens = 2'048;
   config.temperature = -0.1;
-  CHECK_FALSE(pigpen::agent::Session::create(config, directory));
+  CHECK_FALSE(pigpen::runtime::Session::create(config, directory));
   config.temperature = 2.1;
-  CHECK_FALSE(pigpen::agent::Session::create(config, directory));
+  CHECK_FALSE(pigpen::runtime::Session::create(config, directory));
   config.temperature = std::numeric_limits<double>::infinity();
-  CHECK_FALSE(pigpen::agent::Session::create(config, directory));
+  CHECK_FALSE(pigpen::runtime::Session::create(config, directory));
   config.temperature = std::numeric_limits<double>::quiet_NaN();
-  CHECK_FALSE(pigpen::agent::Session::create(config, directory));
+  CHECK_FALSE(pigpen::runtime::Session::create(config, directory));
 
   config.temperature = 0.0;
   config.stall_timeout_seconds = 86'401;
-  const auto stall = pigpen::agent::Session::create(config, directory);
+  const auto stall = pigpen::runtime::Session::create(config, directory);
   REQUIRE_FALSE(stall);
   CHECK(stall.error() ==
         "the stall timeout must be in the range 0..86400 seconds");
@@ -132,7 +132,7 @@ TEST_CASE("an unreachable daemon is a clear error and leaves no log") {
   pigpen::testing::TempSocketDirectory sockets;
   pigpen::core::Config config;
   config.socket_path = sockets.socket();
-  const auto created = pigpen::agent::Session::create(config, directory);
+  const auto created = pigpen::runtime::Session::create(config, directory);
   REQUIRE_FALSE(created);
   CHECK(created.error().starts_with("could not reach llamad at " +
                                     sockets.socket()));
@@ -140,7 +140,7 @@ TEST_CASE("an unreachable daemon is a clear error and leaves no log") {
 
   Daemon embedding{{.serves_embeddings = true}};
   config.socket_path = embedding.directory.socket();
-  CHECK_FALSE(pigpen::agent::Session::create(config, directory));
+  CHECK_FALSE(pigpen::runtime::Session::create(config, directory));
   CHECK_FALSE(std::filesystem::exists(directory));
 }
 
@@ -150,7 +150,7 @@ TEST_CASE("a daemon outside the llamad 0.2 series is refused and leaves no "
   for (const auto *version : {"", "0.1.0", "0.3.0"}) {
     Daemon daemon{{.llamad_version = version}};
     const auto created =
-        pigpen::agent::Session::create(daemon.config(), directory);
+        pigpen::runtime::Session::create(daemon.config(), directory);
     REQUIRE_FALSE(created);
     CHECK(created.error().ends_with("but this Pig Pen needs llamad 0.2.x"));
     CHECK_FALSE(std::filesystem::exists(directory));
@@ -175,7 +175,7 @@ TEST_CASE("session atomically owns a seeded world, a connection, and a "
   std::filesystem::path log_path;
   {
     auto created =
-        pigpen::agent::Session::create(config, directory, "test-preset");
+        pigpen::runtime::Session::create(config, directory, "test-preset");
     REQUIRE(created.has_value());
     const auto &session = *created;
     CHECK(session->config() == config);
@@ -247,7 +247,7 @@ TEST_CASE("a scripted episode runs through llamad and logs every step") {
   config.sampling_seed = 77;
   std::filesystem::path log_path;
   {
-    auto created = pigpen::agent::Session::create(config, directory);
+    auto created = pigpen::runtime::Session::create(config, directory);
     REQUIRE(created.has_value());
     auto &session = **created;
     log_path = session.metrics_path();
@@ -357,7 +357,7 @@ TEST_CASE("daemon timings sum across the rounds of a turn and reach the "
   config.turn_budget = 1;
   std::filesystem::path log_path;
   {
-    auto created = pigpen::agent::Session::create(config, directory);
+    auto created = pigpen::runtime::Session::create(config, directory);
     REQUIRE(created.has_value());
     auto &session = **created;
     log_path = session.metrics_path();
@@ -392,7 +392,7 @@ TEST_CASE("stop cancels a hanging request and still writes the footer") {
   daemon.fake->enqueue({.text = {"Thinking"}, .hang = true});
   std::filesystem::path log_path;
   {
-    auto created = pigpen::agent::Session::create(daemon.config(), directory);
+    auto created = pigpen::runtime::Session::create(daemon.config(), directory);
     REQUIRE(created.has_value());
     auto &session = **created;
     log_path = session.metrics_path();
@@ -423,7 +423,7 @@ TEST_CASE("destroying a session with a request in flight writes an "
   daemon.fake->enqueue({.hang = true});
   std::filesystem::path log_path;
   {
-    auto created = pigpen::agent::Session::create(daemon.config(), directory);
+    auto created = pigpen::runtime::Session::create(daemon.config(), directory);
     REQUIRE(created.has_value());
     log_path = (*created)->metrics_path();
     REQUIRE((*created)->play());
@@ -469,7 +469,7 @@ TEST_CASE("a full context ends the episode context_exhausted and logs it") {
   config.max_output_tokens = 333;
   std::filesystem::path log_path;
   {
-    auto created = pigpen::agent::Session::create(config, directory);
+    auto created = pigpen::runtime::Session::create(config, directory);
     REQUIRE(created.has_value());
     auto &session = **created;
     // 2816 tokens are enough for the estimate of 3 turns (2200).
@@ -520,7 +520,7 @@ TEST_CASE("the startup warning appears only for a context below the "
     Daemon daemon{{.n_ctx = n_ctx}};
     auto config = daemon.config();
     config.turn_budget = 20;
-    auto created = pigpen::agent::Session::create(config, directory);
+    auto created = pigpen::runtime::Session::create(config, directory);
     REQUIRE(created.has_value());
     return (*created)->startup_warning();
   };
@@ -552,7 +552,7 @@ TEST_CASE("a stalled request ends the episode with an error and a complete "
       "llamad sent nothing for 1 second, so Pig Pen stopped the request"};
   std::filesystem::path log_path;
   {
-    auto created = pigpen::agent::Session::create(config, directory);
+    auto created = pigpen::runtime::Session::create(config, directory);
     REQUIRE(created.has_value());
     auto &session = **created;
     log_path = session.metrics_path();
