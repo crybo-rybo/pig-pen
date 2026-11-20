@@ -45,7 +45,7 @@ lint:
     {{ruff}} check tests
 
 # Everything GitHub runs on a PR. Reuses fetched deps in build/<preset>/.
-ci: fmt-check lint (ci-build-test "dev") (ci-build-test "release") (ci-build-test "headless")
+ci: fmt-check lint (ci-build-test "dev") (ci-build-test "release") (ci-build-test "headless") (ci-build-test "asan")
 
 [private]
 ci-build-test profile:

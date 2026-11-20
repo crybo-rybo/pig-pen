@@ -38,7 +38,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        preset: [dev, release, headless]
+        preset: [dev, release, headless, asan]
     env:
       DEBIAN_FRONTEND: noninteractive
     steps:

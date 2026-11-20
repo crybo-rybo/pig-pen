@@ -153,7 +153,10 @@ cmake --build --preset dev
 
 The `release` preset is the same as `dev`, but with
 `CMAKE_BUILD_TYPE=Release`. The `headless` preset is a Debug build with
-`PIGPEN_BUILD_GUI=OFF` (no SDL3, ImGui, or OpenGL). Each preset writes to
+`PIGPEN_BUILD_GUI=OFF` (no SDL3, ImGui, or OpenGL). The `asan` preset is the
+same as `headless`, but it compiles and links with AddressSanitizer and
+UndefinedBehaviorSanitizer (refer to
+[Testing](testing.md#run-the-suite-with-the-sanitizers)). Each preset writes to
 `build/<preset>/` and exports `compile_commands.json`.
 
 The build puts these binaries in `build/<preset>/`:
@@ -178,7 +181,7 @@ just build release
 just test                      # build, then ctest --preset dev
 just run dev --play            # build, start the GUI, and start the episode
 just run-headless dev --turns 4 --seed 42
-just ci                        # format + lint + dev/release/headless builds and tests (the GitHub checks)
+just ci                        # format + lint + dev/release/headless/asan builds and tests (the GitHub checks)
 ```
 
 CAUTION: The `run` and `run-headless` recipes take the preset as the first

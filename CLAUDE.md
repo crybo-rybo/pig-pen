@@ -43,10 +43,10 @@ it finds, and stops with a clear message if the link fails.
 ```sh
 just build                 # cmake --preset dev + build (Debug)
 just test                  # build, then ctest --preset dev
-just build release         # the other preset
+just build release         # another preset (release, headless, asan)
 just run dev --play        # build + start the GUI and the episode
 just run-headless dev --turns 4 --seed 42
-just ci                    # all GitHub PR checks: fmt-check + lint + dev/release/headless builds and tests (uses CC/CXX)
+just ci                    # all GitHub PR checks: fmt-check + lint + dev/release/headless/asan builds and tests (uses CC/CXX)
 just grpc                  # build the pinned gRPC with the project compiler (needed on macOS)
 just fmt                   # clang-format all C++ + ruff format the Python tests
 just fmt-check             # the CI format check

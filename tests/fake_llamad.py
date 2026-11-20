@@ -73,7 +73,15 @@ class FakeLlamad:
         )
         assert self._process.stdout is not None
         ready = self._process.stdout.readline()
-        check(ready.strip() == "ready", f"fake llamad did not start: {ready!r}")
+        if ready.strip() != "ready":
+            self.kill()
+            self._directory.cleanup()
+            raise AssertionError(f"fake llamad did not start: {ready!r}")
+
+    def kill(self) -> None:
+        """Stop the fake at once with SIGKILL, as if the daemon crashed."""
+        self._process.kill()
+        self._process.communicate(timeout=10)
 
     def requests(self) -> list[dict]:
         """Every Chat request the fake received, in order."""
