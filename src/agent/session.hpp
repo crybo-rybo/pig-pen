@@ -13,6 +13,7 @@
 #include "core/events.hpp"
 #include "world/world.hpp"
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
@@ -21,6 +22,11 @@
 #include <string>
 
 namespace pigpen::agent {
+
+/// @brief The handshake deadline of Session::create when the caller gives
+/// none.
+inline constexpr std::chrono::milliseconds default_connect_deadline{
+    std::chrono::seconds{5}};
 
 /// @brief What one pump() pass accomplished; both front ends surface this.
 struct PumpStats {
@@ -47,11 +53,19 @@ public:
   /// @brief Validate @p config, connect to llamad at Config::socket_path,
   /// and compose the world, tools, tool loop, and an already-open metrics
   /// log.
+  ///
+  /// This call blocks the calling thread for the llamad handshake (one
+  /// GetModelInfo call), at most @p connect_deadline. A missing socket fails
+  /// at once; a daemon that accepts the connection but does not answer
+  /// costs the full deadline. The caller picks the deadline: the CLI keeps
+  /// it inside its episode timeout, and the GUI keeps it short because its
+  /// frame waits.
   /// @return The session, or a human-readable rejection message. A rejected
   /// config or an unreachable daemon leaves no log behind.
   [[nodiscard]] static std::expected<std::shared_ptr<Session>, std::string>
   create(core::Config config, std::filesystem::path log_directory = "logs",
-         std::string prompt_variant = "default");
+         std::string prompt_variant = "default",
+         std::chrono::milliseconds connect_deadline = default_connect_deadline);
 
   ~Session();
 

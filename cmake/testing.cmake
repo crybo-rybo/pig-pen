@@ -119,6 +119,11 @@ pigpen_headless_rejects(
   "--sampling-seed must be in the range"
   --sampling-seed 4294967296
 )
+pigpen_headless_rejects(
+  rejects_invalid_stall_seconds
+  "--stall-seconds must be in the range 0..86400"
+  --stall-seconds 86401
+)
 
 add_test(
   NAME pigpen_headless_integration
@@ -130,9 +135,11 @@ add_test(
 )
 set_tests_properties(pigpen_headless_integration PROPERTIES TIMEOUT 45)
 
-# A request that hangs, then a daemon killed with SIGKILL (exit 1) or the
-# --timeout-seconds limit (exit 3). Both must still write a complete footer.
-foreach(scenario IN ITEMS daemon-killed timeout)
+# A request that hangs, then a daemon killed with SIGKILL (exit 1), the
+# --timeout-seconds limit (exit 3), or the --stall-seconds watchdog (exit 1).
+# Each must still write a complete footer. A handshake that does not answer
+# must end at --timeout-seconds 1 (exit 1, no log).
+foreach(scenario IN ITEMS daemon-killed timeout stall connect-timeout)
   string(REPLACE "-" "_" suffix "${scenario}")
   add_test(
     NAME pigpen_headless_${suffix}
@@ -160,6 +167,21 @@ if(UNIX)
     )
     set_tests_properties(
       pigpen_headless_graceful_${suffix}
+      PROPERTIES TIMEOUT 45
+    )
+    # The signal arrives while the handshake waits, then the handshake fails:
+    # exit 128 + signal, not 1.
+    add_test(
+      NAME pigpen_headless_handshake_${suffix}
+      COMMAND
+        "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/headless_failure_tests.py"
+        "$<TARGET_FILE:pig-pen-headless>"
+        "$<TARGET_FILE:pigpen_fake_llamad>"
+        handshake-${suffix}
+    )
+    set_tests_properties(
+      pigpen_headless_handshake_${suffix}
       PROPERTIES TIMEOUT 45
     )
   endforeach()

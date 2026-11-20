@@ -8,6 +8,7 @@
 #include "core/config.hpp"
 #include "core/episode_runner.hpp"
 
+#include <algorithm>
 #include <charconv>
 #include <chrono>
 #include <cmath>
@@ -72,7 +73,10 @@ Options:
   --temperature NUMBER      Sampling temperature, 0.0..2.0 (default: 0.0)
   --sampling-seed INTEGER   Model sampling seed, 0..4294967295 (default: unset)
   --log-dir PATH            JSONL output directory (default: logs)
-  --timeout-seconds INTEGER Overall episode timeout, 1..86400 (default: 300)
+  --timeout-seconds INTEGER Overall episode timeout, 1..86400 (default: 300).
+                            The llamad handshake counts against it.
+  --stall-seconds INTEGER   Stop a request when llamad sends nothing for this
+                            long, 0..86400; 0 is off (default: 120)
   --hidden-values           Omit item values from the system prompt
   --no-reward-feedback      Hide numeric reward and score from eat results
   --opaque-look             Report occupied cells as 'something'
@@ -90,6 +94,8 @@ Exit codes: 0 success, 1 runtime error, 2 invalid options, 3 timeout,
             4 metrics error, 5 no decoded world-tool calls,
             6 model context full, 130 SIGINT, 143 SIGTERM.
             Signals request graceful cancellation and log finalization.
+            A signal during the llamad handshake takes effect when the
+            handshake ends: a failed handshake then exits 130 or 143.
 )";
 }
 
@@ -210,6 +216,9 @@ Exit codes: 0 success, 1 runtime error, 2 invalid options, 3 timeout,
       std::uint32_t seconds{};
       result = integer(seconds, 1, 86'400);
       options.timeout = std::chrono::seconds{seconds};
+    } else if (name == "--stall-seconds") {
+      result = integer(config.stall_timeout_seconds, 0,
+                       pigpen::core::stall_timeout_seconds_limit);
     } else {
       result = std::unexpected("unknown option: " + name);
     }
@@ -302,14 +311,31 @@ void print_updates(const pigpen::agent::Session &session,
   std::cout.flush();
 }
 
+/// @brief The exit code of a startup failure: 128 + the signal when a
+/// SIGINT or SIGTERM arrived meanwhile, else 1.
+[[nodiscard]] int startup_failure_exit() noexcept {
+  if (const int signal_number = requested_termination_signal;
+      signal_number != 0) {
+    return signal_exit_base + signal_number;
+  }
+  return runtime_error_exit;
+}
+
 /// @brief Pumps one session to completion and maps the outcome to an exit
 /// code.
 [[nodiscard]] int run(const Options &options) {
-  auto created = pigpen::agent::Session::create(
-      options.config, options.log_directory, options.prompt_variant);
+  // The episode timeout starts before the handshake, and the handshake
+  // deadline is never longer than the timeout. A signal does not interrupt
+  // the handshake; the code below examines it after the handshake.
+  auto deadline = std::chrono::steady_clock::now() + options.timeout;
+  const auto connect_deadline = std::min<std::chrono::milliseconds>(
+      pigpen::agent::default_connect_deadline, options.timeout);
+  auto created =
+      pigpen::agent::Session::create(options.config, options.log_directory,
+                                     options.prompt_variant, connect_deadline);
   if (!created) {
     std::cerr << "startup error: " << created.error() << '\n';
-    return runtime_error_exit;
+    return startup_failure_exit();
   }
   const auto session = std::move(*created);
   const auto &config = options.config;
@@ -344,7 +370,7 @@ void print_updates(const pigpen::agent::Session &session,
   }
   if (!session->play()) {
     std::cerr << "startup error: episode could not enter playing state\n";
-    return runtime_error_exit;
+    return startup_failure_exit();
   }
 
   // Cancellation is cooperative: after stop() we keep pumping until the tool
@@ -352,7 +378,6 @@ void print_updates(const pigpen::agent::Session &session,
   // A signal waits for that indefinitely; a timeout allows a finite grace
   // period so the command stays scriptable.
   OutputCursor cursor;
-  auto deadline = std::chrono::steady_clock::now() + options.timeout;
   bool timed_out = false;
   int termination_signal = 0;
   for (;;) {

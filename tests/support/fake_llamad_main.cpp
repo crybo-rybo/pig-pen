@@ -3,24 +3,35 @@
 /// Python CLI tests. It needs no Python gRPC packages.
 ///
 /// Usage: pigpen_fake_llamad --socket PATH --script FILE --requests FILE
+///                           [--model-info-calls FILE] [--model-info-gate FILE]
 ///
 /// The script is one JSON object: an optional "model_info" object (see
-/// FakeModelInfo) and a "replies" array, one object per Chat call (see
-/// FakeReply). Each received
-/// request is appended to the requests file as one JSON line before the reply
-/// is written. The process prints "ready" when it listens, and stops on
-/// SIGINT or SIGTERM.
+/// FakeModelInfo; durations are integers with an `_ms` suffix, for example
+/// "reply_delay_ms") and a "replies" array, one object per Chat call (see
+/// FakeReply; "hang_progress_interval_ms"). Each received request is
+/// appended to the requests file as one JSON line before the reply is
+/// written. Each GetModelInfo call appends the line "GetModelInfo" to the
+/// model-info-calls file, before its reply_delay starts. With a gate file,
+/// each GetModelInfo call then waits until that file exists (at most 30 s),
+/// so a test can act while the handshake is in progress without a race
+/// against a timer. The process prints
+/// "ready" when it listens, and stops on SIGINT or SIGTERM.
 #include "support/fake_llamad.hpp"
 
 #include <nlohmann/json.hpp>
 
+#include <chrono>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <signal.h>
 #include <string>
 #include <string_view>
+#include <system_error>
+#include <thread>
 
 namespace {
 
@@ -62,6 +73,8 @@ using pigpen::testing::FakeFinishReason;
   reply.status_code = value.value("status_code", 0);
   reply.status_message = value.value("status_message", std::string{});
   reply.hang = value.value("hang", false);
+  reply.hang_progress_interval =
+      std::chrono::milliseconds{value.value("hang_progress_interval_ms", 0)};
   return reply;
 }
 
@@ -140,15 +153,46 @@ int main(const int argc, char **argv) {
     info.llamad_version = model->value("llamad_version", info.llamad_version);
     info.max_request_bytes =
         model->value("max_request_bytes", info.max_request_bytes);
+    info.reply_delay =
+        std::chrono::milliseconds{model->value("reply_delay_ms", 0)};
+    info.status_code = model->value("status_code", 0);
+    info.status_message = model->value("status_message", std::string{});
   }
 
   std::mutex output_mutex;
   std::ofstream requests{options.at("--requests"), std::ios::app};
+  std::ofstream model_info_calls;
+  std::optional<std::filesystem::path> gate;
+  if (const auto path = options.find("--model-info-gate");
+      path != options.end()) {
+    gate = path->second;
+  }
+  if (const auto path = options.find("--model-info-calls");
+      path != options.end()) {
+    model_info_calls.open(path->second, std::ios::app);
+  }
   auto server = pigpen::testing::FakeLlamad::start(
       options.at("--socket"), info,
       [&](const pigpen::testing::ReceivedRequest &request) {
         const std::scoped_lock lock{output_mutex};
         requests << to_json(request).dump() << '\n' << std::flush;
+      },
+      [&] {
+        {
+          const std::scoped_lock lock{output_mutex};
+          if (model_info_calls.is_open()) {
+            model_info_calls << "GetModelInfo\n" << std::flush;
+          }
+        }
+        if (gate) {
+          const auto until =
+              std::chrono::steady_clock::now() + std::chrono::seconds{30};
+          std::error_code ignored;
+          while (!std::filesystem::exists(*gate, ignored) &&
+                 std::chrono::steady_clock::now() < until) {
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+          }
+        }
       });
   if (!server) {
     std::cerr << "could not listen on " << options.at("--socket") << '\n';

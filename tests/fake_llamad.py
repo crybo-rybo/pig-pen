@@ -61,12 +61,22 @@ class FakeLlamad:
         executable: str,
         replies: list[dict],
         model_info: dict[str, Any] | None = None,
+        *,
+        gate_model_info: bool = False,
     ) -> None:
-        """Start the fake; model_info replaces fields of MODEL_INFO."""
+        """Start the fake; model_info replaces fields of MODEL_INFO.
+
+        model_info can also script how GetModelInfo answers: "reply_delay_ms",
+        "status_code", and "status_message". With gate_model_info, each
+        GetModelInfo call waits until open_model_info_gate().
+        """
         self._directory = tempfile.TemporaryDirectory(prefix="pigpen-", dir="/tmp")
         root = pathlib.Path(self._directory.name)
         self.socket = str(root / "s.sock")
         self._requests = root / "requests.jsonl"
+        self._model_info_calls = root / "model-info-calls.txt"
+        # Once this file exists, a GetModelInfo call that waits on it answers.
+        self.model_info_gate = root / "model-info-gate"
         script = root / "script.json"
         info = {**MODEL_INFO, **(model_info or {})}
         script.write_text(json.dumps({"model_info": info, "replies": replies}))
@@ -76,6 +86,12 @@ class FakeLlamad:
                 *("--socket", self.socket),
                 *("--script", str(script)),
                 *("--requests", str(self._requests)),
+                *("--model-info-calls", str(self._model_info_calls)),
+                *(
+                    ("--model-info-gate", str(self.model_info_gate))
+                    if gate_model_info
+                    else ()
+                ),
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -109,6 +125,26 @@ class FakeLlamad:
             time.sleep(0.01)
         raise AssertionError(f"expected {count} requests, got {self.requests()!r}")
 
+    def model_info_calls(self) -> int:
+        """How many GetModelInfo calls the fake received."""
+        if not self._model_info_calls.exists():
+            return 0
+        return len(self._model_info_calls.read_text().splitlines())
+
+    def wait_for_model_info_calls(self, count: int, timeout: float = 10.0) -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self.model_info_calls() >= count:
+                return
+            time.sleep(0.01)
+        raise AssertionError(
+            f"expected {count} GetModelInfo calls, got {self.model_info_calls()}"
+        )
+
+    def open_model_info_gate(self) -> None:
+        """Let the GetModelInfo calls that wait on the gate answer."""
+        self.model_info_gate.touch()
+
     # typing.Self needs Python 3.11; CMake accepts any Python 3.
     def __enter__(self) -> FakeLlamad:  # noqa: PYI034
         return self
@@ -119,6 +155,9 @@ class FakeLlamad:
         value: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
+        # A GetModelInfo call that still waits on the gate would hold up the
+        # shutdown of the fake.
+        self.open_model_info_gate()
         self._process.terminate()
         try:
             self._process.communicate(timeout=10)

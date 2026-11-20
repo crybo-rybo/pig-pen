@@ -82,12 +82,28 @@ from_wire(const google::protobuf::RepeatedPtrField<wire::ToolCall> &calls) {
 class Service final : public wire::Llama::Service {
 public:
   Service(FakeModelInfo info,
-          std::function<void(const ReceivedRequest &)> on_request)
-      : info_(std::move(info)), on_request_(std::move(on_request)) {}
+          std::function<void(const ReceivedRequest &)> on_request,
+          std::function<void()> on_model_info)
+      : info_(std::move(info)), on_request_(std::move(on_request)),
+        on_model_info_(std::move(on_model_info)) {}
 
-  grpc::Status GetModelInfo(grpc::ServerContext *,
+  grpc::Status GetModelInfo(grpc::ServerContext *context,
                             const wire::GetModelInfoRequest *,
                             wire::ModelInfo *info) override {
+    if (on_model_info_) {
+      on_model_info_();
+    }
+    const auto until = std::chrono::steady_clock::now() + info_.reply_delay;
+    while (std::chrono::steady_clock::now() < until) {
+      if (context->IsCancelled()) {
+        return {grpc::StatusCode::CANCELLED, "cancelled by the client"};
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }
+    if (info_.status_code != 0) {
+      return {static_cast<grpc::StatusCode>(info_.status_code),
+              info_.status_message};
+    }
     info->set_description(info_.description);
     info->set_n_params(info_.n_params);
     info->set_size_bytes(info_.size_bytes);
@@ -177,7 +193,16 @@ private:
       write_progress(wire::STAGE_GENERATING);
     }
     if (reply->hang) {
+      const auto interval = reply->hang_progress_interval;
+      auto next_progress = std::chrono::steady_clock::now() + interval;
       while (!context.IsCancelled()) {
+        if (interval > std::chrono::milliseconds::zero() &&
+            std::chrono::steady_clock::now() >= next_progress) {
+          wire::GenerateChunk chunk;
+          chunk.mutable_progress()->set_stage(wire::STAGE_QUEUED);
+          writer.Write(chunk);
+          next_progress += interval;
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds{1});
       }
       return {grpc::StatusCode::CANCELLED, "cancelled by the client"};
@@ -209,6 +234,7 @@ private:
 
   FakeModelInfo info_;
   std::function<void(const ReceivedRequest &)> on_request_;
+  std::function<void()> on_model_info_;
   mutable std::mutex mutex_{};
   std::condition_variable changed_{};
   std::deque<FakeReply> replies_{};
@@ -248,8 +274,10 @@ FakeReply FakeReply::say(std::string text) {
 
 struct FakeLlamad::Impl {
   Impl(FakeModelInfo info,
-       std::function<void(const ReceivedRequest &)> on_request)
-      : service(std::move(info), std::move(on_request)) {}
+       std::function<void(const ReceivedRequest &)> on_request,
+       std::function<void()> on_model_info)
+      : service(std::move(info), std::move(on_request),
+                std::move(on_model_info)) {}
 
   Service service;
   std::unique_ptr<grpc::Server> server{};
@@ -257,8 +285,10 @@ struct FakeLlamad::Impl {
 
 std::unique_ptr<FakeLlamad>
 FakeLlamad::start(const std::string &socket_path, FakeModelInfo info,
-                  std::function<void(const ReceivedRequest &)> on_request) {
-  auto impl = std::make_unique<Impl>(std::move(info), std::move(on_request));
+                  std::function<void(const ReceivedRequest &)> on_request,
+                  std::function<void()> on_model_info) {
+  auto impl = std::make_unique<Impl>(std::move(info), std::move(on_request),
+                                     std::move(on_model_info));
   grpc::ServerBuilder builder;
   builder.AddListeningPort("unix:" + socket_path,
                            grpc::InsecureServerCredentials());

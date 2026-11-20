@@ -9,6 +9,7 @@
 #include "core/tool_loop.hpp"
 #include "llamad/llamad_client.hpp"
 
+#include <chrono>
 #include <cmath>
 #include <memory>
 #include <string>
@@ -46,6 +47,11 @@ validate(const core::Config &config) {
       config.temperature > 2.0) {
     return std::unexpected(
         "temperature must be a finite number in the range 0.0..2.0");
+  }
+  if (config.stall_timeout_seconds > core::stall_timeout_seconds_limit) {
+    return std::unexpected("the stall timeout must be in the range 0.." +
+                           std::to_string(core::stall_timeout_seconds_limit) +
+                           " seconds");
   }
   return {};
 }
@@ -142,11 +148,15 @@ struct Session::Impl {
 
 std::expected<std::shared_ptr<Session>, std::string>
 Session::create(core::Config config, std::filesystem::path log_directory,
-                std::string prompt_variant) {
+                std::string prompt_variant,
+                const std::chrono::milliseconds connect_deadline) {
   if (auto valid = validate(config); !valid) {
     return std::unexpected(std::move(valid.error()));
   }
-  auto client = llamad::LlamadChatClient::connect(config.socket_path);
+  auto client = llamad::LlamadChatClient::connect(
+      config.socket_path,
+      {.deadline = connect_deadline,
+       .stall_timeout = std::chrono::seconds{config.stall_timeout_seconds}});
   if (!client) {
     return std::unexpected(std::move(client.error()));
   }

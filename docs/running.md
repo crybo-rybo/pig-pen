@@ -133,6 +133,57 @@ sends again. A model without reasoning is not affected. Some chat templates
 always open a reasoning block. With such a model, llamad does not send the
 reasoning as text, but the output tokens of the turn still count it.
 
+### Startup timing
+
+Before the episode starts, Pig Pen does one handshake with llamad: it asks
+for the model information (`GetModelInfo`). The handshake blocks the CLI. It
+has a time limit:
+
+- If nothing listens on the socket, the handshake fails immediately.
+- If a process accepts the connection but does not answer, the handshake
+  fails at its time limit. The limit is 5 seconds, or the
+  `--timeout-seconds` value if that is smaller.
+
+The `--timeout-seconds` clock starts before the handshake. Thus, the time of
+the handshake counts against the episode timeout. With `--timeout-seconds 1`,
+the CLI stops after about one second:
+
+```
+startup error: could not reach llamad at /run/user/1000/llamad.sock: it did not answer within 1 second (llamad DEADLINE_EXCEEDED: Deadline Exceeded). The daemon can be busy or stuck. Try again, or start it again with: llamad --model MODEL.gguf --socket /run/user/1000/llamad.sock
+```
+
+A signal does not stop the handshake. If `SIGINT` or `SIGTERM` arrives
+during the handshake, the CLI examines it when the handshake ends. If the
+handshake fails, the CLI prints the startup error, and stops with exit code
+130 or 143, not 1. If the handshake succeeds, the CLI cancels the episode as
+for any other signal.
+
+### When llamad stops sending
+
+While llamad has a request in its queue or in its engine, it sends a chunk at
+least about one time each second. When it has no text to send, it sends a
+`progress` chunk. Only the slowest step of the engine can make a longer
+silence: one prompt batch of up to 2048 tokens, or one token. Thus, a long
+silence shows that the daemon is stuck.
+
+Pig Pen measures the silence of each request, not its duration. A request
+that waits in the queue of llamad behind the request of another client gets
+`progress` chunks, so Pig Pen does not stop it. If llamad sends nothing for
+`--stall-seconds` (default 120), Pig Pen stops the request. The turn ends
+with the status `error`, and the episode ends with the finish reason
+`error`. Pig Pen does not try again. The CLI writes the error of the turn,
+and stops with exit code 1:
+
+```
+error[turn=1]: llamad sent nothing for 120 seconds, so Pig Pen stopped the request
+terminal error: llamad sent nothing for 120 seconds, so Pig Pen stopped the request
+```
+
+The log footer is complete. `--stall-seconds 0` turns the check off. Then
+only `--timeout-seconds` (or **Stop** in the GUI) ends a request that hangs.
+On a slow CPU, one prompt batch can take 10 seconds or more. Keep
+`--stall-seconds` well above that time.
+
 ### Options
 
 | flag | default | description |
@@ -144,7 +195,8 @@ reasoning as text, but the output tokens of the turn still count it.
 | `--max-output-tokens INTEGER` | `8192` | output-token limit for each request (llamad `max_tokens`), 1 to 2147483647 |
 | `--temperature NUMBER` | `0.0` | model sampling temperature, 0.0 to 2.0. It is independent of the world seed. |
 | `--sampling-seed INTEGER` | *(not set)* | model sampling seed, 0 to 4294967295. Pig Pen sends it as the llamad `SamplingParams.seed` only when you give it. Without it, llamad uses a random seed. |
-| `--timeout-seconds INTEGER` | `300` | wall-clock time limit for the full episode, 1 to 86400 |
+| `--timeout-seconds INTEGER` | `300` | wall-clock time limit for the full episode, 1 to 86400. The llamad handshake counts against it. Refer to [Startup timing](#startup-timing). |
+| `--stall-seconds INTEGER` | `120` | Pig Pen stops a request when llamad sends nothing for this time, 0 to 86400. `0` turns the check off. Refer to [When llamad stops sending](#when-llamad-stops-sending). |
 | `--log-dir PATH` | `logs` | directory for the JSONL file |
 | `--prompt-variant NAME` | `default` | free-form label that Pig Pen writes in the log header |
 | `--input TEXT` | *(none)* | human guidance that Pig Pen adds to the automatic turn instruction of the first turn |
@@ -175,13 +227,13 @@ effect of each flag, refer to
 | code | description |
 |---|---|
 | `0` | The episode finished with at least one decoded world-tool call. |
-| `1` | A runtime error occurred, or the episode ended with `error`, `cancelled`, or `stopped`. |
+| `1` | A runtime error occurred (also a stalled request, or a failed handshake), or the episode ended with `error`, `cancelled`, or `stopped`. |
 | `2` | The command line is not valid. |
 | `3` | The `--timeout-seconds` time limit ended. |
 | `4` | Pig Pen could not write the metrics log. |
 | `5` | The episode completed without a decoded world-tool call. |
 | `6` | The episode ended with `context_exhausted`: the conversation no longer fits in the llamad context. |
-| `130` / `143` | `SIGINT` / `SIGTERM` |
+| `130` / `143` | `SIGINT` / `SIGTERM`, also when the signal arrived during a handshake that then failed |
 
 For exit code 6, the CLI writes the error of the turn and one more line to
 stderr. The line tells what to do:
@@ -215,7 +267,19 @@ The GUI has these options:
 You can write `--socket PATH` or `--socket=PATH`.
 
 If you do not give `--play`, the window opens without an episode. It waits
-until you push **Play** or **Reset**. You can dock the panels. The GUI keeps the layout in
+until you push **Play** or **Reset**.
+
+**Play** and **Reset** do the llamad handshake in the frame loop. The window
+does not draw or take input during the handshake. Thus, the GUI gives the
+handshake a time limit of 1 second. If llamad does not answer in this time,
+the **Controls** panel shows the error, and it names the limit:
+
+```
+Could not create session: could not reach llamad at /run/user/1000/llamad.sock: it did not answer within 1 second (llamad DEADLINE_EXCEEDED: Deadline Exceeded). The daemon can be busy or stuck. Try again, or start it again with: llamad --model MODEL.gguf --socket /run/user/1000/llamad.sock
+```
+
+The GUI uses the default stall limit of 120 seconds. It has no control for
+it. Refer to [When llamad stops sending](#when-llamad-stops-sending). You can dock the panels. The GUI keeps the layout in
 `imgui.ini` next to the working directory.
 
 **World**: This panel shows the full 10×10 pen, with `(0,0)` at the south-west
@@ -286,7 +350,7 @@ An episode ends for one of six reasons. The log footer records the reason as
 | `objective_complete` | The blob ate all items with a positive value. Toadstools can remain. |
 | `stopped` | The user pushed **Stop**, or the CLI got a signal or a timeout. |
 | `cancelled` | The active model turn ended with a cancellation. |
-| `error` | llamad, the model turn, or the metrics writer had a terminal failure. Pig Pen does not try again. |
+| `error` | llamad, the model turn, or the metrics writer had a terminal failure. This includes a request that Pig Pen stopped because llamad sent nothing for the stall limit. Pig Pen does not try again. |
 | `context_exhausted` | The conversation no longer fits in the llamad context. Pig Pen does not trim the history, so the episode cannot continue. Refer to [The context size](#the-context-size). |
 
 If you close the window or reset during an episode, Pig Pen still writes a
