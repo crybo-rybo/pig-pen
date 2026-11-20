@@ -50,7 +50,8 @@ public:
   [[nodiscard]] const std::string &socket_path() const noexcept;
 
   /// @return An error while the previous request has not delivered its
-  /// on_finished.
+  /// on_finished, or when the worker thread cannot start. A failed start
+  /// leaves the client idle and never runs a callback.
   [[nodiscard]] std::expected<void, std::string>
   start(core::ChatRequest request, core::ChatCallbacks callbacks) override;
   bool cancel() noexcept override;
