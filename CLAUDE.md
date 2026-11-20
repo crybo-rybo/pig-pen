@@ -139,6 +139,14 @@ Keep these invariants:
   stops the turn before the next request.
   `WorldToolDispatcher` owns admission, lookup, and decode. `WorldTools` owns
   only world semantics and visibility.
+- **Pig Pen does not trim the history.** When the conversation no longer fits
+  in the llamad context (`OUT_OF_RANGE`, which the client maps to
+  `ChatErrorKind::prompt_too_long`, or a `length` finish whose prompt and
+  output tokens reach `ToolLoopLimits::context_tokens`), the turn ends
+  `context_exhausted`, the episode finishes with `context_exhausted`, and
+  the CLI exits with 6. A `length` finish below the context is an output-limit
+  `error`. `Session::startup_warning()` warns when `n_ctx` is below
+  `core::estimated_context_tokens()`. It never refuses to start.
 - **Application callbacks and tools run on the pump thread.** gRPC reads occur
   on one worker thread for each request, and the worker only queues events.
   Both front ends call `Session::pump()` from their own loop. The GUI calls it

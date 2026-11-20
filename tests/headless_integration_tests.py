@@ -1,8 +1,8 @@
 """Drive pig-pen-headless end to end against the scripted fake llamad.
 
 Covers what the C++ suite cannot: the real CLI process over gRPC on a Unix
-socket, argv -> Config wiring, stdout, exit codes 0 and 5, and a JSONL log
-written to disk.
+socket, argv -> Config wiring, stdout and stderr, exit codes 0, 5, and 6, the
+startup warning for a small context, and a JSONL log written to disk.
 """
 
 from __future__ import annotations
@@ -61,12 +61,15 @@ def tool_stats(invalid_calls: int) -> dict[str, Any]:
 
 
 def run(
-    executables: tuple[str, str], replies: list[dict], *extra: str
+    executables: tuple[str, str],
+    replies: list[dict],
+    *extra: str,
+    model_info: dict[str, Any] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], list[dict], list[dict], str]:
     """Run one single-turn episode; return (process, requests, records, socket)."""
     headless, fake = executables
     with (
-        FakeLlamad(fake, replies) as daemon,
+        FakeLlamad(fake, replies, model_info) as daemon,
         tempfile.TemporaryDirectory(prefix="pigpen-headless-") as log_dir,
     ):
         completed = subprocess.run(
@@ -127,6 +130,8 @@ def test_valid_move(executables: tuple[str, str]) -> None:
     )
     output = f"stdout={completed.stdout}\nstderr={completed.stderr}"
     check(completed.returncode == 0, f"exit {completed.returncode}\n{output}")
+    # 32768 tokens are far above the estimate for one turn.
+    check("warning:" not in completed.stderr, f"unexpected warning\n{output}")
     check(len(requests) == 2, f"expected two requests, got {len(requests)}")
     for body in requests:
         check_request(body)
@@ -300,6 +305,103 @@ def test_schema_rejection_exits_5(executables: tuple[str, str]) -> None:
     check(subset(footer, expected_footer) == expected_footer, f"footer: {footer!r}")
 
 
+def check_context_exhausted(
+    completed: subprocess.CompletedProcess[str],
+    records: list[dict],
+    error: str,
+    n_ctx: int,
+) -> None:
+    """Exit 6, the stderr line, the turn status, and the footer."""
+    output = f"stdout={completed.stdout}\nstderr={completed.stderr}"
+    check(completed.returncode == 6, f"exit {completed.returncode}\n{output}")
+    line = (
+        f"context exhausted: the conversation filled the llamad context of {n_ctx} "
+        "tokens on turn 1 of 1. Pig Pen does not trim the history. Start llamad "
+        "with a larger --ctx, or use fewer --turns."
+    )
+    check(line in completed.stderr.splitlines(), f"missing {line!r}\n{output}")
+    check(f"error[turn=1]: {error}" in completed.stderr, f"no error line\n{output}")
+    check(
+        "summary finish_reason=context_exhausted" in completed.stdout,
+        f"unexpected summary\n{output}",
+    )
+    turns = [r for r in records if r["type"] == "turn"]
+    expected_turn = {"status": "context_exhausted", "error": error, "requests": 2}
+    check([subset(t, expected_turn) for t in turns] == [expected_turn], f"{turns!r}")
+    footer = records[-1]
+    expected_footer = {
+        "type": "footer",
+        "complete": True,
+        "finish_reason": "context_exhausted",
+        "error": error,
+        "tool_call_counts": {"eat": 0, "look": 0, "move": 1},
+    }
+    check(subset(footer, expected_footer) == expected_footer, f"footer: {footer!r}")
+
+
+def test_prompt_too_long_exits_6(executables: tuple[str, str]) -> None:
+    message = "prompt is too long: 1100 tokens for a context of 1024"
+    completed, requests, records, _ = run(
+        executables,
+        [
+            tool_call_reply(VALID_CALL_ID, "move", {"direction": "east"}),
+            {"status_code": 11, "status_message": message},
+        ],
+        model_info={"n_ctx": 1024},
+    )
+    check(len(requests) == 2, f"expected two requests, got {len(requests)}")
+    check_context_exhausted(
+        completed, records, f"llamad OUT_OF_RANGE: {message}", n_ctx=1024
+    )
+    # 1024 tokens are below the estimate for one turn (1400).
+    warning = (
+        "warning: llamad runs with a context of 1024 tokens, but a turn budget of "
+        "1 can need about 1400 tokens (a rough estimate). Pig Pen does not trim "
+        "the history, so the episode can end with context_exhausted. Start llamad "
+        "with a larger --ctx, or use fewer turns."
+    )
+    check(
+        warning in completed.stderr.splitlines(),
+        f"missing {warning!r}\nstderr={completed.stderr}",
+    )
+
+
+def test_full_context_exits_6(executables: tuple[str, str]) -> None:
+    completed, requests, records, _ = run(
+        executables,
+        [
+            tool_call_reply(VALID_CALL_ID, "move", {"direction": "east"}),
+            {
+                "text": ["I"],
+                "finish": "length",
+                "prompt_tokens": 2815,
+                "completion_tokens": 2,
+            },
+        ],
+        "--max-output-tokens",
+        "333",
+        model_info={"n_ctx": 2816},
+    )
+    check(len(requests) == 2, f"expected two requests, got {len(requests)}")
+    check(
+        all(body["sampling"].get("max_tokens") == 333 for body in requests),
+        f"--max-output-tokens did not reach the wire: {requests!r}",
+    )
+    check(
+        "max_output_tokens=333" in completed.stdout,
+        f"session line\nstdout={completed.stdout}",
+    )
+    check_context_exhausted(
+        completed,
+        records,
+        "the model context is full: 2815 prompt tokens and 2 output tokens "
+        "fill the context of 2816 tokens",
+        n_ctx=2816,
+    )
+    check("warning:" not in completed.stderr, f"stderr={completed.stderr}")
+    check(records[0].get("max_output_tokens") == 333, f"header: {records[0]!r}")
+
+
 def main() -> int:
     if len(sys.argv) != 3:
         raise SystemExit(
@@ -311,6 +413,8 @@ def main() -> int:
     )
     test_valid_move(executables)
     test_schema_rejection_exits_5(executables)
+    test_prompt_too_long_exits_6(executables)
+    test_full_context_exits_6(executables)
     return 0
 
 

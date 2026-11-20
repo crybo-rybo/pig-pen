@@ -192,13 +192,17 @@ void EpisodeRunner::process_pending_outcome() {
     return;
   }
 
-  if (outcome.status == TurnStatus::error) {
+  if (outcome.status == TurnStatus::error ||
+      outcome.status == TurnStatus::context_exhausted) {
     transcript_.push_back({
         .turn = snapshot_.turns_used,
         .role = TranscriptRole::error,
         .text = outcome.error,
     });
-    finish(FinishReason::error, std::move(outcome.error));
+    finish(outcome.status == TurnStatus::error
+               ? FinishReason::error
+               : FinishReason::context_exhausted,
+           std::move(outcome.error));
   } else if (outcome.status == TurnStatus::cancelled && !stop_requested_) {
     finish(FinishReason::cancelled, std::move(outcome.error));
   } else {
@@ -268,6 +272,8 @@ std::string_view finish_reason_name(const FinishReason reason) noexcept {
     return "cancelled";
   case FinishReason::error:
     return "error";
+  case FinishReason::context_exhausted:
+    return "context_exhausted";
   }
   return "unknown";
 }

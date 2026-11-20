@@ -8,12 +8,14 @@
 
 #include "agent/session.hpp"
 
+#include "core/config.hpp"
 #include "support/fake_llamad.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 #include <nlohmann/json.hpp>
 
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -425,6 +427,107 @@ TEST_CASE("destroying a session with a request in flight writes an "
   const auto records = read_records(log_path);
   REQUIRE(records.size() == 2);
   CHECK(records.back().at("finish_reason") == "abandoned");
+
+  std::error_code ignored;
+  std::filesystem::remove_all(directory, ignored);
+}
+
+TEST_CASE("a full context ends the episode context_exhausted and logs it") {
+  const auto directory = session_test_directory();
+  Daemon daemon{{.n_ctx = 2'816}};
+  daemon.fake->enqueue(
+      FakeReply::calls({{.id = "c-move",
+                         .name = "move",
+                         .arguments_json = R"({"direction":"east"})"}}));
+  std::string expected_error;
+  SECTION("llamad refuses a prompt that is too long") {
+    daemon.fake->enqueue(
+        {.status_code = 11,
+         .status_message = "prompt is too long: 2900 tokens for a context of "
+                           "2816"});
+    expected_error = "llamad OUT_OF_RANGE: prompt is too long: 2900 tokens "
+                     "for a context of 2816";
+  }
+  SECTION("a reply fills the context") {
+    daemon.fake->enqueue({.text = {"I"},
+                          .finish = pigpen::testing::FakeFinishReason::length,
+                          .prompt_tokens = 2'815,
+                          .completion_tokens = 2});
+    expected_error = "the model context is full: 2815 prompt tokens and 2 "
+                     "output tokens fill the context of 2816 tokens";
+  }
+
+  auto config = daemon.config();
+  config.turn_budget = 3;
+  config.max_output_tokens = 333;
+  std::filesystem::path log_path;
+  {
+    auto created = pigpen::agent::Session::create(config, directory);
+    REQUIRE(created.has_value());
+    auto &session = **created;
+    // 2816 tokens are enough for the estimate of 3 turns (2200).
+    CHECK(session.startup_warning().empty());
+    log_path = session.metrics_path();
+    REQUIRE(session.play());
+    pump_until_finished(session);
+    const auto snapshot = session.runner().snapshot();
+    CHECK(snapshot.finish_reason ==
+          pigpen::core::FinishReason::context_exhausted);
+    CHECK(snapshot.turns_used == 1);
+    CHECK(snapshot.error == expected_error);
+    // The answered round ran, so its side effect stays.
+    CHECK(session.world().position() == (pigpen::world::Position{6, 5}));
+  }
+
+  const auto requests = daemon.fake->requests();
+  REQUIRE(requests.size() == 2);
+  for (const auto &request : requests) {
+    CHECK(request.max_tokens == 333);
+  }
+  const auto records = read_records(log_path);
+  REQUIRE(records.size() == 4);
+  CHECK(records[1].at("type") == "tool");
+  const auto &turn = records[2];
+  CHECK(turn.at("type") == "turn");
+  CHECK(turn.at("status") == "context_exhausted");
+  CHECK(turn.at("error") == expected_error);
+  CHECK(turn.at("requests") == 2);
+  const auto &footer = records.back();
+  CHECK(footer.at("type") == "footer");
+  CHECK(footer.at("complete") == true);
+  CHECK(footer.at("finish_reason") == "context_exhausted");
+  CHECK(footer.at("error") == expected_error);
+
+  std::error_code ignored;
+  std::filesystem::remove_all(directory, ignored);
+}
+
+TEST_CASE("the startup warning appears only for a context below the "
+          "estimate") {
+  CHECK(pigpen::core::estimated_context_tokens(1) == 1'400);
+  CHECK(pigpen::core::estimated_context_tokens(20) == 9'000);
+  CHECK(pigpen::core::estimated_context_tokens(10'000) == 4'001'000);
+
+  const auto directory = session_test_directory();
+  const auto warning_for = [&directory](const std::uint32_t n_ctx) {
+    Daemon daemon{{.n_ctx = n_ctx}};
+    auto config = daemon.config();
+    config.turn_budget = 20;
+    auto created = pigpen::agent::Session::create(config, directory);
+    REQUIRE(created.has_value());
+    return (*created)->startup_warning();
+  };
+  CHECK(warning_for(4'096) ==
+        "llamad runs with a context of 4096 tokens, but a turn budget of 20 "
+        "can need about 9000 tokens (a rough estimate). Pig Pen does not trim "
+        "the history, so the episode can end with context_exhausted. Start "
+        "llamad with a larger --ctx, or use fewer turns.");
+  CHECK(warning_for(8'999).starts_with(
+      "llamad runs with a context of 8999 tokens"));
+  CHECK(warning_for(9'000).empty());
+  CHECK(warning_for(32'768).empty());
+  // A daemon that reports no context size gets no warning.
+  CHECK(warning_for(0).empty());
 
   std::error_code ignored;
   std::filesystem::remove_all(directory, ignored);

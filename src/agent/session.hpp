@@ -75,6 +75,12 @@ public:
   [[nodiscard]] const core::Config &config() const noexcept;
   /// @brief The model that the daemon serves, as it reported at connect.
   [[nodiscard]] const core::ModelInfo &model_info() const noexcept;
+  /// @brief A warning for the user about this session, or empty.
+  ///
+  /// Not empty when the daemon's context (ModelInfo::n_ctx) is below
+  /// core::estimated_context_tokens() for the turn budget. It never stops
+  /// the session: a small context can be what the user wants to test.
+  [[nodiscard]] const std::string &startup_warning() const noexcept;
   /// @brief The simulation; mutated only through the world tools.
   [[nodiscard]] const world::World &world() const noexcept;
   /// @brief Append-only feed of successfully decoded tool activity.

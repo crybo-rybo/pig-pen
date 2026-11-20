@@ -53,11 +53,13 @@ private:
   WorldAnimationState animation_{};
   agent::PumpStats pump_stats_{};
 
-  /// Settings for the next session. turn_budget, max_tool_rounds, and
-  /// sampling_seed are edited through the widget mirrors below instead.
+  /// Settings for the next session. turn_budget, max_tool_rounds,
+  /// max_output_tokens, and sampling_seed are edited through the widget
+  /// mirrors below instead.
   core::Config controls_{};
   int turn_budget_{};
   int max_tool_rounds_{};
+  int max_output_tokens_{};
   bool use_sampling_seed_{};
   std::uint32_t sampling_seed_{};
   /// Index into the scenario presets; nullopt once a flag is edited by hand.

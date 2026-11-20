@@ -56,13 +56,20 @@ class FakeLlamad:
     under the build tree.
     """
 
-    def __init__(self, executable: str, replies: list[dict]) -> None:
+    def __init__(
+        self,
+        executable: str,
+        replies: list[dict],
+        model_info: dict[str, Any] | None = None,
+    ) -> None:
+        """Start the fake; model_info replaces fields of MODEL_INFO."""
         self._directory = tempfile.TemporaryDirectory(prefix="pigpen-", dir="/tmp")
         root = pathlib.Path(self._directory.name)
         self.socket = str(root / "s.sock")
         self._requests = root / "requests.jsonl"
         script = root / "script.json"
-        script.write_text(json.dumps({"model_info": MODEL_INFO, "replies": replies}))
+        info = {**MODEL_INFO, **(model_info or {})}
+        script.write_text(json.dumps({"model_info": info, "replies": replies}))
         self._process = subprocess.Popen(
             [
                 executable,

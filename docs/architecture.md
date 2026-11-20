@@ -52,7 +52,7 @@ more data, refer to [Build layout](#build-layout).
 
 | unit | responsibility |
 |---|---|
-| `config.hpp` | `Config`: the llamad socket, the seed, the budgets, the sampling settings, and the three model-visibility flags. Both front ends use it. `default_socket_path()` applies the llamad default rule. |
+| `config.hpp` | `Config`: the llamad socket, the seed, the budgets, the sampling settings, and the three model-visibility flags. Both front ends use it. `default_socket_path()` applies the llamad default rule. `estimated_context_tokens()` gives the rough context estimate for a turn budget. |
 | `prompt.cpp` | Creates the system prompt from `Config`. Creates the instructions for each turn from the feedback and the optional human guidance. |
 | `tool_responses.hpp` | Flat response aggregates, with the world outcome fields. scrydantic reflects over them in `src/agent`. |
 | `world_tools.cpp` | Typed world actions and scenario visibility. It takes world values. It contains no JSON, reflection, budgets, or schema code. |
@@ -93,21 +93,37 @@ message is first. One turn does these steps:
    - **End of generation, or a stop string.** The turn completes. The loop
      stages an assistant message with the text of the reply. The text can be
      empty.
-   - **Length.** The turn ends with an error, because the response got to its
-     output-token limit.
+   - **Length.** llamad uses this finish reason for two causes: the reply
+     used its output-token limit, or the context has no space for another
+     token. `ToolLoopLimits::context_tokens` (the `n_ctx` of the daemon)
+     separates them. If the prompt tokens plus the output tokens of this
+     request are `context_tokens` or more, the turn ends with
+     `context_exhausted`, and the error gives the three numbers. Otherwise
+     the turn ends with an error that gives the output-token limit and the
+     output tokens of the reply. If `context_tokens` is `0` (unknown), the
+     turn ends with an error that names both causes.
 
-   A request without a finish ends the turn. After a cancel, the turn ends as
-   cancelled: llamad ends a cancelled stream with the status `CANCELLED` and
-   no finish. Otherwise the turn ends with an error, with the llamad status
-   and message.
+   A request without a finish ends the turn. The `ChatErrorKind` of the chat
+   client gives the status:
+   - After a cancel, the turn ends as cancelled: llamad ends a cancelled
+     stream with the status `CANCELLED` and no finish. A cancel has priority
+     over the other kinds.
+   - `prompt_too_long` (llamad `OUT_OF_RANGE`: the prompt is longer than the
+     context) ends the turn with `context_exhausted`, with the llamad
+     message.
+   - Otherwise the turn ends with an error, with the llamad status and
+     message.
+
+   The loop never trims or summarizes the history. A turn that ends with
+   `context_exhausted` ends the episode with the same finish reason.
 4. The history always matches the world. The calls of an answered round
    ran, and their side effects stay. Thus, the loop always commits each
    answered round:
    - A completed turn commits all its staged messages. This includes the
      round-limit completion. The turn always ends with an assistant message,
      so the roles alternate on the next turn.
-   - A turn that fails or is cancelled commits the user message and the
-     answered rounds. It discards only the reply after the last answered
+   - A turn that fails (also with `context_exhausted`) or is cancelled
+     commits the user message and the answered rounds. It discards only the reply after the last answered
      round.
    - A turn that fails before it answers a round commits nothing. Thus, the
      history never holds a `user` message without a reply.
@@ -118,6 +134,12 @@ message is first. One turn does these steps:
    `cancel()` of a turn returns `true`. A cancel from inside a tool call
    does not stop the round. The round gets all its answers, and the next
    request does not start.
+
+`Session` gives the `n_ctx` that llamad reports at connect to
+`ToolLoopLimits::context_tokens`. It also compares `n_ctx` with
+`core::estimated_context_tokens()` for the turn budget. If `n_ctx` is
+smaller, `Session::startup_warning()` returns a warning, and both front ends
+show it. The warning never stops the session.
 
 The loop counts the requests of the turn, the dispatched rounds, all calls in
 these rounds, the rejected calls (budget and admission), and the invalid
@@ -156,6 +178,10 @@ flags, and its headers are system headers.
   not use yet) and chunk kinds that it does not know.
 - `pump()` delivers the queued events on the thread that calls it, with a
   maximum number of callbacks in each call.
+- A stream that ends without a finish gives a `ChatError`. Its kind is
+  `cancelled` after a local cancel, `prompt_too_long` for the status
+  `OUT_OF_RANGE` (the prompt is longer than the context), and `failure` for
+  all other statuses. The message is `llamad <STATUS>: <message>`.
 - `cancel()` calls `ClientContext::TryCancel`. It is safe from the pump
   thread.
 - The destructor cancels the active request, joins the worker, and drops the
@@ -304,7 +330,8 @@ and the test binary both link `pigpen_ui`.
 - the `SIGINT` and `SIGTERM` handler (the handler only writes a
   `volatile sig_atomic_t`)
 - the incremental output of the transcript and the activity feed
-- the exit-code policy in [Run Pig Pen](running.md#exit-codes)
+- the exit-code policy in [Run Pig Pen](running.md#exit-codes), with exit
+  code 6 for `context_exhausted`
 
 ## Build layout
 

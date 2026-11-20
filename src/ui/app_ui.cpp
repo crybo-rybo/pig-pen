@@ -194,6 +194,7 @@ AppUi::AppUi(const core::Config &initial_config, const bool play)
     : controls_{initial_config},
       turn_budget_{static_cast<int>(initial_config.turn_budget)},
       max_tool_rounds_{static_cast<int>(initial_config.max_tool_rounds)},
+      max_output_tokens_{static_cast<int>(initial_config.max_output_tokens)},
       use_sampling_seed_{initial_config.sampling_seed.has_value()},
       sampling_seed_{initial_config.sampling_seed.value_or(0U)} {
   if (play) {
@@ -240,6 +241,7 @@ core::Config AppUi::config_from_controls() const {
   config.socket_path = trim(controls_.socket_path);
   config.turn_budget = static_cast<decltype(config.turn_budget)>(turn_budget_);
   config.max_tool_rounds = static_cast<std::uint32_t>(max_tool_rounds_);
+  config.max_output_tokens = static_cast<std::uint32_t>(max_output_tokens_);
   config.sampling_seed =
       use_sampling_seed_ ? std::optional{sampling_seed_} : std::nullopt;
   return config;
@@ -699,6 +701,13 @@ void AppUi::draw_controls_panel() {
   ImGui::InputInt("Tool rounds / turn", &max_tool_rounds_);
   max_tool_rounds_ = std::clamp(max_tool_rounds_, 1,
                                 static_cast<int>(core::tool_rounds_limit));
+  ImGui::InputInt("Max output tokens", &max_output_tokens_, 256, 1024);
+  max_output_tokens_ = std::clamp(
+      max_output_tokens_, 1, static_cast<int>(core::max_output_tokens_limit));
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Output-token limit for each request (llamad "
+                      "max_tokens); applies on Reset.");
+  }
   ImGui::InputDouble("Temperature", &controls_.temperature, 0.1, 0.5, "%.2f");
   controls_.temperature = std::clamp(controls_.temperature, 0.0, 2.0);
   if (ImGui::IsItemHovered()) {
@@ -765,6 +774,12 @@ void AppUi::draw_controls_panel() {
   if (!status_message_.empty()) {
     ImGui::TextColored({0.48F, 0.88F, 0.68F, 1.0F}, "%s",
                        status_message_.c_str());
+  }
+  if (session_ && !session_->startup_warning().empty()) {
+    ImGui::PushTextWrapPos(0.0F);
+    ImGui::TextColored({1.0F, 0.78F, 0.28F, 1.0F}, "Warning: %s",
+                       session_->startup_warning().c_str());
+    ImGui::PopTextWrapPos();
   }
   if (!visible_error_.empty()) {
     ImGui::PushTextWrapPos(0.0F);

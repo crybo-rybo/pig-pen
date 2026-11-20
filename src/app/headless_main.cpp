@@ -35,6 +35,7 @@ constexpr int runtime_error_exit = 1;
 constexpr int timeout_exit = 3;
 constexpr int metrics_error_exit = 4;
 constexpr int no_tools_exit = 5;
+constexpr int context_exhausted_exit = 6;
 constexpr int signal_exit_base = 128;
 constexpr auto cancellation_grace = 15s;
 
@@ -66,6 +67,8 @@ Options:
   --seed INTEGER            Deterministic world seed (default: 0)
   --turns INTEGER           Episode turn budget, 1..10000 (default: 20)
   --max-tool-rounds INTEGER Tool rounds per turn, 1..64 (default: 8)
+  --max-output-tokens INTEGER
+                            Output tokens per request, 1..2147483647 (default: 8192)
   --temperature NUMBER      Sampling temperature, 0.0..2.0 (default: 0.0)
   --sampling-seed INTEGER   Model sampling seed, 0..4294967295 (default: unset)
   --log-dir PATH            JSONL output directory (default: logs)
@@ -80,9 +83,13 @@ Options:
 Values may also use --option=value. Start llamad first, for example:
   llamad --model MODEL.gguf --ctx 32768
 
+Pig Pen sends the whole conversation on each request and does not trim it.
+When the llamad context is full, the episode ends with context_exhausted.
+
 Exit codes: 0 success, 1 runtime error, 2 invalid options, 3 timeout,
-            4 metrics error, 5 no decoded world-tool calls, 130 SIGINT,
-            143 SIGTERM. Signals request graceful cancellation and log finalization.
+            4 metrics error, 5 no decoded world-tool calls,
+            6 model context full, 130 SIGINT, 143 SIGTERM.
+            Signals request graceful cancellation and log finalization.
 )";
 }
 
@@ -194,6 +201,9 @@ Exit codes: 0 success, 1 runtime error, 2 invalid options, 3 timeout,
     } else if (name == "--max-tool-rounds") {
       result =
           integer(config.max_tool_rounds, 1, pigpen::core::tool_rounds_limit);
+    } else if (name == "--max-output-tokens") {
+      result = integer(config.max_output_tokens, 1,
+                       pigpen::core::max_output_tokens_limit);
     } else if (name == "--temperature") {
       result = temperature();
     } else if (name == "--timeout-seconds") {
@@ -321,7 +331,12 @@ void print_updates(const pigpen::agent::Session &session,
   } else {
     std::cout << "unset";
   }
-  std::cout << "\nlog_path=" << std::quoted(session->metrics_path().string())
+  std::cout << '\n';
+  if (const auto &warning = session->startup_warning(); !warning.empty()) {
+    // std::cerr is tied to std::cout, so the session line comes first.
+    std::cerr << "warning: " << warning << '\n';
+  }
+  std::cout << "log_path=" << std::quoted(session->metrics_path().string())
             << std::endl;
 
   if (options.user_input) {
@@ -400,8 +415,18 @@ void print_updates(const pigpen::agent::Session &session,
   }
   // Only the timeout path can leave the loop unfinished, so the reason is set.
   using enum pigpen::core::FinishReason;
-  if (const auto reason = *snapshot.finish_reason;
-      reason == error || reason == cancelled || reason == stopped) {
+  const auto reason = *snapshot.finish_reason;
+  if (reason == context_exhausted) {
+    // The turn's error text is already on stderr as the error[turn=N] line.
+    std::cerr << "context exhausted: the conversation filled the llamad "
+                 "context of "
+              << model.n_ctx << " tokens on turn " << snapshot.turns_used
+              << " of " << snapshot.turn_budget
+              << ". Pig Pen does not trim the history. Start llamad with a "
+                 "larger --ctx, or use fewer --turns.\n";
+    return context_exhausted_exit;
+  }
+  if (reason == error || reason == cancelled || reason == stopped) {
     if (!snapshot.error.empty()) {
       std::cerr << "terminal error: " << snapshot.error << '\n';
     }

@@ -20,6 +20,9 @@ enum class TurnStatus : std::uint8_t {
   completed,
   cancelled,
   error,
+  /// The conversation no longer fits in the model context. Pig Pen does not
+  /// trim the history, so the episode cannot continue.
+  context_exhausted,
 };
 
 /// @brief The tool loop's accounting for one turn, distinct from decoded
