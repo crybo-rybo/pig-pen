@@ -85,9 +85,9 @@ The formatter cannot enforce these conventions:
 
 ## Architecture
 
-For the layers (`src/world`, `src/core`, `src/agent`, `src/ui`, `src/app`),
-refer to `docs/architecture.md`. `Session` is the reset unit. A partial reset
-is not possible.
+For the layers (`src/world`, `src/core`, `src/llamad`, `src/agent`,
+`src/ui`, `src/app`), refer to `docs/architecture.md`. `Session` is the reset
+unit. A partial reset is not possible.
 
 Keep these invariants:
 
@@ -108,13 +108,19 @@ Keep these invariants:
     reflected JSONL writer, `Session`) links scrydantic and requests C++26
     privately. These settings do not go to the targets that link
     `pigpen_agent`.
-  - `pigpen_core` links neither scrydantic nor gRPC, so a `<scrydantic/...>`
-    or `<grpcpp/...>` include in `pigpen_core` does not compile.
+  - `pigpen_core` links neither scrydantic nor gRPC. The build enforces the
+    scrydantic boundary: its headers are only on the include path of the
+    targets that link it, so a `<scrydantic/...>` include in `pigpen_core`
+    does not compile. The gRPC boundary is only a convention. When gRPC is
+    a system package, its headers are in the default include path, so a
+    `<grpcpp/...>` include in `pigpen_core` can compile.
   - Put code in `src/agent` only when reflection replaces hand-written shape
     code. Keep the public headers of `src/agent` C++23-parseable.
-- **Only `pigpen_llamad` uses gRPC.** `src/llamad/llamad_client.hpp` is
-  gRPC-free (pimpl). The generated stubs (`pigpen_llamad_proto`, from the
-  pinned `llamad.proto`) and gRPC are private to it.
+- **Only `pigpen_llamad` uses gRPC in the application.** The test-only
+  library `pigpen_test_support` (the fake llamad) also uses it.
+  `src/llamad/llamad_client.hpp` is gRPC-free (pimpl). The generated stubs
+  (`pigpen_llamad_proto`, from the pinned `llamad.proto`) and gRPC are
+  private dependencies of both libraries.
 - **The tool loop belongs to Pig Pen.** `core::ToolLoopTransport` owns the
   committed history (system message first), the rounds, the four-request
   budget, and the round-limit completion that keeps history without

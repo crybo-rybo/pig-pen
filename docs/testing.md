@@ -97,11 +97,18 @@ ctest --preset dev -R world              # by test name
 ## Test with a real model
 
 The suite never connects to a real model. This is intentional. To test the
-full path manually, start llamad with a model, run a short episode, and
-examine the exit code:
+full path manually, start llamad with a model in a second terminal:
 
 ```sh
-llamad --model /absolute/path/to/model.gguf --ctx 32768 &
+llamad --model /absolute/path/to/model.gguf --ctx 32768
+```
+
+Wait for the line `[llamad] listening on unix:...`. llamad prints it after
+the model loads. The CLI does not wait for the daemon. If you start the CLI
+before this line, it fails with `could not reach llamad`. Then run a short
+episode in the first terminal, and examine the exit code:
+
+```sh
 ./build/dev/pig-pen-headless --turns 2 --seed 42 --timeout-seconds 120
 echo $?
 ```

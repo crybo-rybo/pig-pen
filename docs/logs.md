@@ -9,9 +9,11 @@ logs/<timestamp>-<model>-<seed>.jsonl
 An example is `logs/20260807-064512-538-qwen2_0.5B_Q4_K_-_Medium-42.jsonl`. The
 model part is the model description that llamad reports. The timestamp is in
 local time, with milliseconds. Pig Pen replaces characters that are not easy
-to use in file names with `_`. If a file with the same name exists, Pig Pen
-adds a suffix: `-1`, `-2`, and so on. Pig Pen never overwrites a log. To write
-to a directory other than `logs/`, use `--log-dir`.
+to use in file names with `_`. It keeps only the first 80 bytes of the model
+part. The header keeps the full description. If a file with the same name
+exists, Pig Pen adds a suffix: `-1`, `-2`, and so on. Pig Pen never
+overwrites a log. To write to a directory other than `logs/`, use
+`--log-dir`.
 
 Each file has exactly one `header` line at the start and one `footer` line at
 the end. Between them, the file has `tool` and `turn` records in the sequence
@@ -109,7 +111,7 @@ the turn completes.
 | field | description |
 |---|---|
 | `status` | `completed`, `cancelled`, or `error`. |
-| `error` | Empty for a completed turn. For a llamad failure, `llamad <STATUS>: <message>`. Example: `llamad INVALID_ARGUMENT: prompt is longer than the context`. |
+| `error` | Empty for a completed turn. For a llamad failure, `llamad <STATUS>: <message>`. Example: `llamad INVALID_ARGUMENT: prompt is too long: 4140 tokens for a context of 4096`. |
 | `assistant_text` | The text of all rounds of the turn, as it was streamed. |
 | `tool_calls` | The number of decoded world-tool calls in this turn. |
 | `zero_tool_turn` | `true` for a completed turn with only narration, or with only calls that are not valid. Use it to find these turns easily in a query. |
