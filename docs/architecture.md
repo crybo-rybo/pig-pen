@@ -2,12 +2,13 @@
 
 Pig Pen is a C++23 application. It joins two other projects:
 
-- [scrydantic](https://github.com/crybo-rybo/scrydantic) gives the
+- [scrydantic](https://github.com/crybo-rybo/scrydantic) 0.2.0 gives the
   model-facing type system. It makes the tool schemas, the strict argument
   decoder, the result encoder, and the tool bindings from the C++
   declarations, with C++26 reflection.
-- [llamad](https://github.com/crybo-rybo/llamad) is the only model backend. It
-  is a gRPC daemon on a Unix socket. It serves one llama.cpp model.
+- [llamad](https://github.com/crybo-rybo/llamad) 0.2.x is the only model
+  backend. It is a gRPC daemon on a Unix socket. It serves one llama.cpp
+  model.
 
 Neither project runs an agent loop. llamad keeps no conversation and never
 runs a tool. scrydantic only binds and codes tools. Thus, Pig Pen owns the
@@ -69,11 +70,13 @@ tools. Thus, `ToolLoopTransport` keeps the committed history. The system
 message is first. One turn does these steps:
 
 1. It stages the user message. It starts round 1 with the committed history,
-   the staged messages, all tools, and the sampling settings.
+   the staged messages, all tools, and the sampling settings. Each request
+   asks for no reasoning (`ChatReasoning::off`).
 2. It sends each streamed text chunk to the runner, and adds it to the turn
    text.
-3. When a request ends, it adds the token counts to the turn totals. Then it
-   examines the finish reason:
+3. When a request ends with a finish, it adds the token counts and the daemon
+   timings (`prompt_ms`, `completion_ms`) to the turn totals. Then it examines
+   the finish reason:
    - **Tool calls, below the round limit.** It stages the assistant message
      with the calls. It examines each call in sequence. If the turn already
      used its four requests, the call does not run, and the model gets the
@@ -92,8 +95,11 @@ message is first. One turn does these steps:
      empty.
    - **Length.** The turn ends with an error, because the response got to its
      output-token limit.
-   - **Cancelled.** The turn ends as cancelled.
-   - **Error.** The turn ends with the llamad status and message.
+
+   A request without a finish ends the turn. After a cancel, the turn ends as
+   cancelled: llamad ends a cancelled stream with the status `CANCELLED` and
+   no finish. Otherwise the turn ends with an error, with the llamad status
+   and message.
 4. The history always matches the world. The calls of an answered round
    ran, and their side effects stay. Thus, the loop always commits each
    answered round:
@@ -127,8 +133,8 @@ This layer is C++23 in the namespace `pigpen::llamad`. The build makes it as
 Protobuf headers. The fake llamad of the tests also includes them. Its public
 header, `llamad_client.hpp`, is free of gRPC.
 
-The build gets `proto/llamad/v1/llamad.proto` from the pinned llamad release,
-and generates the C++ messages and the gRPC stubs into
+The build gets `proto/llamad/v1/llamad.proto` from the pinned llamad commit
+(version 0.2.0), and generates the C++ messages and the gRPC stubs into
 `pigpen_llamad_proto`. The generated code compiles without the Pig Pen warning
 flags, and its headers are system headers.
 
@@ -136,12 +142,18 @@ flags, and its headers are system headers.
 
 - `connect()` opens `unix:<socket path>`. It calls `GetModelInfo` with a time
   limit, and does not wait for the daemon. Thus, a missing socket fails
-  immediately. `connect()` refuses an embedding model and a model without a
-  chat template.
+  immediately. `connect()` refuses a daemon that is not llamad 0.2.x, because
+  before 1.0 a minor release can change the contract. llamad 0.1.x reports no
+  version. The required series is one constant, `required_llamad_series`. It
+  changes with the pin. `connect()` also refuses an embedding model and a
+  model without a chat template.
+- `ModelInfo` has the model description, the model name and file, the
+  context sizes, the llamad version, and the request size limit.
 - `start()` sends one `Chat` request. Each request reads its stream on its
   own worker thread. The worker only puts text and terminal events into a
   queue that a mutex protects. It puts the terminal event last, after the
-  stream finished.
+  stream finished. It skips `progress` chunks (liveness, which Pig Pen does
+  not use yet) and chunk kinds that it does not know.
 - `pump()` delivers the queued events on the thread that calls it, with a
   maximum number of callbacks in each call.
 - `cancel()` calls `ClientContext::TryCancel`. It is safe from the pump

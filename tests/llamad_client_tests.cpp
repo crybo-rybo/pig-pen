@@ -128,13 +128,21 @@ TEST_CASE("connect reports the model that the daemon serves") {
                .n_params = 494'000'000,
                .size_bytes = 400'000'000,
                .n_ctx = 8192,
-               .n_ctx_train = 32768}};
+               .n_ctx_train = 32768,
+               .model_name = "Qwen2 0.5B Instruct",
+               .model_file = "qwen2-0_5b-instruct-q4_k_m.gguf",
+               .llamad_version = "0.2.1",
+               .max_request_bytes = 1'048'576}};
   CHECK(run.client->model_info() ==
         pigpen::core::ModelInfo{.description = "qwen2 0.5B Q4_K - Medium",
+                                .name = "Qwen2 0.5B Instruct",
+                                .file = "qwen2-0_5b-instruct-q4_k_m.gguf",
                                 .n_params = 494'000'000,
                                 .size_bytes = 400'000'000,
                                 .n_ctx = 8192,
-                                .n_ctx_train = 32768});
+                                .n_ctx_train = 32768,
+                                .daemon_version = "0.2.1",
+                                .max_request_bytes = 1'048'576});
   CHECK(run.client->socket_path() == run.directory.socket());
 }
 
@@ -245,7 +253,6 @@ TEST_CASE("every finish reason maps to its plain value") {
       {FakeFinishReason::eog, ChatFinishReason::end_of_generation},
       {FakeFinishReason::length, ChatFinishReason::length},
       {FakeFinishReason::stop, ChatFinishReason::stop},
-      {FakeFinishReason::cancelled, ChatFinishReason::cancelled},
   };
   for (const auto &[wire, plain] : reasons) {
     run.fake->enqueue({.finish = wire});
@@ -509,4 +516,76 @@ TEST_CASE("destroying the client with a stream in flight suppresses "
   CHECK(callbacks == 0);
   // The destructor cancelled the call, so the fake is idle again.
   CHECK(run.fake->wait_until_idle());
+}
+
+TEST_CASE("requests ask for no reasoning unless they say otherwise") {
+  Harness run;
+  run.fake->enqueue(FakeReply::say("one"));
+  run.fake->enqueue(FakeReply::say("two"));
+  run.start();
+  run.finish();
+  auto request = Harness::basic_request();
+  request.reasoning = pigpen::core::ChatReasoning::model_default;
+  run.start(std::move(request));
+  run.finish();
+  const auto requests = run.fake->requests();
+  REQUIRE(requests.size() == 2);
+  CHECK(requests[0].reasoning == "REASONING_OFF");
+  CHECK(requests[1].reasoning == "REASONING_DEFAULT");
+}
+
+TEST_CASE("progress chunks are skipped, and the finish carries the "
+          "timings") {
+  Harness run;
+  run.fake->enqueue({.text = {"I ", "look."},
+                     .progress = 2,
+                     .prompt_tokens = 64,
+                     .completion_tokens = 5,
+                     .prompt_ms = 812.5,
+                     .completion_ms = 1'204.25});
+  run.start();
+  run.finish();
+  // Two progress chunks before each text chunk and before the finish: only
+  // the text and the finish arrive.
+  CHECK(run.events == std::vector<std::string>{"I ", "look.", "<finished>"});
+  REQUIRE(run.finished->has_value());
+  const auto &finish = **run.finished;
+  CHECK(finish.reason == ChatFinishReason::end_of_generation);
+  CHECK(finish.stats.prompt_tokens == 64);
+  CHECK(finish.stats.completion_tokens == 5);
+  CHECK(finish.stats.prompt_ms == 812.5);
+  CHECK(finish.stats.completion_ms == 1'204.25);
+
+  // A request that is cancelled after progress chunks still ends cancelled,
+  // without a finish chunk.
+  run.fake->enqueue({.text = {"slow"}, .progress = 1, .hang = true});
+  run.start();
+  REQUIRE(run.fake->wait_for_requests(2));
+  REQUIRE(run.client->cancel());
+  run.finish();
+  REQUIRE_FALSE(run.finished->has_value());
+  CHECK(run.finished->error().cancelled);
+}
+
+TEST_CASE("connect refuses a daemon outside the llamad 0.2 series") {
+  pigpen::testing::TempSocketDirectory directory;
+  {
+    // A 0.1.x daemon has no version field, so it reports it empty.
+    auto fake = FakeLlamad::start(directory.socket(), {.llamad_version = ""});
+    REQUIRE(fake);
+    const auto older = LlamadChatClient::connect(directory.socket());
+    REQUIRE_FALSE(older);
+    CHECK(older.error() == "llamad at " + directory.socket() +
+                               " is older than 0.2.0, but this Pig Pen needs "
+                               "llamad 0.2.x");
+  }
+  pigpen::testing::TempSocketDirectory other;
+  auto fake = FakeLlamad::start(other.socket(), {.llamad_version = "0.3.0"});
+  REQUIRE(fake);
+  const auto newer = LlamadChatClient::connect(other.socket());
+  REQUIRE_FALSE(newer);
+  CHECK(newer.error() == "llamad at " + other.socket() +
+                             " is version 0.3.0, but this Pig Pen needs "
+                             "llamad 0.2.x");
+  CHECK(fake->requests().empty());
 }

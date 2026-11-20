@@ -653,6 +653,8 @@ void AppUi::draw_controls_panel() {
   if (session_) {
     const auto &model = session_->model_info();
     ImGui::TextWrapped("Model: %s", model.description.c_str());
+    ImGui::TextDisabled("File %s | llamad %s", model.file.c_str(),
+                        model.daemon_version.c_str());
     ImGui::TextDisabled("Context %u tokens (trained %u)", model.n_ctx,
                         model.n_ctx_train);
   } else {

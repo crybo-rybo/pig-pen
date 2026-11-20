@@ -54,6 +54,12 @@ struct TurnOutcome {
   std::uint64_t output_tokens{};
   /// Prompt tokens that the backend reused from its KV cache.
   std::uint64_t cached_input_tokens{};
+  /// Time the backend spent decoding prompt tokens that were not cached,
+  /// summed over the requests of the turn.
+  double model_prompt_ms{};
+  /// Time the backend spent generating, summed over the requests of the
+  /// turn.
+  double model_completion_ms{};
   /// Chat requests started for the turn; the failed one is included.
   std::uint32_t requests{};
   TurnToolStats tool_stats{};

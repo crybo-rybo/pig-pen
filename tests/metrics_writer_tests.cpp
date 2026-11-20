@@ -47,10 +47,14 @@ TEST_CASE("metrics log contains a reconcilable header tool turn and footer") {
   config.sampling_seed = 7;
   config.socket_path = "/run/user/1000/llamad.sock";
   const pigpen::core::ModelInfo model{.description = "qwen2 0.5B Q4_K - Medium",
+                                      .name = "Qwen2 0.5B Instruct",
+                                      .file = "qwen2-0_5b-instruct-q4_k_m.gguf",
                                       .n_params = 494'000'000,
                                       .size_bytes = 398'000'000,
                                       .n_ctx = 8192,
-                                      .n_ctx_train = 32768};
+                                      .n_ctx_train = 32768,
+                                      .daemon_version = "0.2.0",
+                                      .max_request_bytes = 4'194'304};
   auto created =
       pigpen::agent::MetricsWriter::create(directory, config, model, "default");
   REQUIRE(created.has_value());
@@ -85,6 +89,8 @@ TEST_CASE("metrics log contains a reconcilable header tool turn and footer") {
                   .requests = 3,
                   .tool_calls = 1,
                   .latency = std::chrono::milliseconds{12},
+                  .model_prompt_ms = 8.5,
+                  .model_completion_ms = 3.49,
                   .tool_stats =
                       pigpen::core::TurnToolStats{.rounds = 2,
                                                   .calls = 4,
@@ -110,7 +116,10 @@ TEST_CASE("metrics log contains a reconcilable header tool turn and footer") {
   CHECK(records.front().at("model") == "qwen2 0.5B Q4_K - Medium");
   CHECK(records.front().at("socket") == "/run/user/1000/llamad.sock");
   CHECK(records.front().at("model_info") ==
-        nlohmann::json{{"n_ctx", 8192},
+        nlohmann::json{{"name", "Qwen2 0.5B Instruct"},
+                       {"file", "qwen2-0_5b-instruct-q4_k_m.gguf"},
+                       {"llamad_version", "0.2.0"},
+                       {"n_ctx", 8192},
                        {"n_ctx_train", 32768},
                        {"n_params", 494'000'000},
                        {"size_bytes", 398'000'000}});
@@ -139,6 +148,10 @@ TEST_CASE("metrics log contains a reconcilable header tool turn and footer") {
   CHECK(records[2].at("input_tokens") == 900);
   CHECK(records[2].at("output_tokens") == 30);
   CHECK(records[2].at("cached_input_tokens") == 640);
+  CHECK(records[2].at("latency_ms") == 12);
+  // Rounded to the nearest whole millisecond.
+  CHECK(records[2].at("prompt_ms") == 9);
+  CHECK(records[2].at("completion_ms") == 3);
   CHECK(records[2].at("tool_stats") ==
         nlohmann::json{{"rounds", 2},
                        {"calls", 4},

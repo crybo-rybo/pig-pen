@@ -4,8 +4,9 @@
 ///
 /// Usage: pigpen_fake_llamad --socket PATH --script FILE --requests FILE
 ///
-/// The script is one JSON object: an optional "model_info" object and a
-/// "replies" array, one object per Chat call (see FakeReply). Each received
+/// The script is one JSON object: an optional "model_info" object (see
+/// FakeModelInfo) and a "replies" array, one object per Chat call (see
+/// FakeReply). Each received
 /// request is appended to the requests file as one JSON line before the reply
 /// is written. The process prints "ready" when it listens, and stops on
 /// SIGINT or SIGTERM.
@@ -31,7 +32,6 @@ using pigpen::testing::FakeFinishReason;
       {"eog", FakeFinishReason::eog},
       {"length", FakeFinishReason::length},
       {"stop", FakeFinishReason::stop},
-      {"cancelled", FakeFinishReason::cancelled},
       {"tool_calls", FakeFinishReason::tool_calls},
       {"unspecified", FakeFinishReason::unspecified},
   };
@@ -41,6 +41,7 @@ using pigpen::testing::FakeFinishReason;
 [[nodiscard]] pigpen::testing::FakeReply reply_from(const json &value) {
   pigpen::testing::FakeReply reply;
   reply.text = value.value("text", std::vector<std::string>{});
+  reply.progress = value.value("progress", 0U);
   if (const auto finish = value.find("finish"); finish != value.end()) {
     if (finish->is_null()) {
       reply.finish.reset();
@@ -56,6 +57,8 @@ using pigpen::testing::FakeFinishReason;
   reply.prompt_tokens = value.value("prompt_tokens", 0);
   reply.completion_tokens = value.value("completion_tokens", 0);
   reply.cached_prompt_tokens = value.value("cached_prompt_tokens", 0);
+  reply.prompt_ms = value.value("prompt_ms", 0.0);
+  reply.completion_ms = value.value("completion_ms", 0.0);
   reply.status_code = value.value("status_code", 0);
   reply.status_message = value.value("status_message", std::string{});
   reply.hang = value.value("hang", false);
@@ -92,7 +95,10 @@ using pigpen::testing::FakeFinishReason;
   if (request.max_tokens) {
     sampling["max_tokens"] = *request.max_tokens;
   }
-  return {{"messages", messages}, {"tools", tools}, {"sampling", sampling}};
+  return {{"messages", messages},
+          {"tools", tools},
+          {"sampling", sampling},
+          {"reasoning", request.reasoning}};
 }
 
 } // namespace
@@ -129,6 +135,11 @@ int main(const int argc, char **argv) {
         model->value("has_chat_template", info.has_chat_template);
     info.serves_embeddings =
         model->value("serves_embeddings", info.serves_embeddings);
+    info.model_name = model->value("model_name", info.model_name);
+    info.model_file = model->value("model_file", info.model_file);
+    info.llamad_version = model->value("llamad_version", info.llamad_version);
+    info.max_request_bytes =
+        model->value("max_request_bytes", info.max_request_bytes);
   }
 
   std::mutex output_mutex;

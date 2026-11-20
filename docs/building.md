@@ -15,10 +15,12 @@ The configure step gets all other dependencies at pinned versions.
 `cmake/dependencies.cmake` and `cmake/testing.cmake` specify these
 dependencies:
 
-- [scrydantic](https://github.com/crybo-rybo/scrydantic) v0.2.0
+- [scrydantic](https://github.com/crybo-rybo/scrydantic) 0.2.0 (the commit
+  of the tag `v0.2.0`)
 - the `llamad.proto` file of [llamad](https://github.com/crybo-rybo/llamad)
-  v0.1.0. The build does not clone the llama.cpp submodule, and does not
-  build llamad.
+  0.2.0. The pin is the commit of `main` that sets the version to 0.2.0,
+  because 0.2.0 does not have a tag yet. The build does not clone the
+  llama.cpp submodule, and does not build llamad.
 - SDL3 and Dear ImGui, for the GUI
 - Catch2 and nlohmann/json, for the tests
 
@@ -28,6 +30,12 @@ step, and it takes some minutes. Later configure steps use the files in
 
 Pig Pen does not build or start llamad. To run an episode, build llamad from
 its own repository and start it. Refer to [Run Pig Pen](running.md).
+
+Before version 1.0, a minor release of llamad can change its wire contract.
+Thus, the daemon must be of the same minor series as the pinned
+`llamad.proto` (0.2.x). Pig Pen refuses another version when it connects.
+When you move the llamad pin to another minor version, also change
+`required_llamad_series` in `src/llamad/llamad_client.cpp`.
 
 ### Debian 13 (trixie)
 
@@ -284,7 +292,7 @@ Set `CC` and `CXX` to the GCC that builds Pig Pen.
 3. Do the configure step again, so that SDL3 does its feature detection again.
 
 **A dependency is old after you use a local source override or change a
-pinned tag.** `FetchContent` keeps a cache in `build/<preset>/_deps`. Remove
+pinned commit.** `FetchContent` keeps a cache in `build/<preset>/_deps`. Remove
 that directory or the full build directory. Then do the configure step again.
 
 **CMake shows an older compiler after you install GCC 16.2.** CMake keeps the

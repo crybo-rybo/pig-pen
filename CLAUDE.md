@@ -6,10 +6,11 @@ in this repository.
 Pig Pen puts a locally hosted LLM into a deterministic 10×10 grid world. The
 LLM can perceive the world only through three tools (`look`, `move`, `eat`).
 Pig Pen joins two other projects:
-[scrydantic](https://github.com/crybo-rybo/scrydantic) (C++26 reflection: tool
-schemas, the strict codec, and tool binding) and
-[llamad](https://github.com/crybo-rybo/llamad) (a gRPC daemon on a Unix socket
-that serves one llama.cpp model). Neither project runs a tool loop. Pig Pen
+[scrydantic](https://github.com/crybo-rybo/scrydantic) 0.2.0 (C++26
+reflection: tool schemas, the strict codec, and tool binding) and
+[llamad](https://github.com/crybo-rybo/llamad) 0.2.x (a gRPC daemon on a Unix
+socket that serves one llama.cpp model). `cmake/dependencies.cmake` pins both
+by commit. Neither project runs a tool loop. Pig Pen
 owns the loop: the history, the tool rounds, the call budget, and the round
 limit. Two front ends, an ImGui GUI (`pig-pen`) and a CLI
 (`pig-pen-headless`), use the same world, prompt, tools, episode runner, and
@@ -158,6 +159,14 @@ Keep these invariants:
 - llamad serves exactly one model. `Config` has `socket_path`, not a model
   name. The model identity comes from `GetModelInfo`, and the log header
   records it. The socket mode (0600) is the only credential.
+- Pig Pen speaks only the llamad minor series of the pinned `llamad.proto`
+  (0.2.x). `connect()` refuses another `llamad_version` (0.1.x reports an
+  empty one). When the pin moves to another minor version, change
+  `required_llamad_series` in `src/llamad/llamad_client.cpp` too.
+- Each request asks for `REASONING_OFF` (`ChatRequest::reasoning` defaults
+  to `ChatReasoning::off`). No option changes it. A cancelled stream ends
+  with the status `CANCELLED` and no finish chunk. There is no cancelled
+  finish reason.
 - `Config::sampling_seed` maps to the llamad `SamplingParams.seed`. Pig Pen
   sends it only when it is set. It is independent of the world `seed`. It is
   limited to 32 bits. Repeatability is only on a best-effort basis.

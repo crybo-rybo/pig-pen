@@ -34,7 +34,8 @@ these changes:
   present.
 - `turn`: `attempts` is now `requests`, and it is always a number.
   `scry_tools` is now `tool_stats`. It is always an object, and it has the new
-  `invalid_calls` count. `cached_input_tokens` is new.
+  `invalid_calls` count. `cached_input_tokens`, `prompt_ms`, and
+  `completion_ms` are new.
 - `footer`: no change.
 
 ## `header`
@@ -44,7 +45,8 @@ llamad and before the first turn.
 
 ```json
 {"type":"header","format":2,"model":"qwen2 0.5B Q4_K - Medium",
- "model_info":{"n_ctx":32768,"n_ctx_train":32768,"n_params":494032768,"size_bytes":397808640},
+ "model_info":{"name":"Qwen2 0.5B Instruct","file":"qwen2-0_5b-instruct-q4_k_m.gguf","llamad_version":"0.2.0",
+   "n_ctx":32768,"n_ctx_train":32768,"n_params":494032768,"size_bytes":397808640},
  "socket":"/run/user/1000/llamad.sock",
  "temperature":0.2,"max_output_tokens":8192,"seed":42,"sampling_seed":null,"started_at":"2026-08-07T06:45:12-0400","prompt_variant":"default",
  "scenario":{"grid":{"width":10,"height":10},"spawn":{"x":5,"y":5},
@@ -57,13 +59,25 @@ llamad and before the first turn.
 |---|---|
 | `format` | The log format version. It is `2`. |
 | `model` | The model description from the llamad `GetModelInfo` call. llamad serves exactly one model. |
-| `model_info` | The context size that llamad uses (`n_ctx`), the context size of the training (`n_ctx_train`), the parameter count, and the tensor size in bytes. |
+| `model_info` | The data that llamad reports about the model and itself. Refer to the table below. |
 | `socket` | The llamad Unix socket. |
 | `prompt_variant` | The value of `--prompt-variant`, or the name of the GUI preset. |
 | `temperature` | The model sampling temperature. Pig Pen records it separately from the deterministic world `seed`. |
 | `sampling_seed` | The sampling seed from `--sampling-seed` or the GUI. If Pig Pen did not send a sampling seed, the value is `null`. |
 | `max_output_tokens` | The token limit for each request (llamad `max_tokens`). |
 | `max_world_tool_calls_per_turn` | The request limit that the tool loop enforces. Requests that are not valid also count. |
+
+The `model_info` value has these fields:
+
+| field | description |
+|---|---|
+| `name` | The name in the model file (the GGUF `general.name`). It is empty if the file has no name. |
+| `file` | The file name of the model that llamad loaded, without its directory. |
+| `llamad_version` | The version of the llamad daemon, for example `0.2.0`. Pig Pen connects only to llamad 0.2.x. |
+| `n_ctx` | The context size that llamad uses, in tokens. |
+| `n_ctx_train` | The context size of the training, in tokens. |
+| `n_params` | The parameter count. |
+| `size_bytes` | The size of the tensors, in bytes. |
 
 This line has all the data that is necessary to describe the run. But model
 sampling can give different results when you run it again, also with a
@@ -103,7 +117,8 @@ the turn completes.
  "user_message":"Automatic turn instructions:\nContinue exploring autonomously. ... Turn 1 of 2.",
  "assistant_text":"I have explored the pen and found valuable items. ...",
  "error":"","input_tokens":3410,"output_tokens":198,"cached_input_tokens":1650,
- "requests":2,"tool_calls":2,"zero_tool_turn":false,"latency_ms":2499,
+ "requests":2,"tool_calls":2,"zero_tool_turn":false,
+ "latency_ms":2499,"prompt_ms":512,"completion_ms":1873,
  "tool_stats":{"rounds":1,"calls":2,"rejected_calls":0,"invalid_calls":0,
    "round_limit_reached":false,"unexecuted_calls":0}}
 ```
@@ -111,7 +126,7 @@ the turn completes.
 | field | description |
 |---|---|
 | `status` | `completed`, `cancelled`, or `error`. |
-| `error` | Empty for a completed turn. For a llamad failure, `llamad <STATUS>: <message>`. Example: `llamad INVALID_ARGUMENT: prompt is too long: 4140 tokens for a context of 4096`. |
+| `error` | Empty for a completed turn. For a llamad failure, `llamad <STATUS>: <message>`. Example: `llamad OUT_OF_RANGE: prompt is too long: 4140 tokens for a context of 4096`. |
 | `assistant_text` | The text of all rounds of the turn, as it was streamed. |
 | `tool_calls` | The number of decoded world-tool calls in this turn. |
 | `zero_tool_turn` | `true` for a completed turn with only narration, or with only calls that are not valid. Use it to find these turns easily in a query. |
@@ -119,6 +134,8 @@ the turn completes.
 | `cached_input_tokens` | The input tokens that llamad used again from its KV cache, added across all requests of the turn. |
 | `requests` | The number of llamad requests in the turn. One request is one round. A failed or cancelled request is included. |
 | `latency_ms` | The duration of the turn. Pig Pen measures it locally. |
+| `prompt_ms` | The time that llamad used to decode the prompt tokens that were not in its KV cache, added across all requests of the turn, in whole milliseconds. |
+| `completion_ms` | The time that llamad used to generate the output, with the streaming, added across all requests of the turn, in whole milliseconds. |
 | `tool_stats` | The counts of the tool loop. Refer to the table below. |
 
 The `tool_stats` value has these fields. Pig Pen always knows them, also for a
@@ -131,6 +148,13 @@ turn that failed or was cancelled.
 | `rejected_calls` | Admission refusals and budget refusals. |
 | `invalid_calls` | Calls for unknown tools, and calls with arguments that do not decode. |
 | `round_limit_reached`, `unexecuted_calls` | The calls that did not run because the round limit completed the turn. These calls are not in `calls`, and they are not in the activity feed. |
+
+llamad measures `prompt_ms` and `completion_ms`. They do not include the time
+that a request waited in the queue of the daemon. Thus, `latency_ms` minus
+`prompt_ms` and `completion_ms` is the time for the queue, the transport, and
+the work of Pig Pen itself (for example, the tool calls). For a turn that
+failed or was cancelled, the timings include only the requests that
+finished.
 
 A response that gets to the output-token limit is a turn error. The token
 counts of that request are still in the record.
@@ -184,6 +208,13 @@ To see how much of each turn llamad took from its KV cache, use this command:
 ```sh
 jq -r 'select(.type=="turn")
   | "\(.turn) \(.cached_input_tokens)/\(.input_tokens) in \(.requests) requests"' logs/<run>.jsonl
+```
+
+To see where the time of each turn went, use this command:
+
+```sh
+jq -r 'select(.type=="turn")
+  | "\(.turn) \(.latency_ms) ms: prompt \(.prompt_ms), generation \(.completion_ms), other \(.latency_ms - .prompt_ms - .completion_ms)"' logs/<run>.jsonl
 ```
 
 To compare the outcomes of many runs, use this command:

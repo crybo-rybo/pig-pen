@@ -103,6 +103,8 @@ void ToolLoopTransport::on_round_finished(
   outcome.input_tokens += finished->stats.prompt_tokens;
   outcome.output_tokens += finished->stats.completion_tokens;
   outcome.cached_input_tokens += finished->stats.cached_prompt_tokens;
+  outcome.model_prompt_ms += finished->stats.prompt_ms;
+  outcome.model_completion_ms += finished->stats.completion_ms;
 
   switch (finished->reason) {
   case ChatFinishReason::end_of_generation:
@@ -112,9 +114,6 @@ void ToolLoopTransport::on_round_finished(
   case ChatFinishReason::length:
     end_turn(TurnStatus::error,
              "model response reached its output-token limit");
-    return;
-  case ChatFinishReason::cancelled:
-    end_turn(TurnStatus::cancelled, "the model turn was cancelled");
     return;
   case ChatFinishReason::tool_calls:
     break;
