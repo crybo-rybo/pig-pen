@@ -61,8 +61,10 @@ tool_outcome_name(const ToolOutcome outcome) noexcept {
 
 /// @brief One successfully decoded world-tool handler invocation and its
 /// observable world transition.
-/// @note Calls refused by Scry never enter this feed. JSON strings are exact
-/// canonical dispatch payloads; use typed fields for application behavior.
+/// @note Calls that the tool loop or the binding refuses never enter this
+/// feed. JSON strings are the exact canonical arguments and the exact result
+/// text that went back to the model; use typed fields for application
+/// behavior.
 struct ToolActivity {
   std::uint64_t tick{};
   std::size_t turn{};
@@ -77,14 +79,11 @@ struct ToolActivity {
   /// Truthful cumulative world score, even when reward feedback is hidden.
   int score_after{};
 
-  /// Scry's call identity, copied from the contextual handler.
-  std::uint64_t scry_turn_id{};
+  /// The call identity from the tool loop: the backend's call id, the round
+  /// (starts at one), and the index in the batch (starts at zero).
   std::string call_id{};
   std::uint32_t round{};
   std::uint32_t index{};
-  /// False when a framework failure prevented a dispatch observation. The
-  /// world transition still happened, but its JSON payloads are unavailable.
-  bool result_dispatched{true};
 
   /// @brief Whether the action ran and achieved its purpose.
   [[nodiscard]] constexpr bool succeeded() const noexcept {

@@ -170,6 +170,52 @@ TEST_CASE("terminal turn errors are surfaced without retry") {
   REQUIRE(runner.transcript().back().role == TranscriptRole::error);
 }
 
+TEST_CASE("a context_exhausted turn finishes the episode with that reason "
+          "and its error text") {
+  FakeTransport transport;
+  std::vector<TurnRecord> turns;
+  std::optional<EpisodeResult> result;
+  EpisodeRunner runner{
+      transport,
+      4,
+      [] { return false; },
+      {
+          .on_turn_finished =
+              [&turns](const auto &turn) { turns.push_back(turn); },
+          .on_episode_finished =
+              [&result](const auto &episode) { result = episode; },
+      }};
+  constexpr auto full = "llamad OUT_OF_RANGE: prompt is too long: 4140 tokens "
+                        "for a context of 4096";
+
+  REQUIRE(runner.play());
+  runner.tick();
+  transport.complete({.text = "Moved."});
+  runner.tick();
+  REQUIRE(transport.messages.size() == 2);
+  transport.complete({.status = TurnStatus::context_exhausted, .error = full});
+  runner.tick();
+
+  CHECK(transport.messages.size() == 2);
+  const auto snapshot = runner.snapshot();
+  CHECK(snapshot.state == RunState::finished);
+  CHECK(snapshot.turns_used == 2);
+  CHECK(snapshot.finish_reason == FinishReason::context_exhausted);
+  CHECK(snapshot.error == full);
+  CHECK(runner.transcript().back().role == TranscriptRole::error);
+  CHECK(runner.transcript().back().turn == 2);
+  CHECK(runner.transcript().back().text == full);
+  REQUIRE(turns.size() == 2);
+  CHECK(turns[1].status == TurnStatus::context_exhausted);
+  CHECK(turns[1].error == full);
+  REQUIRE(result);
+  CHECK(result->reason == FinishReason::context_exhausted);
+  CHECK(result->turns_used == 2);
+  CHECK(result->error == full);
+  CHECK(finish_reason_name(FinishReason::context_exhausted) ==
+        "context_exhausted");
+}
+
 TEST_CASE(
     "host failures cancel active work and become terminal episode errors") {
   FakeTransport transport;
@@ -357,17 +403,22 @@ TEST_CASE(
                        }}};
   REQUIRE(runner.play());
   runner.tick();
-  transport.complete({.tool_stats = TurnToolStats{.rounds = 1,
+  transport.complete({.cached_input_tokens = 40,
+                      .requests = 2,
+                      .tool_stats = TurnToolStats{.rounds = 1,
                                                   .calls = 2,
                                                   .rejected_calls = 1,
+                                                  .invalid_calls = 1,
                                                   .round_limit_reached = true,
                                                   .unexecuted_calls = 3}});
   runner.tick();
   REQUIRE(turns.size() == 1);
-  REQUIRE(turns.front().tool_stats);
-  CHECK(turns.front().tool_stats->calls == 2);
-  CHECK(turns.front().tool_stats->rejected_calls == 1);
-  CHECK(turns.front().tool_stats->round_limit_reached);
+  CHECK(turns.front().requests == 2);
+  CHECK(turns.front().cached_input_tokens == 40);
+  CHECK(turns.front().tool_stats.calls == 2);
+  CHECK(turns.front().tool_stats.rejected_calls == 1);
+  CHECK(turns.front().tool_stats.invalid_calls == 1);
+  CHECK(turns.front().tool_stats.round_limit_reached);
   REQUIRE(transport.messages.size() == 2);
   CHECK(transport.messages.back().find(
             "3 requested tool calls were not executed") != std::string::npos);

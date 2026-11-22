@@ -9,11 +9,10 @@
 
 #include <string>
 
-TEST_CASE("Agent configuration requires callers to select a model") {
+TEST_CASE("Agent configuration defaults leave the socket to the front ends") {
   const pigpen::core::Config config;
 
-  CHECK(config.base_url == "http://127.0.0.1:11434/v1");
-  CHECK(config.model.empty());
+  CHECK(config.socket_path.empty());
   CHECK(config.seed == 0);
   CHECK(config.turn_budget == 20);
   CHECK(config.max_tool_rounds == 8);

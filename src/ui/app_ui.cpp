@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <numbers>
@@ -23,6 +24,11 @@
 
 namespace pigpen::ui {
 namespace {
+
+/// @brief The llamad handshake deadline of Play and Reset. The handshake
+/// blocks the frame loop, so a daemon that does not answer freezes the
+/// window for at most this long. The connect error then names this limit.
+constexpr std::chrono::milliseconds connect_deadline{std::chrono::seconds{1}};
 
 struct ScenarioPreset final {
   const char *name;
@@ -190,17 +196,17 @@ decoded_call_label(const core::ToolActivity &activity) {
 
 } // namespace
 
-AppUi::AppUi(const core::Config &initial_config)
+AppUi::AppUi(const core::Config &initial_config, const bool play)
     : controls_{initial_config},
       turn_budget_{static_cast<int>(initial_config.turn_budget)},
       max_tool_rounds_{static_cast<int>(initial_config.max_tool_rounds)},
+      max_output_tokens_{static_cast<int>(initial_config.max_output_tokens)},
       use_sampling_seed_{initial_config.sampling_seed.has_value()},
       sampling_seed_{initial_config.sampling_seed.value_or(0U)} {
-  if (initial_config.model.empty()) {
-    status_message_ =
-        "Enter a model identifier in Controls, then press Play or Reset.";
-  } else {
+  if (play) {
     recreate_session(true);
+  } else {
+    status_message_ = "Start llamad, then press Play or Reset.";
   }
 }
 
@@ -238,19 +244,21 @@ void AppUi::draw() {
 
 core::Config AppUi::config_from_controls() const {
   auto config = controls_;
-  config.base_url = trim(controls_.base_url);
-  config.model = trim(controls_.model);
+  config.socket_path = trim(controls_.socket_path);
   config.turn_budget = static_cast<decltype(config.turn_budget)>(turn_budget_);
   config.max_tool_rounds = static_cast<std::uint32_t>(max_tool_rounds_);
+  config.max_output_tokens = static_cast<std::uint32_t>(max_output_tokens_);
   config.sampling_seed =
       use_sampling_seed_ ? std::optional{sampling_seed_} : std::nullopt;
   return config;
 }
 
 void AppUi::recreate_session(const bool auto_play) {
-  auto created = agent::Session::create(
+  // Blocks this frame for the handshake, at most connect_deadline.
+  auto created = runtime::Session::create(
       config_from_controls(), "logs",
-      preset_ ? scenario_presets[*preset_].variant : "custom");
+      preset_ ? scenario_presets[*preset_].variant : "custom",
+      connect_deadline);
   if (!created) {
     visible_error_ = "Could not create session: " + created.error();
     return;
@@ -261,8 +269,9 @@ void AppUi::recreate_session(const bool auto_play) {
   animation_.reset(session_->world().position());
   pump_stats_ = {};
   visible_error_.clear();
-  status_message_ = "Created session for " + session_->config().model +
-                    " (seed " + std::to_string(session_->config().seed) + ").";
+  status_message_ = "Created session for " +
+                    session_->model_info().description + " (seed " +
+                    std::to_string(session_->config().seed) + ").";
   if (auto_play) {
     if (session_->play()) {
       status_message_ += " Auto-play started.";
@@ -647,8 +656,20 @@ void AppUi::draw_controls_panel() {
   }
 
   ImGui::SeparatorText("Connection");
-  ImGui::InputText("Base URL", &controls_.base_url);
-  ImGui::InputText("Model (required)", &controls_.model);
+  ImGui::InputText("llamad socket", &controls_.socket_path);
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Unix socket of the llamad daemon; applies on Reset.");
+  }
+  if (session_) {
+    const auto &model = session_->model_info();
+    ImGui::TextWrapped("Model: %s", model.description.c_str());
+    ImGui::TextDisabled("File %s | llamad %s", model.file.c_str(),
+                        model.daemon_version.c_str());
+    ImGui::TextDisabled("Context %u tokens (trained %u)", model.n_ctx,
+                        model.n_ctx_train);
+  } else {
+    ImGui::TextDisabled("Not connected.");
+  }
 
   ImGui::SeparatorText("Scenario");
   if (ImGui::BeginCombo("Preset",
@@ -688,6 +709,13 @@ void AppUi::draw_controls_panel() {
   ImGui::InputInt("Tool rounds / turn", &max_tool_rounds_);
   max_tool_rounds_ = std::clamp(max_tool_rounds_, 1,
                                 static_cast<int>(core::tool_rounds_limit));
+  ImGui::InputInt("Max output tokens", &max_output_tokens_, 256, 1024);
+  max_output_tokens_ = std::clamp(
+      max_output_tokens_, 1, static_cast<int>(core::max_output_tokens_limit));
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Output-token limit for each request (llamad "
+                      "max_tokens); applies on Reset.");
+  }
   ImGui::InputDouble("Temperature", &controls_.temperature, 0.1, 0.5, "%.2f");
   controls_.temperature = std::clamp(controls_.temperature, 0.0, 2.0);
   if (ImGui::IsItemHovered()) {
@@ -695,15 +723,15 @@ void AppUi::draw_controls_panel() {
   }
   ImGui::Checkbox("##use_sampling_seed", &use_sampling_seed_);
   if (ImGui::IsItemHovered()) {
-    ImGui::SetTooltip("Send a provider sampling seed; applies on Reset.");
+    ImGui::SetTooltip("Send a model sampling seed; applies on Reset.");
   }
   ImGui::SameLine();
   ImGui::BeginDisabled(!use_sampling_seed_);
   ImGui::InputScalar("Sampling seed", ImGuiDataType_U32, &sampling_seed_);
   ImGui::EndDisabled();
   if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-    ImGui::SetTooltip("Best-effort repeatability on OpenAI-compatible servers; "
-                      "independent of the world seed. Applies on Reset.");
+    ImGui::SetTooltip("Best-effort repeatability in llamad; independent of "
+                      "the world seed. Applies on Reset.");
   }
   if (ImGui::SliderFloat("Animation speed", &animation_speed_, 0.25F, 4.0F,
                          "%.2fx")) {
@@ -754,6 +782,12 @@ void AppUi::draw_controls_panel() {
   if (!status_message_.empty()) {
     ImGui::TextColored({0.48F, 0.88F, 0.68F, 1.0F}, "%s",
                        status_message_.c_str());
+  }
+  if (session_ && !session_->startup_warning().empty()) {
+    ImGui::PushTextWrapPos(0.0F);
+    ImGui::TextColored({1.0F, 0.78F, 0.28F, 1.0F}, "Warning: %s",
+                       session_->startup_warning().c_str());
+    ImGui::PopTextWrapPos();
   }
   if (!visible_error_.empty()) {
     ImGui::PushTextWrapPos(0.0F);
@@ -852,6 +886,11 @@ void AppUi::draw_stats_panel() {
   ImGui::TextColored({1.0F, 0.52F, 0.32F, 1.0F}, "| failed %zu",
                      eat_attempts - successful_eats);
 
+  const auto &tokens = session_->token_totals();
+  ImGui::Text("Tokens in %llu (cached %llu) | out %llu",
+              static_cast<unsigned long long>(tokens.input),
+              static_cast<unsigned long long>(tokens.cached_input),
+              static_cast<unsigned long long>(tokens.output));
   ImGui::TextDisabled(
       "Callbacks %zu | transport queued %zu | visuals queued %zu",
       pump_stats_.callbacks_delivered, pump_stats_.events_remaining,

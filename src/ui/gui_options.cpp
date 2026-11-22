@@ -11,6 +11,7 @@ std::expected<GuiOptions, std::string>
 parse_gui_options(const std::span<const std::string_view> arguments) {
   using Result = std::expected<void, std::string>;
   GuiOptions options;
+  options.config.socket_path = core::default_socket_path();
   for (std::size_t index = 0; index < arguments.size(); ++index) {
     const auto argument = arguments[index];
     if (!argument.starts_with("--")) {
@@ -36,15 +37,21 @@ parse_gui_options(const std::span<const std::string_view> arguments) {
       return {};
     };
 
+    const auto flag = [&](bool &target) -> Result {
+      if (inline_value) {
+        return std::unexpected(name + " does not take a value");
+      }
+      target = true;
+      return {};
+    };
+
     Result result;
-    if (name == "--help" && !inline_value) {
-      options.help = true;
-    } else if (name == "--help") {
-      result = std::unexpected("--help does not take a value");
-    } else if (name == "--model") {
-      result = text(options.config.model);
-    } else if (name == "--base-url") {
-      result = text(options.config.base_url);
+    if (name == "--help") {
+      result = flag(options.help);
+    } else if (name == "--play") {
+      result = flag(options.play);
+    } else if (name == "--socket") {
+      result = text(options.config.socket_path);
     } else {
       result = std::unexpected("unknown option: " + name);
     }

@@ -2,8 +2,8 @@
 /// @brief The Dear ImGui front end: session ownership and panel drawing.
 #pragma once
 
-#include "agent/session.hpp"
 #include "core/config.hpp"
+#include "runtime/session.hpp"
 #include "ui/world_animation.hpp"
 
 #include <cstddef>
@@ -21,9 +21,9 @@ namespace pigpen::ui {
 /// a live episode; they take effect when Reset rebuilds the session wholesale.
 class AppUi final {
 public:
-  /// @brief Seeds the controls from @p initial_config; a non-empty model
-  /// identifier creates and auto-starts a session immediately.
-  explicit AppUi(const core::Config &initial_config);
+  /// @brief Seeds the controls from @p initial_config; with @p play, also
+  /// creates and auto-starts a session immediately.
+  AppUi(const core::Config &initial_config, bool play);
 
   /// @brief Advances the session and the animation timeline; call once per
   /// frame, before draw().
@@ -49,15 +49,17 @@ private:
   void draw_stats_panel();
   void draw_guidance_panel();
 
-  std::shared_ptr<agent::Session> session_{};
+  std::shared_ptr<runtime::Session> session_{};
   WorldAnimationState animation_{};
-  agent::PumpStats pump_stats_{};
+  runtime::PumpStats pump_stats_{};
 
-  /// Settings for the next session. turn_budget, max_tool_rounds, and
-  /// sampling_seed are edited through the widget mirrors below instead.
+  /// Settings for the next session. turn_budget, max_tool_rounds,
+  /// max_output_tokens, and sampling_seed are edited through the widget
+  /// mirrors below instead.
   core::Config controls_{};
   int turn_budget_{};
   int max_tool_rounds_{};
+  int max_output_tokens_{};
   bool use_sampling_seed_{};
   std::uint32_t sampling_seed_{};
   /// Index into the scenario presets; nullopt once a flag is edited by hand.

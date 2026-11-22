@@ -164,8 +164,7 @@ void EpisodeRunner::process_pending_outcome() {
       tool_call_count_ ? tool_call_count_() - tool_calls_at_turn_start_ : 0U;
   recover_zero_tool_turn_ = outcome.status == TurnStatus::completed &&
                             tool_call_count_ && tool_calls == 0U;
-  unexecuted_tool_calls_ =
-      outcome.tool_stats ? outcome.tool_stats->unexecuted_calls : 0U;
+  unexecuted_tool_calls_ = outcome.tool_stats.unexecuted_calls;
 
   auto &assistant = transcript_.back().text;
   if (assistant.empty()) {
@@ -180,9 +179,12 @@ void EpisodeRunner::process_pending_outcome() {
         .error = outcome.error,
         .input_tokens = outcome.input_tokens,
         .output_tokens = outcome.output_tokens,
-        .attempts = outcome.attempts,
+        .cached_input_tokens = outcome.cached_input_tokens,
+        .requests = outcome.requests,
         .tool_calls = tool_calls,
         .latency = snapshot_.last_turn_latency,
+        .model_prompt_ms = outcome.model_prompt_ms,
+        .model_completion_ms = outcome.model_completion_ms,
         .tool_stats = outcome.tool_stats,
     });
   }
@@ -190,13 +192,17 @@ void EpisodeRunner::process_pending_outcome() {
     return;
   }
 
-  if (outcome.status == TurnStatus::error) {
+  if (outcome.status == TurnStatus::error ||
+      outcome.status == TurnStatus::context_exhausted) {
     transcript_.push_back({
         .turn = snapshot_.turns_used,
         .role = TranscriptRole::error,
         .text = outcome.error,
     });
-    finish(FinishReason::error, std::move(outcome.error));
+    finish(outcome.status == TurnStatus::error
+               ? FinishReason::error
+               : FinishReason::context_exhausted,
+           std::move(outcome.error));
   } else if (outcome.status == TurnStatus::cancelled && !stop_requested_) {
     finish(FinishReason::cancelled, std::move(outcome.error));
   } else {
@@ -266,6 +272,8 @@ std::string_view finish_reason_name(const FinishReason reason) noexcept {
     return "cancelled";
   case FinishReason::error:
     return "error";
+  case FinishReason::context_exhausted:
+    return "context_exhausted";
   }
   return "unknown";
 }

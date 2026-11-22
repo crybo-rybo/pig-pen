@@ -10,7 +10,6 @@
 #include <cstdint>
 #include <expected>
 #include <functional>
-#include <optional>
 #include <string>
 #include <string_view>
 
@@ -21,30 +20,52 @@ enum class TurnStatus : std::uint8_t {
   completed,
   cancelled,
   error,
+  /// The conversation no longer fits in the model context. Pig Pen does not
+  /// trim the history, so the episode cannot continue.
+  context_exhausted,
 };
 
-/// Scry's completed-turn accounting, distinct from decoded world actions.
+/// @brief The tool loop's accounting for one turn, distinct from decoded
+/// world actions. The counts so far are always known, also for a turn that
+/// failed or was cancelled.
 struct TurnToolStats {
+  /// Rounds whose calls were dispatched.
   std::uint32_t rounds{};
+  /// Every call the model requested in dispatched rounds, including calls
+  /// over the budget.
   std::uint32_t calls{};
+  /// Budget refusals and admission refusals.
   std::uint32_t rejected_calls{};
+  /// Unknown tools and arguments that did not decode.
+  std::uint32_t invalid_calls{};
   bool round_limit_reached{};
+  /// Calls of the reply that hit the round limit; they never ran.
   std::size_t unexecuted_calls{};
+
+  friend bool operator==(const TurnToolStats &,
+                         const TurnToolStats &) = default;
 };
 
 /// @brief Terminal result of one model turn, delivered via
 /// TurnCallbacks::on_finished.
 struct TurnOutcome {
   TurnStatus status{TurnStatus::completed};
+  /// The text of all rounds, as it was streamed.
   std::string text{};
   std::string error{};
   std::uint64_t input_tokens{};
   std::uint64_t output_tokens{};
-  /// Provider requests made for the turn, retries included; 0 before the
-  /// first request. Absent when Scry omits the count, including cancellation.
-  std::optional<std::uint32_t> attempts{};
-  /// Absent when Scry fails or cancels a turn without a Completion.
-  std::optional<TurnToolStats> tool_stats{};
+  /// Prompt tokens that the backend reused from its KV cache.
+  std::uint64_t cached_input_tokens{};
+  /// Time the backend spent decoding prompt tokens that were not cached,
+  /// summed over the requests of the turn.
+  double model_prompt_ms{};
+  /// Time the backend spent generating, summed over the requests of the
+  /// turn.
+  double model_completion_ms{};
+  /// Chat requests started for the turn; the failed one is included.
+  std::uint32_t requests{};
+  TurnToolStats tool_stats{};
 };
 
 /// @brief Streaming and completion callbacks for one turn.

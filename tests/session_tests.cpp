@@ -1,22 +1,34 @@
 /// @file session_tests.cpp
-/// @brief Covers config rejection and that a session atomically owns a seeded
-/// world, a registered tool harness, and an already-open truthful log.
+/// @brief Covers config rejection, an unreachable daemon, and whole episodes
+/// through the real gRPC path against the scripted fake llamad, with the log
+/// checked end to end.
 ///
 /// Session is the reset unit: creation either yields the whole composed
 /// object or fails without side effects (no directory, no log file).
 
-#include "agent/session.hpp"
+#include "runtime/session.hpp"
+
+#include "core/config.hpp"
+#include "support/fake_llamad.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 #include <nlohmann/json.hpp>
 
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <limits>
 #include <string>
+#include <thread>
+#include <vector>
+
+using pigpen::testing::FakeLlamad;
+using pigpen::testing::FakeReply;
 
 namespace {
+
+using namespace std::chrono_literals;
 
 /// @brief Yields a unique temp-directory path per invocation so concurrent
 /// test runs never share a log directory.
@@ -27,81 +39,176 @@ namespace {
          ("pigpen-session-tests-" + std::to_string(stamp));
 }
 
+[[nodiscard]] std::vector<nlohmann::json>
+read_records(const std::filesystem::path &path) {
+  std::ifstream stream{path};
+  std::vector<nlohmann::json> records;
+  for (std::string line; std::getline(stream, line);) {
+    records.push_back(nlohmann::json::parse(line));
+  }
+  return records;
+}
+
+void pump_until_finished(pigpen::runtime::Session &session) {
+  const auto deadline = std::chrono::steady_clock::now() + 10s;
+  while (session.runner().snapshot().state !=
+             pigpen::core::RunState::finished &&
+         std::chrono::steady_clock::now() < deadline) {
+    const auto stats = session.pump();
+    if (stats.callbacks_delivered == 0) {
+      std::this_thread::sleep_for(1ms);
+    }
+  }
+  REQUIRE(session.runner().snapshot().state ==
+          pigpen::core::RunState::finished);
+}
+
+struct Daemon {
+  explicit Daemon(pigpen::testing::FakeModelInfo info = {})
+      : fake(FakeLlamad::start(directory.socket(), std::move(info))) {
+    REQUIRE(fake);
+  }
+
+  [[nodiscard]] pigpen::core::Config config() const {
+    pigpen::core::Config result;
+    result.socket_path = directory.socket();
+    return result;
+  }
+
+  pigpen::testing::TempSocketDirectory directory;
+  std::unique_ptr<FakeLlamad> fake;
+};
+
 } // namespace
 
 TEST_CASE("session rejects unsafe or incomplete runtime configuration") {
   const auto directory = session_test_directory();
-  pigpen::core::Config config;
-  config.model = "registry.example/pig-model:Q4_K_M";
+  Daemon daemon;
+  auto config = daemon.config();
 
-  config.base_url = "localhost:11434/v1";
-  CHECK_FALSE(pigpen::agent::Session::create(config, directory));
-  config.base_url.clear();
-  CHECK_FALSE(pigpen::agent::Session::create(config, directory));
-  config.base_url = "http://127.0.0.1:11434/v1";
-
-  config.model.clear();
-  CHECK_FALSE(pigpen::agent::Session::create(config, directory));
-  config.model = "registry.example/pig-model:Q4_K_M";
+  config.socket_path.clear();
+  CHECK_FALSE(pigpen::runtime::Session::create(config, directory));
+  config.socket_path = daemon.directory.socket();
 
   config.turn_budget = 0;
-  CHECK_FALSE(pigpen::agent::Session::create(config, directory));
+  CHECK_FALSE(pigpen::runtime::Session::create(config, directory));
   config.turn_budget = 10'001;
-  CHECK_FALSE(pigpen::agent::Session::create(config, directory));
+  CHECK_FALSE(pigpen::runtime::Session::create(config, directory));
   config.turn_budget = 20;
 
   config.max_tool_rounds = 0;
-  CHECK_FALSE(pigpen::agent::Session::create(config, directory));
+  CHECK_FALSE(pigpen::runtime::Session::create(config, directory));
   config.max_tool_rounds = 65;
-  CHECK_FALSE(pigpen::agent::Session::create(config, directory));
+  CHECK_FALSE(pigpen::runtime::Session::create(config, directory));
 
   config.max_tool_rounds = 8;
   config.max_output_tokens = 0;
-  CHECK_FALSE(pigpen::agent::Session::create(config, directory));
+  CHECK_FALSE(pigpen::runtime::Session::create(config, directory));
+  config.max_output_tokens = 2'147'483'648U;
+  CHECK_FALSE(pigpen::runtime::Session::create(config, directory));
 
   config.max_output_tokens = 2'048;
   config.temperature = -0.1;
-  CHECK_FALSE(pigpen::agent::Session::create(config, directory));
+  CHECK_FALSE(pigpen::runtime::Session::create(config, directory));
   config.temperature = 2.1;
-  CHECK_FALSE(pigpen::agent::Session::create(config, directory));
+  CHECK_FALSE(pigpen::runtime::Session::create(config, directory));
   config.temperature = std::numeric_limits<double>::infinity();
-  CHECK_FALSE(pigpen::agent::Session::create(config, directory));
+  CHECK_FALSE(pigpen::runtime::Session::create(config, directory));
   config.temperature = std::numeric_limits<double>::quiet_NaN();
-  CHECK_FALSE(pigpen::agent::Session::create(config, directory));
+  CHECK_FALSE(pigpen::runtime::Session::create(config, directory));
+
+  config.temperature = 0.0;
+  config.stall_timeout_seconds = 86'401;
+  const auto stall = pigpen::runtime::Session::create(config, directory);
+  REQUIRE_FALSE(stall);
+  CHECK(stall.error() ==
+        "the stall timeout must be in the range 0..86400 seconds");
+  CHECK_FALSE(std::filesystem::exists(directory));
+  CHECK(daemon.fake->requests().empty());
+}
+
+TEST_CASE("an unreachable daemon is a clear error and leaves no log") {
+  const auto directory = session_test_directory();
+  pigpen::testing::TempSocketDirectory sockets;
+  pigpen::core::Config config;
+  config.socket_path = sockets.socket();
+  const auto created = pigpen::runtime::Session::create(config, directory);
+  REQUIRE_FALSE(created);
+  CHECK(created.error().starts_with("could not reach llamad at " +
+                                    sockets.socket()));
+  CHECK_FALSE(std::filesystem::exists(directory));
+
+  Daemon embedding{{.serves_embeddings = true}};
+  config.socket_path = embedding.directory.socket();
+  CHECK_FALSE(pigpen::runtime::Session::create(config, directory));
   CHECK_FALSE(std::filesystem::exists(directory));
 }
 
-TEST_CASE("session atomically owns a seeded world registered harness and "
+TEST_CASE("a daemon outside the llamad 0.2 series is refused and leaves no "
+          "log") {
+  const auto directory = session_test_directory();
+  for (const auto *version : {"", "0.1.0", "0.3.0"}) {
+    Daemon daemon{{.llamad_version = version}};
+    const auto created =
+        pigpen::runtime::Session::create(daemon.config(), directory);
+    REQUIRE_FALSE(created);
+    CHECK(created.error().ends_with("but this Pig Pen needs llamad 0.2.x"));
+    CHECK_FALSE(std::filesystem::exists(directory));
+    CHECK(daemon.fake->requests().empty());
+  }
+}
+
+TEST_CASE("session atomically owns a seeded world, a connection, and a "
           "truthful log") {
   const auto directory = session_test_directory();
-  pigpen::core::Config config;
-  config.model = "registry.example/pig-model:Q4_K_M";
+  Daemon daemon{{.description = "acme/pig model:Q4_K_M",
+                 .n_params = 7,
+                 .size_bytes = 8,
+                 .n_ctx = 16'384,
+                 .n_ctx_train = 32'768,
+                 .model_name = "Acme Pig",
+                 .model_file = "acme-pig-q4_k_m.gguf",
+                 .llamad_version = "0.2.3"}};
+  auto config = daemon.config();
   config.seed = 2026;
   config.temperature = 0.2;
   std::filesystem::path log_path;
   {
     auto created =
-        pigpen::agent::Session::create(config, directory, "test-preset");
+        pigpen::runtime::Session::create(config, directory, "test-preset");
     REQUIRE(created.has_value());
     const auto &session = *created;
     CHECK(session->config() == config);
+    CHECK(session->model_info().description == "acme/pig model:Q4_K_M");
+    CHECK(session->model_info().n_ctx == 16'384);
     CHECK(session->world().seed() == 2026);
     CHECK(session->runner().snapshot().state == pigpen::core::RunState::idle);
     CHECK(session->tool_activities().empty());
     CHECK(session->metrics_error().empty());
     log_path = session->metrics_path();
     CHECK(std::filesystem::exists(log_path));
+    CHECK(log_path.filename().string().find("-acme_pig_model_Q4_K_M-2026") !=
+          std::string::npos);
   }
 
-  std::ifstream stream{log_path};
-  std::string header_line;
-  std::string footer_line;
-  REQUIRE(std::getline(stream, header_line));
-  REQUIRE(std::getline(stream, footer_line));
-  const auto header = nlohmann::json::parse(header_line);
-  const auto footer = nlohmann::json::parse(footer_line);
+  const auto records = read_records(log_path);
+  REQUIRE(records.size() == 2);
+  const auto &header = records.front();
+  const auto &footer = records.back();
+  CHECK(header.at("type") == "header");
+  CHECK(header.at("format") == 2);
   CHECK(header.at("prompt_variant") == "test-preset");
-  CHECK(header.at("model") == config.model);
+  CHECK(header.at("model") == "acme/pig model:Q4_K_M");
+  CHECK(header.at("socket") == daemon.directory.socket());
+  CHECK(header.at("model_info") ==
+        nlohmann::json{{"name", "Acme Pig"},
+                       {"file", "acme-pig-q4_k_m.gguf"},
+                       {"llamad_version", "0.2.3"},
+                       {"n_ctx", 16'384},
+                       {"n_ctx_train", 32'768},
+                       {"n_params", 7},
+                       {"size_bytes", 8}});
+  CHECK_FALSE(header.contains("base_url"));
   CHECK(header.at("seed") == 2026);
   CHECK(header.at("temperature") == 0.2);
   CHECK(header.at("max_output_tokens") == config.max_output_tokens);
@@ -109,6 +216,367 @@ TEST_CASE("session atomically owns a seeded world registered harness and "
   CHECK(footer.at("type") == "footer");
   CHECK(footer.at("finish_reason") == "abandoned");
   CHECK(footer.at("complete") == false);
+
+  std::error_code ignored;
+  std::filesystem::remove_all(directory, ignored);
+}
+
+TEST_CASE("a scripted episode runs through llamad and logs every step") {
+  const auto directory = session_test_directory();
+  Daemon daemon;
+  daemon.fake->enqueue(
+      FakeReply::calls({{.id = "c-move",
+                         .name = "move",
+                         .arguments_json = R"({"direction":"east"})"},
+                        {.id = "c-bad",
+                         .name = "move",
+                         .arguments_json = R"({"direction":"up"})"}},
+                       {"Moving east. "}));
+  daemon.fake->enqueue({.text = {"Moved."},
+                        .prompt_tokens = 300,
+                        .completion_tokens = 4,
+                        .cached_prompt_tokens = 250});
+  daemon.fake->enqueue(
+      FakeReply::calls({{.id = "c-look",
+                         .name = "look",
+                         .arguments_json = R"({ "direction" : "north" })"}}));
+  daemon.fake->enqueue(FakeReply::say("Looked."));
+
+  auto config = daemon.config();
+  config.turn_budget = 2;
+  config.sampling_seed = 77;
+  std::filesystem::path log_path;
+  {
+    auto created = pigpen::runtime::Session::create(config, directory);
+    REQUIRE(created.has_value());
+    auto &session = **created;
+    log_path = session.metrics_path();
+    REQUIRE(session.play());
+    pump_until_finished(session);
+    CHECK(session.runner().snapshot().finish_reason ==
+          pigpen::core::FinishReason::turn_budget);
+    REQUIRE(session.tool_activities().size() == 2);
+    CHECK(session.world().position() == (pigpen::world::Position{6, 5}));
+    CHECK(session.token_totals().input == 300);
+    CHECK(session.token_totals().cached_input == 250);
+  }
+
+  const auto requests = daemon.fake->requests();
+  REQUIRE(requests.size() == 4);
+  for (const auto &request : requests) {
+    CHECK(request.seed == 77U);
+    CHECK(request.reasoning == "REASONING_OFF");
+    REQUIRE(request.tools.size() == 3);
+    CHECK(request.messages.front().role == "system");
+  }
+  // Turn 2 resends turn 1, with both answers and the call ids.
+  const auto &resent = requests[2].messages;
+  REQUIRE(resent.size() == 7);
+  CHECK(resent[2].role == "assistant");
+  CHECK(resent[2].content == "Moving east. ");
+  CHECK(resent[2].tool_calls.size() == 2);
+  CHECK(resent[3].tool_call_id == "c-move");
+  CHECK(resent[4].tool_call_id == "c-bad");
+  CHECK(nlohmann::json::parse(resent[4].content) ==
+        nlohmann::json{{"error", "$.direction is not a declared enumerator; "
+                                 "must be one of: north, south, east, west"}});
+  CHECK(resent[5].content == "Moved.");
+  CHECK(resent[6].role == "user");
+
+  const auto records = read_records(log_path);
+  std::vector<nlohmann::json> tools;
+  std::vector<nlohmann::json> turns;
+  for (const auto &record : records) {
+    if (record.at("type") == "tool") {
+      tools.push_back(record);
+    } else if (record.at("type") == "turn") {
+      turns.push_back(record);
+    }
+  }
+  REQUIRE(tools.size() == 2);
+  CHECK(tools[0].at("call_id") == "c-move");
+  CHECK(tools[0].at("round") == 1);
+  CHECK(tools[0].at("index") == 0);
+  CHECK(tools[0].at("turn") == 1);
+  CHECK(tools[0].at("tick") == 1);
+  CHECK(tools[0].at("args") == nlohmann::json{{"direction", "east"}});
+  CHECK(tools[0].at("result") == nlohmann::json::parse(resent[3].content));
+  CHECK_FALSE(tools[0].contains("result_dispatched"));
+  CHECK_FALSE(tools[0].contains("action_executed"));
+  // The canonical arguments, not the model's spelling.
+  CHECK(tools[1].at("args") == nlohmann::json{{"direction", "north"}});
+  CHECK(tools[1].at("turn") == 2);
+  CHECK(tools[1].at("result") ==
+        nlohmann::json::parse(requests[3].messages.at(8).content));
+
+  REQUIRE(turns.size() == 2);
+  CHECK(turns[0].at("status") == "completed");
+  CHECK(turns[0].at("assistant_text") == "Moving east. Moved.");
+  CHECK(turns[0].at("requests") == 2);
+  CHECK(turns[0].at("tool_calls") == 1);
+  CHECK(turns[0].at("input_tokens") == 300);
+  CHECK(turns[0].at("cached_input_tokens") == 250);
+  CHECK(turns[0].at("tool_stats") ==
+        nlohmann::json{{"rounds", 1},
+                       {"calls", 2},
+                       {"rejected_calls", 0},
+                       {"invalid_calls", 1},
+                       {"round_limit_reached", false},
+                       {"unexecuted_calls", 0}});
+  CHECK(turns[1].at("requests") == 2);
+  const auto &footer = records.back();
+  CHECK(footer.at("type") == "footer");
+  CHECK(footer.at("complete") == true);
+  CHECK(footer.at("finish_reason") == "turn_budget");
+  CHECK(footer.at("tool_call_counts") ==
+        nlohmann::json{{"eat", 0}, {"look", 1}, {"move", 1}});
+
+  std::error_code ignored;
+  std::filesystem::remove_all(directory, ignored);
+}
+
+TEST_CASE("daemon timings sum across the rounds of a turn and reach the "
+          "log") {
+  const auto directory = session_test_directory();
+  Daemon daemon;
+  auto first =
+      FakeReply::calls({{.id = "c-look",
+                         .name = "look",
+                         .arguments_json = R"({"direction":"north"})"}});
+  first.progress = 1;
+  first.prompt_ms = 900.4;
+  first.completion_ms = 120.3;
+  auto second = FakeReply::say("Looked.");
+  second.progress = 1;
+  second.prompt_ms = 35.2;
+  second.completion_ms = 80.1;
+  daemon.fake->enqueue(std::move(first));
+  daemon.fake->enqueue(std::move(second));
+
+  auto config = daemon.config();
+  config.turn_budget = 1;
+  std::filesystem::path log_path;
+  {
+    auto created = pigpen::runtime::Session::create(config, directory);
+    REQUIRE(created.has_value());
+    auto &session = **created;
+    log_path = session.metrics_path();
+    REQUIRE(session.play());
+    pump_until_finished(session);
+  }
+
+  const auto requests = daemon.fake->requests();
+  REQUIRE(requests.size() == 2);
+  for (const auto &request : requests) {
+    CHECK(request.reasoning == "REASONING_OFF");
+  }
+  const auto records = read_records(log_path);
+  REQUIRE(records.size() == 4);
+  const auto &turn = records[2];
+  REQUIRE(turn.at("type") == "turn");
+  CHECK(turn.at("requests") == 2);
+  // The progress chunks add no text.
+  CHECK(turn.at("assistant_text") == "Looked.");
+  // 900.4 + 35.2 and 120.3 + 80.1, rounded to whole milliseconds.
+  CHECK(turn.at("prompt_ms") == 936);
+  CHECK(turn.at("completion_ms") == 200);
+  CHECK(turn.at("latency_ms").is_number_integer());
+
+  std::error_code ignored;
+  std::filesystem::remove_all(directory, ignored);
+}
+
+TEST_CASE("stop cancels a hanging request and still writes the footer") {
+  const auto directory = session_test_directory();
+  Daemon daemon;
+  daemon.fake->enqueue({.text = {"Thinking"}, .hang = true});
+  std::filesystem::path log_path;
+  {
+    auto created = pigpen::runtime::Session::create(daemon.config(), directory);
+    REQUIRE(created.has_value());
+    auto &session = **created;
+    log_path = session.metrics_path();
+    REQUIRE(session.play());
+    static_cast<void>(session.pump());
+    REQUIRE(daemon.fake->wait_for_requests(1));
+    REQUIRE(session.stop());
+    pump_until_finished(session);
+    CHECK(session.runner().snapshot().finish_reason ==
+          pigpen::core::FinishReason::stopped);
+  }
+  const auto records = read_records(log_path);
+  REQUIRE(records.size() == 3);
+  CHECK(records[1].at("type") == "turn");
+  CHECK(records[1].at("status") == "cancelled");
+  CHECK(records[1].at("requests") == 1);
+  CHECK(records.back().at("finish_reason") == "stopped");
+  CHECK(records.back().at("complete") == true);
+
+  std::error_code ignored;
+  std::filesystem::remove_all(directory, ignored);
+}
+
+TEST_CASE("destroying a session with a request in flight writes an "
+          "abandoned footer") {
+  const auto directory = session_test_directory();
+  Daemon daemon;
+  daemon.fake->enqueue({.hang = true});
+  std::filesystem::path log_path;
+  {
+    auto created = pigpen::runtime::Session::create(daemon.config(), directory);
+    REQUIRE(created.has_value());
+    log_path = (*created)->metrics_path();
+    REQUIRE((*created)->play());
+    static_cast<void>((*created)->pump());
+    REQUIRE(daemon.fake->wait_for_requests(1));
+  }
+  CHECK(daemon.fake->wait_until_idle());
+  const auto records = read_records(log_path);
+  REQUIRE(records.size() == 2);
+  CHECK(records.back().at("finish_reason") == "abandoned");
+
+  std::error_code ignored;
+  std::filesystem::remove_all(directory, ignored);
+}
+
+TEST_CASE("a full context ends the episode context_exhausted and logs it") {
+  const auto directory = session_test_directory();
+  Daemon daemon{{.n_ctx = 2'816}};
+  daemon.fake->enqueue(
+      FakeReply::calls({{.id = "c-move",
+                         .name = "move",
+                         .arguments_json = R"({"direction":"east"})"}}));
+  std::string expected_error;
+  SECTION("llamad refuses a prompt that is too long") {
+    daemon.fake->enqueue(
+        {.status_code = 11,
+         .status_message = "prompt is too long: 2900 tokens for a context of "
+                           "2816"});
+    expected_error = "llamad OUT_OF_RANGE: prompt is too long: 2900 tokens "
+                     "for a context of 2816";
+  }
+  SECTION("a reply fills the context") {
+    daemon.fake->enqueue({.text = {"I"},
+                          .finish = pigpen::testing::FakeFinishReason::length,
+                          .prompt_tokens = 2'815,
+                          .completion_tokens = 2});
+    expected_error = "the model context is full: 2815 prompt tokens and 2 "
+                     "output tokens fill the context of 2816 tokens";
+  }
+
+  auto config = daemon.config();
+  config.turn_budget = 3;
+  config.max_output_tokens = 333;
+  std::filesystem::path log_path;
+  {
+    auto created = pigpen::runtime::Session::create(config, directory);
+    REQUIRE(created.has_value());
+    auto &session = **created;
+    // 2816 tokens are enough for the estimate of 3 turns (2200).
+    CHECK(session.startup_warning().empty());
+    log_path = session.metrics_path();
+    REQUIRE(session.play());
+    pump_until_finished(session);
+    const auto snapshot = session.runner().snapshot();
+    CHECK(snapshot.finish_reason ==
+          pigpen::core::FinishReason::context_exhausted);
+    CHECK(snapshot.turns_used == 1);
+    CHECK(snapshot.error == expected_error);
+    // The answered round ran, so its side effect stays.
+    CHECK(session.world().position() == (pigpen::world::Position{6, 5}));
+  }
+
+  const auto requests = daemon.fake->requests();
+  REQUIRE(requests.size() == 2);
+  for (const auto &request : requests) {
+    CHECK(request.max_tokens == 333);
+  }
+  const auto records = read_records(log_path);
+  REQUIRE(records.size() == 4);
+  CHECK(records[1].at("type") == "tool");
+  const auto &turn = records[2];
+  CHECK(turn.at("type") == "turn");
+  CHECK(turn.at("status") == "context_exhausted");
+  CHECK(turn.at("error") == expected_error);
+  CHECK(turn.at("requests") == 2);
+  const auto &footer = records.back();
+  CHECK(footer.at("type") == "footer");
+  CHECK(footer.at("complete") == true);
+  CHECK(footer.at("finish_reason") == "context_exhausted");
+  CHECK(footer.at("error") == expected_error);
+
+  std::error_code ignored;
+  std::filesystem::remove_all(directory, ignored);
+}
+
+TEST_CASE("the startup warning appears only for a context below the "
+          "estimate") {
+  CHECK(pigpen::core::estimated_context_tokens(1) == 1'400);
+  CHECK(pigpen::core::estimated_context_tokens(20) == 9'000);
+  CHECK(pigpen::core::estimated_context_tokens(10'000) == 4'001'000);
+
+  const auto directory = session_test_directory();
+  const auto warning_for = [&directory](const std::uint32_t n_ctx) {
+    Daemon daemon{{.n_ctx = n_ctx}};
+    auto config = daemon.config();
+    config.turn_budget = 20;
+    auto created = pigpen::runtime::Session::create(config, directory);
+    REQUIRE(created.has_value());
+    return (*created)->startup_warning();
+  };
+  CHECK(warning_for(4'096) ==
+        "llamad runs with a context of 4096 tokens, but a turn budget of 20 "
+        "can need about 9000 tokens (a rough estimate). Pig Pen does not trim "
+        "the history, so the episode can end with context_exhausted. Start "
+        "llamad with a larger --ctx, or use fewer turns.");
+  CHECK(warning_for(8'999).starts_with(
+      "llamad runs with a context of 8999 tokens"));
+  CHECK(warning_for(9'000).empty());
+  CHECK(warning_for(32'768).empty());
+  // A daemon that reports no context size gets no warning.
+  CHECK(warning_for(0).empty());
+
+  std::error_code ignored;
+  std::filesystem::remove_all(directory, ignored);
+}
+
+TEST_CASE("a stalled request ends the episode with an error and a complete "
+          "footer") {
+  const auto directory = session_test_directory();
+  Daemon daemon;
+  // The stream sends one text chunk, then nothing, as a stuck daemon does.
+  daemon.fake->enqueue({.text = {"Thinking"}, .hang = true});
+  auto config = daemon.config();
+  config.stall_timeout_seconds = 1;
+  const std::string expected_error{
+      "llamad sent nothing for 1 second, so Pig Pen stopped the request"};
+  std::filesystem::path log_path;
+  {
+    auto created = pigpen::runtime::Session::create(config, directory);
+    REQUIRE(created.has_value());
+    auto &session = **created;
+    log_path = session.metrics_path();
+    REQUIRE(session.play());
+    pump_until_finished(session);
+    const auto snapshot = session.runner().snapshot();
+    CHECK(snapshot.finish_reason == pigpen::core::FinishReason::error);
+    CHECK(snapshot.error == expected_error);
+  }
+  // The watchdog cancelled the call, so the fake is idle again.
+  CHECK(daemon.fake->wait_until_idle());
+  CHECK(daemon.fake->requests().size() == 1);
+  const auto records = read_records(log_path);
+  REQUIRE(records.size() == 3);
+  const auto &turn = records[1];
+  CHECK(turn.at("type") == "turn");
+  CHECK(turn.at("status") == "error");
+  CHECK(turn.at("error") == expected_error);
+  CHECK(turn.at("requests") == 1);
+  const auto &footer = records.back();
+  CHECK(footer.at("type") == "footer");
+  CHECK(footer.at("complete") == true);
+  CHECK(footer.at("finish_reason") == "error");
+  CHECK(footer.at("error") == expected_error);
 
   std::error_code ignored;
   std::filesystem::remove_all(directory, ignored);

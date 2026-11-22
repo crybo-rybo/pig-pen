@@ -9,28 +9,57 @@
 
 namespace pigpen::core {
 
-/// @brief Hard limit on tool requests per turn, enforced by Scry before
-/// dispatch; unknown tools and invalid arguments also spend this budget.
+/// @brief Hard limit on tool requests per turn, enforced by the tool loop
+/// before dispatch; unknown tools and invalid arguments also spend this
+/// budget.
 inline constexpr std::uint32_t max_world_tool_calls_per_turn{4};
 /// @brief Inclusive upper bounds Session::create accepts.
 inline constexpr std::uint32_t turn_budget_limit{10'000};
 inline constexpr std::uint32_t tool_rounds_limit{64};
+/// @brief llamad carries max_tokens as a signed 32-bit integer.
+inline constexpr std::uint32_t max_output_tokens_limit{2'147'483'647};
+/// @brief The longest stall timeout, one day, in seconds.
+inline constexpr std::uint32_t stall_timeout_seconds_limit{86'400};
+
+/// @brief The llamad default socket: `$XDG_RUNTIME_DIR/llamad.sock` when
+/// that variable is set and not empty, else `/tmp/llamad-<uid>.sock`.
+[[nodiscard]] std::string default_socket_path();
+
+/// @brief A rough upper estimate of the context tokens that an episode of
+/// @p turn_budget turns needs with the default tools: 1000 + 400 per turn.
+///
+/// Pig Pen resends the whole conversation on each request and never trims
+/// it, so the context must hold the full episode. The numbers come from
+/// measurements with a Qwen model against llamad: the system prompt, the
+/// tool schemas, and the first user message are about 860 tokens before the
+/// first reply, and a turn makes up to five requests that add 70 to 100
+/// tokens each. This is an estimate for a startup warning, not a guarantee:
+/// other models tokenize differently, and a talkative model needs more.
+[[nodiscard]] std::uint64_t
+estimated_context_tokens(std::uint32_t turn_budget) noexcept;
 
 /// @note The three visibility flags change only what the model is told; the
 /// world, the scoring, and the log always record the truth.
 struct Config {
-  std::string base_url{"http://127.0.0.1:11434/v1"};
-  /// Exact provider model identifier. It is forwarded without normalization.
-  std::string model{};
+  /// Unix socket of the llamad daemon. llamad serves exactly one model, so
+  /// the model identity comes from the daemon, not from the config.
+  std::string socket_path{};
   std::uint64_t seed{};
   std::uint32_t turn_budget{20};
   std::uint32_t max_tool_rounds{8};
   std::uint32_t max_output_tokens{8'192};
   double temperature{0.0};
-  /// Provider sampling seed, independent of the world seed. Sent as the
-  /// OpenAI-compatible `seed` field when set and omitted when unset;
-  /// repeatability is best-effort and entirely up to the server.
+  /// Sampling seed, independent of the world seed. Sent as llamad's
+  /// `SamplingParams.seed` when set and omitted when unset; repeatability is
+  /// best-effort.
   std::optional<std::uint32_t> sampling_seed{};
+  /// The longest time that an open llamad stream can be silent before Pig
+  /// Pen stops the request as an error; 0 turns the check off. While a
+  /// request queues or runs, llamad is silent for at most about one second
+  /// plus its slowest engine step (one prompt batch, or one token), so a
+  /// slow but live request is not stopped by this limit. Keep it well above
+  /// the time of one prompt batch on the daemon's hardware.
+  std::uint32_t stall_timeout_seconds{120};
 
   /// Include the item/reward table in the system prompt.
   bool known_item_values{true};

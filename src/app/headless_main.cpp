@@ -3,10 +3,12 @@
 ///
 /// Everything here is argv parsing, SIGINT/SIGTERM handling, incremental
 /// printing of the transcript and activity feed, and the exit-code policy
-/// from docs/running.md. Episode behavior itself lives in agent::Session.
-#include "agent/session.hpp"
+/// from docs/running.md. Episode behavior itself lives in runtime::Session.
+#include "core/config.hpp"
 #include "core/episode_runner.hpp"
+#include "runtime/session.hpp"
 
+#include <algorithm>
 #include <charconv>
 #include <chrono>
 #include <cmath>
@@ -34,6 +36,7 @@ constexpr int runtime_error_exit = 1;
 constexpr int timeout_exit = 3;
 constexpr int metrics_error_exit = 4;
 constexpr int no_tools_exit = 5;
+constexpr int context_exhausted_exit = 6;
 constexpr int signal_exit_base = 128;
 constexpr auto cancellation_grace = 15s;
 
@@ -55,20 +58,25 @@ struct Options {
 };
 
 void print_usage(std::ostream &output, const std::string_view program) {
-  output << "Usage: " << program << R"( --model NAME [options]
+  output << "Usage: " << program << R"( [options]
 
-Run a bounded pig-pen episode against an OpenAI-compatible model server.
+Run a bounded pig-pen episode against the model that a llamad daemon serves.
 
 Options:
-  --base-url URL            Model endpoint (default: http://127.0.0.1:11434/v1)
-  --model NAME              Exact model identifier sent to the server (required)
+  --socket PATH             llamad Unix socket (default: $XDG_RUNTIME_DIR/llamad.sock,
+                            else /tmp/llamad-<uid>.sock)
   --seed INTEGER            Deterministic world seed (default: 0)
   --turns INTEGER           Episode turn budget, 1..10000 (default: 20)
   --max-tool-rounds INTEGER Tool rounds per turn, 1..64 (default: 8)
+  --max-output-tokens INTEGER
+                            Output tokens per request, 1..2147483647 (default: 8192)
   --temperature NUMBER      Sampling temperature, 0.0..2.0 (default: 0.0)
-  --sampling-seed INTEGER   Provider sampling seed, 0..4294967295 (default: unset)
+  --sampling-seed INTEGER   Model sampling seed, 0..4294967295 (default: unset)
   --log-dir PATH            JSONL output directory (default: logs)
-  --timeout-seconds INTEGER Overall episode timeout, 1..86400 (default: 300)
+  --timeout-seconds INTEGER Overall episode timeout, 1..86400 (default: 300).
+                            The llamad handshake counts against it.
+  --stall-seconds INTEGER   Stop a request when llamad sends nothing for this
+                            long, 0..86400; 0 is off (default: 120)
   --hidden-values           Omit item values from the system prompt
   --no-reward-feedback      Hide numeric reward and score from eat results
   --opaque-look             Report occupied cells as 'something'
@@ -76,11 +84,18 @@ Options:
   --input TEXT              Human guidance queued for the first turn
   --help                    Show this help and exit
 
-Values may also use --option=value. PIGPEN_API_KEY supplies an optional API key.
+Values may also use --option=value. Start llamad first, for example:
+  llamad --model MODEL.gguf --ctx 32768
+
+Pig Pen sends the whole conversation on each request and does not trim it.
+When the llamad context is full, the episode ends with context_exhausted.
 
 Exit codes: 0 success, 1 runtime error, 2 invalid options, 3 timeout,
-            4 metrics error, 5 no decoded world-tool calls, 130 SIGINT,
-            143 SIGTERM. Signals request graceful cancellation and log finalization.
+            4 metrics error, 5 no decoded world-tool calls,
+            6 model context full, 130 SIGINT, 143 SIGTERM.
+            Signals request graceful cancellation and log finalization.
+            A signal during the llamad handshake takes effect when the
+            handshake ends: a failed handshake then exits 130 or 143.
 )";
 }
 
@@ -91,6 +106,7 @@ Exit codes: 0 success, 1 runtime error, 2 invalid options, 3 timeout,
   using Result = std::expected<void, std::string>;
   Options options;
   auto &config = options.config;
+  config.socket_path = pigpen::core::default_socket_path();
 
   for (int index = 1; index < argc; ++index) {
     const std::string_view argument{argv[index]};
@@ -173,10 +189,8 @@ Exit codes: 0 success, 1 runtime error, 2 invalid options, 3 timeout,
       result = flag(config.reward_feedback, false);
     } else if (name == "--opaque-look") {
       result = flag(config.opaque_look, true);
-    } else if (name == "--base-url") {
-      result = text(config.base_url);
-    } else if (name == "--model") {
-      result = text(config.model);
+    } else if (name == "--socket") {
+      result = text(config.socket_path);
     } else if (name == "--log-dir") {
       result = text(options.log_directory);
     } else if (name == "--prompt-variant") {
@@ -193,12 +207,18 @@ Exit codes: 0 success, 1 runtime error, 2 invalid options, 3 timeout,
     } else if (name == "--max-tool-rounds") {
       result =
           integer(config.max_tool_rounds, 1, pigpen::core::tool_rounds_limit);
+    } else if (name == "--max-output-tokens") {
+      result = integer(config.max_output_tokens, 1,
+                       pigpen::core::max_output_tokens_limit);
     } else if (name == "--temperature") {
       result = temperature();
     } else if (name == "--timeout-seconds") {
       std::uint32_t seconds{};
       result = integer(seconds, 1, 86'400);
       options.timeout = std::chrono::seconds{seconds};
+    } else if (name == "--stall-seconds") {
+      result = integer(config.stall_timeout_seconds, 0,
+                       pigpen::core::stall_timeout_seconds_limit);
     } else {
       result = std::unexpected("unknown option: " + name);
     }
@@ -210,11 +230,8 @@ Exit codes: 0 success, 1 runtime error, 2 invalid options, 3 timeout,
   if (options.help) {
     return options;
   }
-  if (config.base_url.empty()) {
-    return std::unexpected("--base-url cannot be empty");
-  }
-  if (config.model.empty()) {
-    return std::unexpected("--model is required");
+  if (config.socket_path.empty()) {
+    return std::unexpected("--socket cannot be empty");
   }
   if (options.log_directory.empty()) {
     return std::unexpected("--log-dir cannot be empty");
@@ -250,7 +267,7 @@ struct OutputCursor {
 /// @brief Prints what is new since the last call: assistant text streams one
 /// line per delta, other roles are final when appended and print once, and
 /// each decoded tool call gets one line.
-void print_updates(const pigpen::agent::Session &session,
+void print_updates(const pigpen::runtime::Session &session,
                    OutputCursor &cursor) {
   const auto &transcript = session.runner().transcript();
   const auto previous_size = cursor.transcript_offsets.size();
@@ -294,21 +311,42 @@ void print_updates(const pigpen::agent::Session &session,
   std::cout.flush();
 }
 
+/// @brief The exit code of a startup failure: 128 + the signal when a
+/// SIGINT or SIGTERM arrived meanwhile, else 1.
+[[nodiscard]] int startup_failure_exit() noexcept {
+  if (const int signal_number = requested_termination_signal;
+      signal_number != 0) {
+    return signal_exit_base + signal_number;
+  }
+  return runtime_error_exit;
+}
+
 /// @brief Pumps one session to completion and maps the outcome to an exit
 /// code.
 [[nodiscard]] int run(const Options &options) {
-  auto created = pigpen::agent::Session::create(
-      options.config, options.log_directory, options.prompt_variant);
+  // The episode timeout starts before the handshake, and the handshake
+  // deadline is never longer than the timeout. A signal does not interrupt
+  // the handshake; the code below examines it after the handshake.
+  auto deadline = std::chrono::steady_clock::now() + options.timeout;
+  const auto connect_deadline = std::min<std::chrono::milliseconds>(
+      pigpen::runtime::default_connect_deadline, options.timeout);
+  auto created = pigpen::runtime::Session::create(
+      options.config, options.log_directory, options.prompt_variant,
+      connect_deadline);
   if (!created) {
     std::cerr << "startup error: " << created.error() << '\n';
-    return runtime_error_exit;
+    return startup_failure_exit();
   }
   const auto session = std::move(*created);
   const auto &config = options.config;
 
-  std::cout << "session model=" << std::quoted(config.model)
-            << " base_url=" << std::quoted(config.base_url)
-            << " seed=" << config.seed << " turns=" << config.turn_budget
+  const auto &model = session->model_info();
+  std::cout << "session model=" << std::quoted(model.description)
+            << " file=" << std::quoted(model.file)
+            << " llamad=" << model.daemon_version
+            << " socket=" << std::quoted(config.socket_path)
+            << " n_ctx=" << model.n_ctx << " seed=" << config.seed
+            << " turns=" << config.turn_budget
             << " max_tool_rounds=" << config.max_tool_rounds
             << " max_world_tool_calls_per_turn="
             << pigpen::core::max_world_tool_calls_per_turn
@@ -319,7 +357,12 @@ void print_updates(const pigpen::agent::Session &session,
   } else {
     std::cout << "unset";
   }
-  std::cout << "\nlog_path=" << std::quoted(session->metrics_path().string())
+  std::cout << '\n';
+  if (const auto &warning = session->startup_warning(); !warning.empty()) {
+    // std::cerr is tied to std::cout, so the session line comes first.
+    std::cerr << "warning: " << warning << '\n';
+  }
+  std::cout << "log_path=" << std::quoted(session->metrics_path().string())
             << std::endl;
 
   if (options.user_input) {
@@ -327,15 +370,14 @@ void print_updates(const pigpen::agent::Session &session,
   }
   if (!session->play()) {
     std::cerr << "startup error: episode could not enter playing state\n";
-    return runtime_error_exit;
+    return startup_failure_exit();
   }
 
-  // Cancellation is cooperative: after stop() we keep pumping until scry
-  // delivers the terminal callback, so the JSONL footer is still written. A
-  // signal waits for that indefinitely; a timeout allows a finite grace period
-  // so the command stays scriptable.
+  // Cancellation is cooperative: after stop() we keep pumping until the tool
+  // loop delivers the terminal callback, so the JSONL footer is still written.
+  // A signal waits for that indefinitely; a timeout allows a finite grace
+  // period so the command stays scriptable.
   OutputCursor cursor;
-  auto deadline = std::chrono::steady_clock::now() + options.timeout;
   bool timed_out = false;
   int termination_signal = 0;
   for (;;) {
@@ -398,8 +440,18 @@ void print_updates(const pigpen::agent::Session &session,
   }
   // Only the timeout path can leave the loop unfinished, so the reason is set.
   using enum pigpen::core::FinishReason;
-  if (const auto reason = *snapshot.finish_reason;
-      reason == error || reason == cancelled || reason == stopped) {
+  const auto reason = *snapshot.finish_reason;
+  if (reason == context_exhausted) {
+    // The turn's error text is already on stderr as the error[turn=N] line.
+    std::cerr << "context exhausted: the conversation filled the llamad "
+                 "context of "
+              << model.n_ctx << " tokens on turn " << snapshot.turns_used
+              << " of " << snapshot.turn_budget
+              << ". Pig Pen does not trim the history. Start llamad with a "
+                 "larger --ctx, or use fewer --turns.\n";
+    return context_exhausted_exit;
+  }
+  if (reason == error || reason == cancelled || reason == stopped) {
     if (!snapshot.error.empty()) {
       std::cerr << "terminal error: " << snapshot.error << '\n';
     }
