@@ -30,8 +30,8 @@ FetchContent_Declare(
 FetchContent_Declare(
   llamad
   GIT_REPOSITORY https://github.com/crybo-rybo/llamad.git
-  # llamad 0.2.0 (main at version 0.2.0; not tagged yet)
-  GIT_TAG e1d8175ba425d543a41057be7ba9161653d1bc77
+  # llamad 0.2.0
+  GIT_TAG v0.2.0
   GIT_SUBMODULES ""
   GIT_PROGRESS TRUE
   SOURCE_SUBDIR cmake-not-used

@@ -18,9 +18,8 @@ dependencies:
 - [scrydantic](https://github.com/crybo-rybo/scrydantic) 0.2.0 (the commit
   of the tag `v0.2.0`)
 - the `llamad.proto` file of [llamad](https://github.com/crybo-rybo/llamad)
-  0.2.0. The pin is the commit of `main` that sets the version to 0.2.0,
-  because 0.2.0 does not have a tag yet. The build does not clone the
-  llama.cpp submodule, and does not build llamad.
+  0.2.0 (the tag `v0.2.0`). The build does not clone the llama.cpp submodule,
+  and does not build llamad.
 - SDL3 and Dear ImGui, for the GUI
 - Catch2 and nlohmann/json, for the tests
 
